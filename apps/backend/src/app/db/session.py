@@ -113,10 +113,12 @@ def sync_database_url(database_url: str) -> str:
     url = make_url(database_url)
     drivername = url.drivername
     if drivername == "postgresql+asyncpg":
-        return str(url.set(drivername="postgresql+psycopg"))
+        return url.set(drivername="postgresql+psycopg").render_as_string(
+            hide_password=False
+        )
     if drivername == "sqlite+aiosqlite":
         return str(url.set(drivername="sqlite+pysqlite"))
-    return str(url)
+    return url.render_as_string(hide_password=False)
 
 
 @lru_cache(maxsize=8)
