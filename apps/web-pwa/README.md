@@ -18,6 +18,23 @@ npm.cmd run test
 npm.cmd run build
 ```
 
+## Production path prefix
+
+Local development keeps the app at `/` and the API at `http://127.0.0.1:8000`.
+For the shared production host, build Finance for `/finance/` and proxy API
+requests through `/finance-api`:
+
+```powershell
+$env:VITE_BASE_PATH = "/finance/"
+$env:VITE_API_BASE_URL = "/finance-api"
+npm.cmd run build
+Remove-Item Env:\VITE_BASE_PATH
+Remove-Item Env:\VITE_API_BASE_URL
+```
+
+The generated manifest uses `start_url` and `scope` from the Vite base path, and
+the service worker registers under that same scope instead of claiming `/`.
+
 ## Current scope
 
 - React + TypeScript + Vite app shell.

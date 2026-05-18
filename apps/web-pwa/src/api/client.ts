@@ -14,6 +14,7 @@ import type {
 } from "./types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
+const DEFAULT_PROD_API_BASE_URL = "/finance-api";
 const DEFAULT_EMAIL = "demo.owner@example.test";
 const DEFAULT_PASSWORD = "demo-password-only";
 const CSRF_COOKIE_NAME = "finance_csrf";
@@ -205,7 +206,8 @@ export type LiveFinanceApiClientOptions = {
 
 export function getApiBaseUrl(): string {
   return (
-    import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL
+    import.meta.env.VITE_API_BASE_URL?.trim() ||
+    (import.meta.env.PROD ? DEFAULT_PROD_API_BASE_URL : DEFAULT_API_BASE_URL)
   ).replace(/\/+$/, "");
 }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveFinanceApiClient } from "./client";
+import { LiveFinanceApiClient, getApiBaseUrl } from "./client";
 
 function jsonResponse(body: unknown, status = 200) {
   return {
@@ -12,7 +12,22 @@ function jsonResponse(body: unknown, status = 200) {
 describe("LiveFinanceApiClient", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     document.cookie = "finance_csrf=; Max-Age=0; path=/";
+  });
+
+  it("uses the production Finance API prefix when no explicit API base is set", () => {
+    vi.stubEnv("PROD", true);
+    vi.stubEnv("VITE_API_BASE_URL", "");
+
+    expect(getApiBaseUrl()).toBe("/finance-api");
+  });
+
+  it("normalizes an explicit API base without breaking sub-path deploys", () => {
+    vi.stubEnv("PROD", true);
+    vi.stubEnv("VITE_API_BASE_URL", "/finance-api/");
+
+    expect(getApiBaseUrl()).toBe("/finance-api");
   });
 
   it("logs in with PWA cookie transport, avoids localStorage tokens, and maps dashboard data", async () => {

@@ -51,6 +51,28 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 The standard `app.main:app` runtime remains default-deny for auth unless real runtime secrets and stores are wired.
 
+## Production QA Bootstrap
+
+Do not run `app.dev_seed` in production-like environments. For a minimal QA login,
+run the idempotent auth-only provisioning command after migrations have completed.
+It creates only a user, household, and active membership; it does not create
+accounts, categories, transactions, sessions, imports, or reports.
+
+```powershell
+$env:FINANCE_BACKEND_PROVISION_PASSWORD = "<operator-supplied one-time password>"
+.\.venv\Scripts\python.exe -m app.ops.provision_initial_owner `
+  --email qa-owner@example.com `
+  --display-name "Finance QA Owner" `
+  --household-name "Finance QA Household" `
+  --confirm-production
+Remove-Item Env:\FINANCE_BACKEND_PROVISION_PASSWORD
+```
+
+For production-like environments, the command requires explicit
+`FINANCE_BACKEND_DATABASE_URL`, `FINANCE_BACKEND_DATABASE_MIGRATION_POLICY=external`,
+DB repository mode, `FINANCE_BACKEND_AUTH_TOKEN_HASH_SECRET`, and
+`--confirm-production`. It never prints the password.
+
 ## Seeded Dev Surface
 
 For live PWA/Android integration demos only, run the dev-only seeded app:
