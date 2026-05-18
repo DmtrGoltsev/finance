@@ -1,0 +1,152 @@
+﻿[
+    {
+        "file":  "android-01-overview-after-login.png",
+        "width":  1440,
+        "height":  3120,
+        "bytes":  272187,
+        "lumaRange":  255,
+        "sampledColoredPixels":  243,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "android-02-quick-add.png",
+        "width":  1440,
+        "height":  3120,
+        "bytes":  248095,
+        "lumaRange":  246,
+        "sampledColoredPixels":  304,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "android-03-operations-transfer.png",
+        "width":  1440,
+        "height":  3120,
+        "bytes":  273950,
+        "lumaRange":  251,
+        "sampledColoredPixels":  59,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "android-04-assets.png",
+        "width":  1440,
+        "height":  3120,
+        "bytes":  196249,
+        "lumaRange":  251,
+        "sampledColoredPixels":  56,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "android-05-analytics-overview-mode.png",
+        "width":  1440,
+        "height":  3120,
+        "bytes":  220387,
+        "lumaRange":  251,
+        "sampledColoredPixels":  26,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-01-main-money-overview.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  68581,
+        "lumaRange":  223,
+        "sampledColoredPixels":  58,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-02-quick-add.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  80384,
+        "lumaRange":  226,
+        "sampledColoredPixels":  1346,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-03-operations-transfer-proof.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  44630,
+        "lumaRange":  223,
+        "sampledColoredPixels":  35,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-04-assets-card-deposit-brokerage-metal.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  39245,
+        "lumaRange":  208,
+        "sampledColoredPixels":  28,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-05-categories-income-expense.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  34911,
+        "lumaRange":  223,
+        "sampledColoredPixels":  25,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-06-analytics-personal.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  43867,
+        "lumaRange":  208,
+        "sampledColoredPixels":  27,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-07-report-switcher-shared.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  39122,
+        "lumaRange":  208,
+        "sampledColoredPixels":  30,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-desktop-08-report-switcher-overview.png",
+        "width":  1440,
+        "height":  1000,
+        "bytes":  43148,
+        "lumaRange":  208,
+        "sampledColoredPixels":  28,
+        "samples":  1600,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-mobile-09-overview-iphone.png",
+        "width":  780,
+        "height":  1688,
+        "bytes":  71466,
+        "lumaRange":  223,
+        "sampledColoredPixels":  56,
+        "samples":  1722,
+        "nonBlank":  true
+    },
+    {
+        "file":  "pwa-mobile-10-analytics-report-switcher-iphone.png",
+        "width":  780,
+        "height":  1688,
+        "bytes":  86578,
+        "lumaRange":  223,
+        "sampledColoredPixels":  175,
+        "samples":  1722,
+        "nonBlank":  true
+    }
+]

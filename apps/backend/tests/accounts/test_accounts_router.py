@@ -242,6 +242,31 @@ def test_create_derives_personal_owner_and_requires_active_shared_membership(
     assert invited_response.json()["error"]["code"] == "RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE"
 
 
+def test_new_financial_account_types_are_accepted_without_weakening_personal_scope(
+    client_for_actor,
+) -> None:
+    client = client_for_actor(ACTOR_A)
+
+    for account_type in ("card", "deposit", "brokerage", "metal", "other"):
+        response = client.post(
+            "/api/v1/accounts",
+            json={
+                "name": f"{account_type} account",
+                "accountType": account_type,
+                "ownershipType": "personal",
+                "currency": "RUB",
+                "initialBalance": "1.00",
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()["data"]
+        assert data["accountType"] == account_type
+        assert data["ownershipType"] == "personal"
+        assert data["ownerUserId"] == OWNER_A
+        assert data["householdId"] is None
+
+
 def test_update_blocks_ownership_fields_and_foreign_personal_mutation(client_for_actor) -> None:
     owner_client = client_for_actor(ACTOR_A)
     updated = owner_client.patch("/api/v1/accounts/acct-personal-a", json={"name": "Renamed"})

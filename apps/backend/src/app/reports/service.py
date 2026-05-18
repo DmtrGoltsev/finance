@@ -86,7 +86,15 @@ class CategoryBreakdownRow:
 class CashFlowPoint:
     period_start_date: date
     period_end_date: date
-    totals_by_currency: tuple[tuple[str, Decimal, Decimal, Decimal], ...]
+    totals_by_currency: tuple[tuple[str, Decimal, Decimal, Decimal, Decimal], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBalanceGroup:
+    account_type: str
+    currency: str
+    current_balance_total: Decimal
+    account_count: int
 
 
 class ReportServiceError(Exception):
@@ -185,11 +193,11 @@ class ReportService:
     def summary_totals(
         self,
         context: ReportContext,
-    ) -> tuple[tuple[str, Decimal, Decimal, Decimal], ...]:
+    ) -> tuple[tuple[str, Decimal, Decimal, Decimal, Decimal], ...]:
         totals = _totals_by_currency(self.visible_report_transactions(context))
         return tuple(
-            (currency, income, expense, income - expense)
-            for currency, (income, expense) in sorted(totals.items())
+            (currency, income, expense, transfer, income - expense)
+            for currency, (income, expense, transfer) in sorted(totals.items())
         )
 
     def category_breakdown(self, context: ReportContext) -> tuple[CategoryBreakdownRow, ...]:
@@ -221,6 +229,35 @@ class ReportService:
             )
         return tuple(rows)
 
+    def expenses_by_category(self, context: ReportContext) -> tuple[CategoryBreakdownRow, ...]:
+        category_by_id = {category.id: category for category in context.visible_categories}
+        grouped: dict[tuple[str | None, str], tuple[Decimal, int]] = defaultdict(lambda: (ZERO, 0))
+        for record in self.visible_report_transactions(context):
+            if record.transaction_type != "expense":
+                continue
+            key = (record.category_id, record.currency)
+            amount, count = grouped[key]
+            grouped[key] = (amount + record.amount, count + 1)
+
+        totals_by_currency: dict[str, Decimal] = defaultdict(lambda: ZERO)
+        for (_category_id, currency), (amount, _count) in grouped.items():
+            totals_by_currency[currency] += amount
+
+        rows: list[CategoryBreakdownRow] = []
+        for (category_id, currency), (amount, count) in sorted(grouped.items()):
+            visible_total = totals_by_currency[currency]
+            share = ZERO if visible_total == ZERO else (amount / visible_total)
+            rows.append(
+                CategoryBreakdownRow(
+                    category=category_by_id.get(category_id) if category_id else None,
+                    currency=currency,
+                    amount=amount,
+                    transaction_count=count,
+                    share_of_visible_total=share,
+                )
+            )
+        return tuple(rows)
+
     def account_balances(self, context: ReportContext) -> tuple[AccountRecord, ...]:
         return tuple(
             sorted(
@@ -229,10 +266,32 @@ class ReportService:
             )
         )
 
+    def balance_groups(self, context: ReportContext) -> tuple[AccountBalanceGroup, ...]:
+        grouped: dict[tuple[str, str], tuple[Decimal, int]] = defaultdict(lambda: (ZERO, 0))
+        for account in context.visible_accounts:
+            key = (account.account_type, account.currency)
+            amount, count = grouped[key]
+            grouped[key] = (amount + account.current_balance, count + 1)
+        return tuple(
+            AccountBalanceGroup(
+                account_type=account_type,
+                currency=currency,
+                current_balance_total=amount,
+                account_count=count,
+            )
+            for (account_type, currency), (amount, count) in sorted(grouped.items())
+        )
+
+    def net_worth_totals(self, context: ReportContext) -> tuple[tuple[str, Decimal], ...]:
+        grouped: dict[str, Decimal] = defaultdict(lambda: ZERO)
+        for account in context.visible_accounts:
+            grouped[account.currency] += account.current_balance
+        return tuple(sorted(grouped.items()))
+
     def cash_flow(self, context: ReportContext) -> tuple[CashFlowPoint, ...]:
         grouped: dict[tuple[date, date], list[TransactionRecord]] = defaultdict(list)
         for record in self.visible_report_transactions(context):
-            if record.transaction_type not in {"income", "expense"}:
+            if record.transaction_type not in {"income", "expense", "interest", "dividend"}:
                 continue
             period = _bucket_bounds(record.occurred_at.date(), context.query.bucket)
             grouped[period].append(record)
@@ -245,8 +304,8 @@ class ReportService:
                     period_start_date=period_start,
                     period_end_date=period_end,
                     totals_by_currency=tuple(
-                        (currency, income, expense, income - expense)
-                        for currency, (income, expense) in sorted(totals.items())
+                        (currency, income, expense, transfer, income - expense)
+                        for currency, (income, expense, transfer) in sorted(totals.items())
                     ),
                 )
             )
@@ -400,15 +459,19 @@ def _authz_category(record: CategoryRecord) -> AuthzCategory:
 
 def _totals_by_currency(
     records: list[TransactionRecord],
-) -> dict[str, tuple[Decimal, Decimal]]:
-    totals: dict[str, tuple[Decimal, Decimal]] = defaultdict(lambda: (ZERO, ZERO))
+) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    totals: dict[str, tuple[Decimal, Decimal, Decimal]] = defaultdict(
+        lambda: (ZERO, ZERO, ZERO)
+    )
     for record in records:
-        income, expense = totals[record.currency]
-        if record.transaction_type == "income":
+        income, expense, transfer = totals[record.currency]
+        if record.transaction_type in {"income", "interest", "dividend"}:
             income += record.amount
         elif record.transaction_type == "expense":
             expense += record.amount
-        totals[record.currency] = (income, expense)
+        elif record.transaction_type == "transfer":
+            transfer += record.amount
+        totals[record.currency] = (income, expense, transfer)
     return totals
 
 

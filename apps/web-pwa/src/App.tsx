@@ -1,23 +1,43 @@
 import {
-  Archive,
+  ArrowDownLeft,
   ArrowLeftRight,
+  ArrowUpRight,
   BarChart3,
-  CheckCircle2,
-  FolderTree,
-  LayoutDashboard,
-  LogIn,
-  RotateCcw,
+  Building2,
+  Check,
+  CircleDollarSign,
+  CreditCard,
+  FileUp,
+  Landmark,
+  Layers3,
+  LineChart,
+  Lock,
+  Plus,
   ReceiptText,
-  Save,
-  Trash2,
-  WalletCards
+  Settings,
+  Shield,
+  ShoppingCart,
+  Tag,
+  WalletCards,
+  X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode
+} from "react";
 import { financeApiClient, type FinanceApiClient } from "./api/client";
 import type {
+  AccountKind,
   AccountSummary,
   CategorySummary,
+  CurrencyCode,
   DashboardSnapshot,
+  ImportReportPreviewResponse,
+  ImportReportType,
   MoneyAmount,
   OperationSummary,
   ReportMode,
@@ -26,64 +46,96 @@ import type {
 } from "./api/types";
 
 type SectionId =
-  | "overview"
-  | "accounts"
-  | "categories"
+  | "money"
   | "operations"
-  | "transfers"
-  | "reports";
+  | "assets"
+  | "categories"
+  | "analytics"
+  | "settings";
 
-type LifecycleState = {
-  status: string;
-  targetId: string | null;
-  archivedId: string | null;
-  deletedId: string | null;
+type ViewMode = "personal" | "shared" | "overview";
+type VisibilityMode = "personal" | "shared";
+type QuickKind = "expense" | "income" | "transfer" | "asset";
+type ImportMode = ViewMode;
+
+type QuickAddInput = {
+  kind: QuickKind;
+  amount: number;
+  accountId: string;
+  toAccountId: string;
+  categoryId: string;
+  assetKind: AccountKind;
+  date: string;
+  comment: string;
+  visibility: VisibilityMode;
 };
 
-const sections: Array<{
+const desktopSections: Array<{
   id: SectionId;
   label: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof WalletCards;
 }> = [
-  { id: "overview", label: "Обзор", icon: LayoutDashboard },
-  { id: "accounts", label: "Счета", icon: WalletCards },
-  { id: "categories", label: "Категории", icon: FolderTree },
+  { id: "money", label: "Деньги", icon: WalletCards },
   { id: "operations", label: "Операции", icon: ReceiptText },
-  { id: "transfers", label: "Переводы", icon: ArrowLeftRight },
-  { id: "reports", label: "Отчеты", icon: BarChart3 }
+  { id: "assets", label: "Счета и активы", icon: Landmark },
+  { id: "categories", label: "Категории", icon: Tag },
+  { id: "analytics", label: "Аналитика", icon: BarChart3 },
+  { id: "settings", label: "Настройки", icon: Settings }
 ];
 
-const reportModeLabels: Record<ReportMode, string> = {
-  shared_family_report: "Общий семейный отчет",
-  combined_viewer_overview: "Сводный обзор участника"
+const mobileSections: Array<{
+  id: SectionId;
+  label: string;
+  icon: typeof WalletCards;
+}> = [
+  { id: "money", label: "Деньги", icon: WalletCards },
+  { id: "operations", label: "Операции", icon: ReceiptText },
+  { id: "assets", label: "Активы", icon: Landmark },
+  { id: "categories", label: "Категории", icon: Tag },
+  { id: "analytics", label: "Аналитика", icon: BarChart3 }
+];
+
+const reportModeByView: Record<Exclude<ViewMode, "personal">, ReportMode> = {
+  shared: "shared_family_report",
+  overview: "combined_viewer_overview"
 };
 
-const initialAccountLifecycle: LifecycleState = {
-  status: "Готово к проверке CRUD счета",
-  targetId: null,
-  archivedId: null,
-  deletedId: null
+const accountKindLabels: Record<AccountKind, string> = {
+  bank: "Банк",
+  brokerage: "Брокер",
+  card: "Карта",
+  cash: "Наличные",
+  deposit: "Вклад",
+  metal: "Металл",
+  other: "Прочее"
 };
 
-const initialCategoryLifecycle: LifecycleState = {
-  status: "Готово к проверке CRUD категории",
-  targetId: null,
-  archivedId: null,
-  deletedId: null
+const accountKindIcons: Record<AccountKind, typeof WalletCards> = {
+  bank: Building2,
+  brokerage: LineChart,
+  card: CreditCard,
+  cash: WalletCards,
+  deposit: Landmark,
+  metal: Layers3,
+  other: CircleDollarSign
 };
 
-const initialOperationLifecycle: LifecycleState = {
-  status: "Готово к проверке lifecycle операции",
-  targetId: null,
-  archivedId: null,
-  deletedId: null
-};
+const categoryPalette = [
+  "#2563eb",
+  "#0f766e",
+  "#c2410c",
+  "#7c3aed",
+  "#be123c",
+  "#15803d",
+  "#b45309"
+];
 
-const initialTransferLifecycle: LifecycleState = {
-  status: "Готово к проверке ручного перевода",
-  targetId: null,
-  archivedId: null,
-  deletedId: null
+const importReportTypeLabels: Record<ImportReportType, string> = {
+  generic_finance_report: "Общий финансовый",
+  bank_statement: "Выписка банка",
+  brokerage_report: "Отчет брокера",
+  deposit_report: "Вклад",
+  metals_report: "Металлы"
 };
 
 function formatMoney(amount: MoneyAmount): string {
@@ -101,25 +153,33 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function formatFileSize(value?: number): string {
+  if (!Number.isFinite(value)) {
+    return "Размер не указан";
+  }
+
+  const bytes = Math.max(0, value ?? 0);
+  if (bytes < 1024) {
+    return `${bytes} Б`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} КБ`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+function todayInputValue(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function App({ client = financeApiClient }: { client?: FinanceApiClient }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionId>("overview");
-  const [activeReportMode, setActiveReportMode] = useState<ReportMode>(
-    "shared_family_report"
-  );
-  const [accountLifecycle, setAccountLifecycle] = useState<LifecycleState>(
-    initialAccountLifecycle
-  );
-  const [categoryLifecycle, setCategoryLifecycle] = useState<LifecycleState>(
-    initialCategoryLifecycle
-  );
-  const [operationLifecycle, setOperationLifecycle] = useState<LifecycleState>(
-    initialOperationLifecycle
-  );
-  const [transferLifecycle, setTransferLifecycle] = useState<LifecycleState>(
-    initialTransferLifecycle
-  );
+  const [activeSection, setActiveSection] = useState<SectionId>("money");
+  const [viewMode, setViewMode] = useState<ViewMode>("personal");
+  const [isQuickAddOpen, setQuickAddOpen] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string>("");
 
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await client.getDashboardSnapshot();
@@ -131,503 +191,316 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     let isMounted = true;
     setError(null);
 
-    void loadSnapshot()
-      .then((nextSnapshot) => {
-        if (isMounted) {
-          setSnapshot(nextSnapshot);
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setError("Не удалось загрузить данные live API");
-        }
-      });
+    void loadSnapshot().catch(() => {
+      if (isMounted) {
+        setError("Не удалось загрузить финансы");
+      }
+    });
 
     return () => {
       isMounted = false;
     };
   }, [loadSnapshot]);
 
-  const activeReport = useMemo(
-    () => snapshot?.reports.find((report) => report.mode === activeReportMode),
-    [activeReportMode, snapshot]
-  );
+  const activeReport = useMemo(() => {
+    if (!snapshot) {
+      return null;
+    }
+
+    return reportForView(snapshot, viewMode);
+  }, [snapshot, viewMode]);
+
+  const saveQuickAdd = async (input: QuickAddInput) => {
+    if (!snapshot) {
+      return;
+    }
+
+    const sourceAccount = snapshot.accounts.find((account) => account.id === input.accountId);
+    const currency = sourceAccount?.balance.currency ?? "RUB";
+    const occurredAt = new Date(`${input.date || todayInputValue()}T12:00:00`).toISOString();
+
+    setSaveStatus("Сохраняем");
+    if (input.kind === "asset") {
+      await client.createDemoAccount({
+        name: input.comment.trim() || accountKindLabels[input.assetKind],
+        kind: input.assetKind,
+        currency,
+        initialBalance: input.amount,
+        ownershipType: input.visibility === "shared" ? "shared" : "personal"
+      });
+    } else if (input.kind === "transfer") {
+      await client.createDemoTransfer({
+        fromAccountId: input.accountId,
+        toAccountId: input.toAccountId,
+        currency,
+        amount: input.amount,
+        occurredAt,
+        description: input.comment || "Перевод"
+      });
+    } else {
+      await client.createDemoOperation({
+        accountId: input.accountId,
+        categoryId: input.categoryId || null,
+        currency,
+        transactionType: input.kind,
+        amount: input.amount,
+        occurredAt,
+        description: input.comment || null
+      });
+    }
+
+    await loadSnapshot();
+    setSaveStatus("Добавлено");
+    setQuickAddOpen(false);
+  };
 
   if (error) {
     return <main className="loading">{error}</main>;
   }
 
-  if (!snapshot) {
-    return <main className="loading">Загружаем рабочую панель...</main>;
+  if (!snapshot || !activeReport) {
+    return <main className="loading">Загружаем деньги...</main>;
   }
 
   return (
     <div className="appShell">
-      <aside className="sidebar" aria-label="Основная навигация">
-        <div className="sessionBlock">
-          <div className="sessionIcon" aria-hidden="true">
-            <LogIn size={20} />
+      <aside className="sidebar" aria-label="Разделы">
+        <div className="brandBlock">
+          <div className="brandMark" aria-hidden="true">
+            <WalletCards size={21} />
           </div>
           <div>
-            <p className="label">Сессия</p>
-            <h1>{snapshot.session.viewerName}</h1>
             <p>{snapshot.session.householdName}</p>
+            <h1>Финансы</h1>
           </div>
         </div>
-        <nav className="navList">
-          {sections.map((section) => {
-            const Icon = section.icon;
-            return (
-              <button
-                key={section.id}
-                className={activeSection === section.id ? "active" : ""}
-                type="button"
-                onClick={() => setActiveSection(section.id)}
-              >
-                <Icon size={18} aria-hidden="true" />
-                {section.label}
-              </button>
-            );
-          })}
+        <nav className="desktopNav" aria-label="Основная навигация">
+          {desktopSections.map((section) => (
+            <NavButton
+              key={section.id}
+              active={activeSection === section.id}
+              icon={section.icon}
+              label={section.label}
+              onClick={() => setActiveSection(section.id)}
+            />
+          ))}
         </nav>
       </aside>
 
       <main className="content">
         <header className="topbar">
-          <div>
-            <p className="label">Manual-first MVP</p>
-            <h2>Финансовая панель</h2>
+          <div className="titleGroup">
+            <p>{viewModeDescription(viewMode)}</p>
+            <h2>{sectionTitle(activeSection)}</h2>
           </div>
-          <div className="statusPill">{snapshot.session.accessLabel}</div>
+          <div className="topActions">
+            <ViewSwitch value={viewMode} onChange={setViewMode} />
+            <button className="primaryButton" type="button" onClick={() => setQuickAddOpen(true)}>
+              <Plus size={18} aria-hidden="true" />
+              Добавить
+            </button>
+          </div>
         </header>
 
-        {activeSection === "overview" && (
-          <Overview
+        {activeSection === "money" && (
+          <MoneyDashboard
             snapshot={snapshot}
-            activeReport={activeReport ?? snapshot.reports[0]}
-          />
-        )}
-        {activeSection === "accounts" && (
-          <AccountsSection
-            accounts={snapshot.accounts}
-            lifecycle={accountLifecycle}
-            onArchive={async (account) => {
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Архивируем счет..."
-              }));
-              const archived = await client.archiveAccount(account.id);
-              setAccountLifecycle({
-                status: "Синхронизируем список счетов...",
-                targetId: archived.id,
-                archivedId: archived.id,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Счет архивирован через live API"
-              }));
-            }}
-            onCreate={async () => {
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Создаем счет..."
-              }));
-              const created = await client.createDemoAccount();
-              setAccountLifecycle({
-                status: "Синхронизируем список счетов...",
-                targetId: created.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Счет создан через live API"
-              }));
-            }}
-            onDelete={async (account) => {
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Удаляем счет..."
-              }));
-              await client.deleteAccount(account.id);
-              setAccountLifecycle({
-                status: "Синхронизируем список счетов...",
-                targetId: null,
-                archivedId: null,
-                deletedId: account.id
-              });
-              await loadSnapshot();
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Счет удален и скрыт из активного списка"
-              }));
-            }}
-            onRestore={async (accountId) => {
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Восстанавливаем счет..."
-              }));
-              const restored = await client.restoreAccount(accountId);
-              setAccountLifecycle({
-                status: "Синхронизируем список счетов...",
-                targetId: restored.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Счет восстановлен через live API"
-              }));
-            }}
-            onUpdate={async (account) => {
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Обновляем счет..."
-              }));
-              const updated = await client.updateAccount({
-                accountId: account.id,
-                version: account.version
-              });
-              setAccountLifecycle({
-                status: "Синхронизируем список счетов...",
-                targetId: updated.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setAccountLifecycle((state) => ({
-                ...state,
-                status: "Счет обновлен через live API"
-              }));
-            }}
-          />
-        )}
-        {activeSection === "categories" && (
-          <CategoriesSection
-            categories={snapshot.categories}
-            householdId={snapshot.accounts.find((account) => account.householdId)?.householdId}
-            lifecycle={categoryLifecycle}
-            onArchive={async (category) => {
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Архивируем категорию..."
-              }));
-              const archived = await client.archiveCategory(category.id);
-              setCategoryLifecycle({
-                status: "Синхронизируем список категорий...",
-                targetId: archived.id,
-                archivedId: archived.id,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Категория архивирована через live API"
-              }));
-            }}
-            onCreate={async (householdId) => {
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Создаем категорию..."
-              }));
-              const created = await client.createDemoCategory({ householdId });
-              setCategoryLifecycle({
-                status: "Синхронизируем список категорий...",
-                targetId: created.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Категория создана через live API"
-              }));
-            }}
-            onDelete={async (category) => {
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Удаляем категорию..."
-              }));
-              await client.deleteCategory(category.id);
-              setCategoryLifecycle({
-                status: "Синхронизируем список категорий...",
-                targetId: null,
-                archivedId: null,
-                deletedId: category.id
-              });
-              await loadSnapshot();
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Категория удалена и скрыта из активного списка"
-              }));
-            }}
-            onRestore={async (categoryId) => {
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Восстанавливаем категорию..."
-              }));
-              const restored = await client.restoreCategory(categoryId);
-              setCategoryLifecycle({
-                status: "Синхронизируем список категорий...",
-                targetId: restored.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Категория восстановлена через live API"
-              }));
-            }}
-            onUpdate={async (category) => {
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Обновляем категорию..."
-              }));
-              const updated = await client.updateCategory({
-                categoryId: category.id,
-                version: category.version
-              });
-              setCategoryLifecycle({
-                status: "Синхронизируем список категорий...",
-                targetId: updated.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setCategoryLifecycle((state) => ({
-                ...state,
-                status: "Категория обновлена через live API"
-              }));
-            }}
+            report={activeReport}
+            viewMode={viewMode}
+            onAdd={() => setQuickAddOpen(true)}
           />
         )}
         {activeSection === "operations" && (
-          <OperationsSection
-            accounts={snapshot.accounts}
-            categories={snapshot.categories}
-            lifecycle={operationLifecycle}
-            operations={snapshot.operations}
-            onArchive={async (operation) => {
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Архивируем операцию..."
-              }));
-              await client.archiveOperation(operation.id);
-              setOperationLifecycle({
-                status: "Синхронизируем список операций...",
-                targetId: null,
-                archivedId: operation.id,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Операция архивирована и скрыта из активного списка"
-              }));
-            }}
-            onCreate={async (input) => {
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Создаем операцию..."
-              }));
-              const created = await client.createDemoOperation(input);
-              setOperationLifecycle({
-                status: "Синхронизируем список операций...",
-                targetId: created.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Операция создана через live API"
-              }));
-            }}
-            onRestore={async (transactionId) => {
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Восстанавливаем операцию..."
-              }));
-              const restored = await client.restoreOperation(transactionId);
-              setOperationLifecycle({
-                status: "Синхронизируем список операций...",
-                targetId: restored.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Операция восстановлена через live API"
-              }));
-            }}
-            onUpdate={async (operation) => {
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Обновляем операцию..."
-              }));
-              const updated = await client.updateOperation({
-                transactionId: operation.id,
-                version: operation.version
-              });
-              setOperationLifecycle({
-                status: "Синхронизируем список операций...",
-                targetId: updated.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setOperationLifecycle((state) => ({
-                ...state,
-                status: "Операция обновлена через live API"
-              }));
-            }}
+          <OperationsPage snapshot={snapshot} viewMode={viewMode} client={client} />
+        )}
+        {activeSection === "assets" && (
+          <AssetsPage snapshot={snapshot} viewMode={viewMode} />
+        )}
+        {activeSection === "categories" && (
+          <CategoriesPage snapshot={snapshot} viewMode={viewMode} />
+        )}
+        {activeSection === "analytics" && (
+          <AnalyticsPage
+            snapshot={snapshot}
+            report={activeReport}
+            viewMode={viewMode}
+            client={client}
           />
         )}
-        {activeSection === "transfers" && (
-          <TransfersSection
-            accounts={snapshot.accounts}
-            lifecycle={transferLifecycle}
-            transfers={snapshot.transfers}
-            onCreate={async (input) => {
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Создаем ручной перевод..."
-              }));
-              const created = await client.createDemoTransfer(input);
-              setTransferLifecycle({
-                status: "Синхронизируем список переводов...",
-                targetId: created.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Ручной перевод создан через live API"
-              }));
-            }}
-            onDelete={async (transfer) => {
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Удаляем перевод..."
-              }));
-              await client.archiveTransfer(transfer.id);
-              setTransferLifecycle({
-                status: "Синхронизируем список переводов...",
-                targetId: null,
-                archivedId: transfer.id,
-                deletedId: transfer.id
-              });
-              await loadSnapshot();
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Перевод удален и скрыт из активного списка"
-              }));
-            }}
-            onRestore={async (transferId) => {
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Восстанавливаем перевод..."
-              }));
-              const restored = await client.restoreTransfer(transferId);
-              setTransferLifecycle({
-                status: "Синхронизируем список переводов...",
-                targetId: restored.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Перевод восстановлен через live API"
-              }));
-            }}
-            onUpdate={async (transfer) => {
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Обновляем перевод..."
-              }));
-              const updated = await client.updateTransfer({
-                transactionId: transfer.id,
-                version: transfer.version
-              });
-              setTransferLifecycle({
-                status: "Синхронизируем список переводов...",
-                targetId: updated.id,
-                archivedId: null,
-                deletedId: null
-              });
-              await loadSnapshot();
-              setTransferLifecycle((state) => ({
-                ...state,
-                status: "Перевод обновлен через live API"
-              }));
-            }}
-          />
-        )}
-        {activeSection === "reports" && (
-          <ReportsSection
-            reports={snapshot.reports}
-            activeMode={activeReportMode}
-            onModeChange={setActiveReportMode}
-          />
+        {activeSection === "settings" && (
+          <SettingsPage viewMode={viewMode} onViewModeChange={setViewMode} />
         )}
       </main>
+
+      <nav className="mobileNav" aria-label="Нижняя навигация">
+        {mobileSections.map((section) => (
+          <NavButton
+            key={section.id}
+            active={activeSection === section.id}
+            icon={section.icon}
+            label={section.label}
+            onClick={() => setActiveSection(section.id)}
+            testId={`mobile-nav-${section.id}`}
+          />
+        ))}
+      </nav>
+      <button
+        className="fab"
+        type="button"
+        aria-label="Добавить"
+        data-testid="mobile-quick-add"
+        onClick={() => setQuickAddOpen(true)}
+      >
+        <Plus size={24} aria-hidden="true" />
+      </button>
+
+      {isQuickAddOpen && (
+        <QuickAdd
+          accounts={visibleAccounts(snapshot.accounts, viewMode)}
+          allAccounts={snapshot.accounts.filter((account) => account.status !== "deleted")}
+          categories={visibleCategories(snapshot.categories, viewMode)}
+          defaultVisibility={viewMode === "shared" ? "shared" : "personal"}
+          onClose={() => setQuickAddOpen(false)}
+          onSubmit={saveQuickAdd}
+          saveStatus={saveStatus}
+        />
+      )}
     </div>
   );
 }
 
-function Overview({
+function NavButton({
+  active,
+  icon: Icon,
+  label,
+  onClick,
+  testId
+}: {
+  active: boolean;
+  icon: typeof WalletCards;
+  label: string;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <button className={active ? "active" : ""} type="button" onClick={onClick} data-testid={testId}>
+      <Icon size={18} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function ViewSwitch({
+  value,
+  onChange
+}: {
+  value: ViewMode;
+  onChange: (value: ViewMode) => void;
+}) {
+  return (
+    <div className="segmentedControl" role="group" aria-label="Режим просмотра">
+      <button
+        className={value === "personal" ? "selected" : ""}
+        type="button"
+        onClick={() => onChange("personal")}
+      >
+        <Lock size={16} aria-hidden="true" />
+        Личное
+      </button>
+      <button
+        className={value === "shared" ? "selected" : ""}
+        type="button"
+        onClick={() => onChange("shared")}
+      >
+        <Shield size={16} aria-hidden="true" />
+        Общее
+      </button>
+      <button
+        className={value === "overview" ? "selected" : ""}
+        type="button"
+        onClick={() => onChange("overview")}
+      >
+        <BarChart3 size={16} aria-hidden="true" />
+        Обзор
+      </button>
+    </div>
+  );
+}
+
+function MoneyDashboard({
   snapshot,
-  activeReport
+  report,
+  viewMode,
+  onAdd
 }: {
   snapshot: DashboardSnapshot;
-  activeReport: ReportSummary;
+  report: ReportSummary;
+  viewMode: ViewMode;
+  onAdd: () => void;
 }) {
-  const totalBalance = snapshot.accounts.reduce(
-    (sum, account) => sum + account.balance.value,
-    0
-  );
-  const balanceCurrency = snapshot.accounts[0]?.balance.currency ?? "RUB";
+  const accounts = visibleAccounts(snapshot.accounts, viewMode);
+  const operations = visibleOperations(snapshot.operations, accounts);
+  const transfers = visibleTransfers(snapshot.transfers, accounts);
+  const currency = accounts[0]?.balance.currency ?? report.income.currency;
+  const capital = accounts.reduce((sum, account) => sum + account.balance.value, 0);
+  const groups = groupAssets(accounts, currency);
+  const topCategories = categoryTotals(operations, snapshot.categories, currency);
+  const recentItems = recentTimeline(operations, transfers).slice(0, 6);
 
   return (
-    <section className="sectionGrid" aria-labelledby="overview-title">
-      <div className="sectionHeader">
-        <h3 id="overview-title">Обзор</h3>
-        <p>Короткая сводка по live API за текущий период.</p>
+    <section className="screenStack" aria-labelledby="money-title">
+      <div className="sectionHead">
+        <h3 id="money-title">Обзор</h3>
+        <button type="button" className="ghostButton" onClick={onAdd}>
+          <Plus size={17} aria-hidden="true" />
+          Операция
+        </button>
       </div>
+
       <div className="metricGrid">
-        <MetricCard
-          label="Баланс счетов"
-          value={formatMoney({ value: totalBalance, currency: balanceCurrency })}
-        />
-        <MetricCard label="Доход периода" value={formatMoney(activeReport.income)} />
-        <MetricCard
-          label="Расход периода"
-          value={formatMoney(activeReport.expense)}
-          tone="danger"
-        />
-        <MetricCard
-          label="Итог периода"
-          value={formatMoney(activeReport.balanceDelta)}
-          tone="success"
-        />
+        <Metric label="Капитал" value={formatMoney({ value: capital, currency })} />
+        <Metric label="Расходы месяца" value={formatMoney(report.expense)} tone="danger" />
+        <Metric label="Доходы" value={formatMoney(report.income)} tone="success" />
+        <Metric label="Чистый поток" value={formatMoney(report.balanceDelta)} />
       </div>
-      <div className="twoColumn">
-        <AccountsSection accounts={snapshot.accounts.slice(0, 3)} compact />
-        <OperationsSection operations={snapshot.operations.slice(0, 3)} compact />
+
+      <div className="dashboardGrid">
+        <section className="plainSection" aria-labelledby="asset-groups-title">
+          <div className="sectionHead compact">
+            <h3 id="asset-groups-title">Группы активов</h3>
+          </div>
+          <div className="listStack">
+            {groups.map((group) => (
+              <AssetGroupRow key={group.kind} group={group} />
+            ))}
+            {groups.length === 0 && <EmptyState text="Нет активов в этом режиме" />}
+          </div>
+        </section>
+
+        <section className="plainSection" aria-labelledby="top-categories-title">
+          <div className="sectionHead compact">
+            <h3 id="top-categories-title">Топ категорий</h3>
+          </div>
+          <div className="listStack">
+            {topCategories.map((category) => (
+              <CategoryTotalRow key={category.name} category={category} />
+            ))}
+            {topCategories.length === 0 && <EmptyState text="Пока нет расходов" />}
+          </div>
+        </section>
       </div>
+
+      <section className="plainSection" aria-labelledby="latest-title">
+        <div className="sectionHead compact">
+          <h3 id="latest-title">Последние операции</h3>
+        </div>
+        <TimelineList items={recentItems} />
+      </section>
     </section>
   );
 }
 
-function MetricCard({
+function Metric({
   label,
   value,
   tone = "neutral"
@@ -644,475 +517,951 @@ function MetricCard({
   );
 }
 
-function ResourceLifecyclePanel<T>({
-  label,
-  status,
-  target,
-  archivedId,
-  createDisabled = false,
-  deleteDisabled = false,
-  onArchive,
-  onCreate,
-  onDelete,
-  onRestore,
-  onUpdate,
-  restoreLabel = "Восстановить"
+function OperationsPage({
+  snapshot,
+  viewMode,
+  client
 }: {
-  label: string;
-  status: string;
-  target: T | undefined;
-  archivedId: string | null;
-  createDisabled?: boolean;
-  deleteDisabled?: boolean;
-  onArchive?: (target: T) => Promise<void>;
-  onCreate: () => Promise<void>;
-  onDelete?: (target: T) => Promise<void>;
-  onRestore: (id: string) => Promise<void>;
-  onUpdate: (target: T) => Promise<void>;
-  restoreLabel?: string;
+  snapshot: DashboardSnapshot;
+  viewMode: ViewMode;
+  client: FinanceApiClient;
 }) {
-  const [isBusy, setIsBusy] = useState(false);
+  const accounts = visibleAccounts(snapshot.accounts, viewMode);
+  const operations = visibleOperations(snapshot.operations, accounts);
+  const transfers = visibleTransfers(snapshot.transfers, accounts);
+  const timeline = recentTimeline(operations, transfers);
 
-  const runAction = async (action: () => Promise<void>) => {
-    setIsBusy(true);
+  return (
+    <section className="screenStack" aria-labelledby="operations-title">
+      <div className="sectionHead">
+        <h3 id="operations-title">Операции</h3>
+        <span>{timeline.length} записей</span>
+      </div>
+      <ImportReportPanel client={client} snapshot={snapshot} viewMode={viewMode} compact />
+      <TimelineList items={timeline} />
+    </section>
+  );
+}
+
+function AssetsPage({
+  snapshot,
+  viewMode
+}: {
+  snapshot: DashboardSnapshot;
+  viewMode: ViewMode;
+}) {
+  const accounts = visibleAccounts(snapshot.accounts, viewMode);
+
+  return (
+    <section className="screenStack" aria-labelledby="assets-title">
+      <div className="sectionHead">
+        <h3 id="assets-title">Счета и активы</h3>
+        <span>{accounts.length} активов</span>
+      </div>
+      <div className="assetGrid">
+        {accounts.map((account) => (
+          <AssetTile key={account.id} account={account} />
+        ))}
+        {accounts.length === 0 && <EmptyState text="Нет активов в этом режиме" />}
+      </div>
+    </section>
+  );
+}
+
+function CategoriesPage({
+  snapshot,
+  viewMode
+}: {
+  snapshot: DashboardSnapshot;
+  viewMode: ViewMode;
+}) {
+  const categories = visibleCategories(snapshot.categories, viewMode);
+
+  return (
+    <section className="screenStack" aria-labelledby="categories-title">
+      <div className="sectionHead">
+        <h3 id="categories-title">Категории</h3>
+        <span>{categories.length} категорий</span>
+      </div>
+      <div className="categoryGrid">
+        {categories.map((category, index) => (
+          <CategoryTile key={category.id} category={category} index={index} />
+        ))}
+        {categories.length === 0 && <EmptyState text="Нет категорий в этом режиме" />}
+      </div>
+    </section>
+  );
+}
+
+function AnalyticsPage({
+  snapshot,
+  report,
+  viewMode,
+  client
+}: {
+  snapshot: DashboardSnapshot;
+  report: ReportSummary;
+  viewMode: ViewMode;
+  client: FinanceApiClient;
+}) {
+  const accounts = visibleAccounts(snapshot.accounts, viewMode);
+  const operations = visibleOperations(snapshot.operations, accounts);
+  const currency = accounts[0]?.balance.currency ?? report.income.currency;
+  const topCategories = categoryTotals(operations, snapshot.categories, currency);
+  const groups = groupAssets(accounts, currency);
+
+  return (
+    <section className="screenStack" aria-labelledby="analytics-title">
+      <div className="sectionHead">
+        <h3 id="analytics-title">Аналитика</h3>
+        <span>{report.periodLabel}</span>
+      </div>
+      <ImportReportPanel client={client} snapshot={snapshot} viewMode={viewMode} />
+      <div className="metricGrid three">
+        <Metric label="Доходы" value={formatMoney(report.income)} tone="success" />
+        <Metric label="Расходы" value={formatMoney(report.expense)} tone="danger" />
+        <Metric label="Итог" value={formatMoney(report.balanceDelta)} />
+      </div>
+      <div className="dashboardGrid">
+        <section className="plainSection" aria-labelledby="analytics-categories-title">
+          <div className="sectionHead compact">
+            <h3 id="analytics-categories-title">Категории</h3>
+          </div>
+          <div className="barList">
+            {topCategories.map((category) => (
+              <BarRow key={category.name} label={category.name} amount={category.amount} />
+            ))}
+            {topCategories.length === 0 && <EmptyState text="Пока нет расходов" />}
+          </div>
+        </section>
+        <section className="plainSection" aria-labelledby="analytics-assets-title">
+          <div className="sectionHead compact">
+            <h3 id="analytics-assets-title">Капитал</h3>
+          </div>
+          <div className="barList">
+            {groups.map((group) => (
+              <BarRow key={group.kind} label={accountKindLabels[group.kind]} amount={group.total} />
+            ))}
+            {groups.length === 0 && <EmptyState text="Нет активов" />}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function ImportReportPanel({
+  client,
+  snapshot,
+  viewMode,
+  compact = false
+}: {
+  client: FinanceApiClient;
+  snapshot: DashboardSnapshot;
+  viewMode: ViewMode;
+  compact?: boolean;
+}) {
+  const [reportType, setReportType] = useState<ImportReportType>("generic_finance_report");
+  const [mode, setMode] = useState<ImportMode>(viewMode);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<ImportReportPreviewResponse | null>(null);
+  const [isLoading, setLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const householdId =
+    snapshot.accounts.find((account) => account.ownershipType === "shared" && account.householdId)
+      ?.householdId ?? null;
+  const targetScope = mode === "shared" ? "shared" : "personal";
+  const canPreview = Boolean(file) && (!mode || mode !== "shared" || householdId);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!file || !canPreview) {
+      return;
+    }
+
+    setLoading(true);
+    setPreviewError(null);
     try {
-      await action();
+      const nextPreview = await client.previewImportReport({
+        reportType,
+        sourceType: "file_metadata_only",
+        targetScope,
+        householdId: targetScope === "shared" ? householdId : null,
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        mimeType: file.type || "application/octet-stream"
+      });
+      setPreview(nextPreview);
+    } catch {
+      setPreviewError("Не удалось показать сводку. Попробуйте выбрать файл еще раз.");
     } finally {
-      setIsBusy(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="lifecyclePanel" aria-label={label}>
-      <div>
-        <strong>{label}</strong>
-        <span>{status}</span>
-      </div>
-      <div className="actionRow">
-        <button
-          type="button"
-          disabled={isBusy || createDisabled}
-          onClick={() => runAction(onCreate)}
-        >
-          <CheckCircle2 size={16} aria-hidden="true" />
-          Создать
-        </button>
-        <button
-          type="button"
-          disabled={isBusy || !target}
-          onClick={() => target ? runAction(() => onUpdate(target)) : undefined}
-        >
-          <Save size={16} aria-hidden="true" />
-          Обновить
-        </button>
-        {onArchive && (
-          <button
-            type="button"
-            disabled={isBusy || !target}
-            onClick={() => target ? runAction(() => onArchive(target)) : undefined}
-          >
-            <Archive size={16} aria-hidden="true" />
-            Архив
+    <section
+      className={compact ? "importPanel compact" : "importPanel"}
+      aria-labelledby={compact ? "import-entry-operations" : "import-entry-analytics"}
+    >
+      <form className="importForm" onSubmit={submit}>
+        <div className="sectionHead compact">
+          <div>
+            <h3 id={compact ? "import-entry-operations" : "import-entry-analytics"}>
+              Импорт отчета
+            </h3>
+            <span>Показана только предварительная сводка</span>
+          </div>
+          <FileUp size={20} aria-hidden="true" />
+        </div>
+
+        <div className="importFields">
+          <label className="field">
+            <span>Тип отчета</span>
+            <select
+              value={reportType}
+              onChange={(event) => setReportType(event.target.value as ImportReportType)}
+            >
+              {Object.entries(importReportTypeLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Файл</span>
+            <input
+              aria-label="Файл отчета"
+              type="file"
+              onChange={(event) => {
+                setFile(event.target.files?.[0] ?? null);
+                setPreview(null);
+              }}
+            />
+          </label>
+          <fieldset className="visibilityGroup importModeGroup">
+            <legend>Режим</legend>
+            <label>
+              <input
+                checked={mode === "personal"}
+                name={compact ? "import-mode-operations" : "import-mode-analytics"}
+                type="radio"
+                onChange={() => setMode("personal")}
+              />
+              Личное
+            </label>
+            <label>
+              <input
+                checked={mode === "shared"}
+                name={compact ? "import-mode-operations" : "import-mode-analytics"}
+                type="radio"
+                onChange={() => setMode("shared")}
+              />
+              Общее
+            </label>
+            <label>
+              <input
+                checked={mode === "overview"}
+                name={compact ? "import-mode-operations" : "import-mode-analytics"}
+                type="radio"
+                onChange={() => setMode("overview")}
+              />
+              Обзор
+            </label>
+          </fieldset>
+        </div>
+
+        <div className="importActions">
+          <button className="ghostButton" type="submit" disabled={!canPreview || isLoading}>
+            <FileUp size={17} aria-hidden="true" />
+            {isLoading ? "Показываем" : "Показать сводку"}
           </button>
+          <span>Данные не изменятся без подтверждения</span>
+        </div>
+        <p className="importGuardrail">Содержимое файла не сохраняется и не разбирается.</p>
+        {mode === "shared" && !householdId && (
+          <p className="importError">Для общего режима нужен семейный доступ.</p>
         )}
-        {onDelete && (
-          <button
-            type="button"
-            disabled={isBusy || !target || deleteDisabled}
-            onClick={() => target ? runAction(() => onDelete(target)) : undefined}
-          >
-            <Trash2 size={16} aria-hidden="true" />
-            Удалить
-          </button>
-        )}
-        <button
-          type="button"
-          disabled={isBusy || !archivedId}
-          onClick={() => archivedId ? runAction(() => onRestore(archivedId)) : undefined}
-        >
-          <RotateCcw size={16} aria-hidden="true" />
-          {restoreLabel}
-        </button>
+        {previewError && <p className="importError">{previewError}</p>}
+      </form>
+
+      {preview && (
+        <div className="importPreview" aria-label="Предварительный просмотр импорта">
+          <div className="importPreviewHead">
+            <div>
+              <strong>{preview.summary.title}</strong>
+              <span>{preview.summary.statusText}</span>
+            </div>
+            <b>Файл не разобран</b>
+          </div>
+          <dl className="importMeta">
+            <div>
+              <dt>Источник</dt>
+              <dd>{importReportTypeLabels[reportType]}</dd>
+            </div>
+            <div>
+              <dt>Режим</dt>
+              <dd>{modeLabel(mode)}</dd>
+            </div>
+            <div>
+              <dt>Имя файла</dt>
+              <dd>{preview.file.fileName || "Файл выбран"}</dd>
+            </div>
+            <div>
+              <dt>Размер</dt>
+              <dd>{formatFileSize(preview.file.fileSizeBytes)}</dd>
+            </div>
+            <div>
+              <dt>Статус</dt>
+              <dd>{preview.summary.statusText}</dd>
+            </div>
+          </dl>
+          <div className="recognitionGrid" aria-label="Секции распознавания">
+            {preview.summary.sections.map((section) => (
+              <article key={section.key} className="recognitionItem">
+                <strong>{section.title}</strong>
+                <span>{section.text}</span>
+              </article>
+            ))}
+          </div>
+          <div className="importWarnings" aria-label="Перед импортом">
+            {preview.warnings.map((warning) => (
+              <span key={warning.code}>{warning.text}</span>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SettingsPage({
+  viewMode,
+  onViewModeChange
+}: {
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
+}) {
+  return (
+    <section className="screenStack" aria-labelledby="settings-title">
+      <div className="sectionHead">
+        <h3 id="settings-title">Настройки</h3>
       </div>
+      <div className="settingsList">
+        <div className="settingRow">
+          <div>
+            <strong>Режим по умолчанию</strong>
+            <span>Личное остается приватным</span>
+          </div>
+          <ViewSwitch value={viewMode} onChange={onViewModeChange} />
+        </div>
+        <div className="settingRow">
+          <div>
+            <strong>Валюта</strong>
+            <span>Берется из первого счета</span>
+          </div>
+          <b>Авто</b>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function QuickAdd({
+  accounts,
+  allAccounts,
+  categories,
+  defaultVisibility,
+  onClose,
+  onSubmit,
+  saveStatus
+}: {
+  accounts: AccountSummary[];
+  allAccounts: AccountSummary[];
+  categories: CategorySummary[];
+  defaultVisibility: VisibilityMode;
+  onClose: () => void;
+  onSubmit: (input: QuickAddInput) => Promise<void>;
+  saveStatus: string;
+}) {
+  const firstAccount = accounts[0] ?? allAccounts[0];
+  const secondAccount = allAccounts.find((account) => account.id !== firstAccount?.id);
+  const [kind, setKind] = useState<QuickKind>("expense");
+  const [amount, setAmount] = useState("1000");
+  const [accountId, setAccountId] = useState(firstAccount?.id ?? "");
+  const [toAccountId, setToAccountId] = useState(secondAccount?.id ?? "");
+  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
+  const [assetKind, setAssetKind] = useState<AccountKind>("card");
+  const [date, setDate] = useState(todayInputValue());
+  const [comment, setComment] = useState("");
+  const [visibility, setVisibility] = useState<VisibilityMode>(defaultVisibility);
+  const [isSaving, setSaving] = useState(false);
+
+  const filteredCategories = categories.filter((category) => {
+    if (kind === "income") {
+      return category.direction === "income";
+    }
+    if (kind === "expense") {
+      return category.direction === "expense";
+    }
+    return false;
+  });
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSubmit({
+        kind,
+        amount: parsedAmount,
+        accountId,
+        toAccountId,
+        categoryId,
+        assetKind,
+        date,
+        comment,
+        visibility
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const canSubmit =
+    Number(amount) > 0 &&
+    (kind === "asset" ||
+      (kind === "transfer" ? accountId && toAccountId && accountId !== toAccountId : accountId));
+
+  return (
+    <div className="modalLayer" role="presentation">
+      <form className="quickSheet" aria-label="Быстро добавить" onSubmit={submit}>
+        <div className="sheetHead">
+          <h3>Добавить</h3>
+          <button type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={19} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="kindGrid" role="group" aria-label="Тип записи">
+          <ChoiceButton active={kind === "expense"} onClick={() => setKind("expense")}>
+            <ArrowUpRight size={17} aria-hidden="true" />
+            Расход
+          </ChoiceButton>
+          <ChoiceButton active={kind === "income"} onClick={() => setKind("income")}>
+            <ArrowDownLeft size={17} aria-hidden="true" />
+            Доход
+          </ChoiceButton>
+          <ChoiceButton active={kind === "transfer"} onClick={() => setKind("transfer")}>
+            <ArrowLeftRight size={17} aria-hidden="true" />
+            Перевод
+          </ChoiceButton>
+          <ChoiceButton active={kind === "asset"} onClick={() => setKind("asset")}>
+            <Landmark size={17} aria-hidden="true" />
+            Актив
+          </ChoiceButton>
+        </div>
+
+        <label className="field">
+          <span>Сумма</span>
+          <input
+            min="0"
+            inputMode="decimal"
+            type="number"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </label>
+
+        {kind === "asset" ? (
+          <label className="field">
+            <span>Тип</span>
+            <select
+              value={assetKind}
+              onChange={(event) => setAssetKind(event.target.value as AccountKind)}
+            >
+              {Object.entries(accountKindLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label className="field">
+            <span>{kind === "transfer" ? "Откуда" : "Счет"}</span>
+            <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+              {allAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {kind === "transfer" && (
+          <label className="field">
+            <span>Куда</span>
+            <select value={toAccountId} onChange={(event) => setToAccountId(event.target.value)}>
+              {allAccounts
+                .filter((account) => account.id !== accountId)
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+
+        {(kind === "expense" || kind === "income") && (
+          <label className="field">
+            <span>Категория</span>
+            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="">Без категории</option>
+              {filteredCategories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <details className="moreFields">
+          <summary data-testid="quick-add-more">Еще</summary>
+          <label className="field">
+            <span>Дата</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(event) => setDate(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Комментарий</span>
+            <input value={comment} onChange={(event) => setComment(event.target.value)} />
+          </label>
+          <fieldset className="visibilityGroup">
+            <legend>Видимость</legend>
+            <label>
+              <input
+                checked={visibility === "personal"}
+                name="visibility"
+                type="radio"
+                onChange={() => setVisibility("personal")}
+              />
+              Личное
+            </label>
+            <label>
+              <input
+                checked={visibility === "shared"}
+                name="visibility"
+                type="radio"
+                onChange={() => setVisibility("shared")}
+              />
+              Общее
+            </label>
+          </fieldset>
+        </details>
+
+        <button
+          className="submitButton"
+          type="submit"
+          disabled={isSaving || !canSubmit}
+          data-testid="quick-add-submit"
+        >
+          <Check size={18} aria-hidden="true" />
+          {isSaving ? "Сохраняем" : saveStatus || "Готово"}
+        </button>
+      </form>
     </div>
   );
 }
 
-function AccountsSection({
-  accounts,
-  compact = false,
-  lifecycle,
-  onArchive,
-  onCreate,
-  onDelete,
-  onRestore,
-  onUpdate
+function ChoiceButton({
+  active,
+  children,
+  onClick
 }: {
-  accounts: AccountSummary[];
-  compact?: boolean;
-  lifecycle?: LifecycleState;
-  onArchive?: (account: AccountSummary) => Promise<void>;
-  onCreate?: () => Promise<void>;
-  onDelete?: (account: AccountSummary) => Promise<void>;
-  onRestore?: (accountId: string) => Promise<void>;
-  onUpdate?: (account: AccountSummary) => Promise<void>;
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
 }) {
-  const lifecycleTarget =
-    accounts.find((account) => account.id === lifecycle?.targetId) ??
-    accounts.find((account) => account.status !== "archived");
+  return (
+    <button className={active ? "selected" : ""} type="button" onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function AssetTile({ account }: { account: AccountSummary }) {
+  const Icon = accountKindIcons[account.kind];
 
   return (
-    <section className="panel" aria-labelledby={compact ? undefined : "accounts-title"}>
-      <div className="panelHeader">
-        <h3 id={compact ? undefined : "accounts-title"}>Счета</h3>
-        <span data-testid={compact ? undefined : "account-count"}>
-          {accounts.length} видимых
+    <article className="assetTile">
+      <div className="tileIcon" aria-hidden="true">
+        <Icon size={20} />
+      </div>
+      <div>
+        <strong>{account.name}</strong>
+        <span>
+          {accountKindLabels[account.kind]} · {account.ownerName}
         </span>
       </div>
-      {!compact && lifecycle && onArchive && onCreate && onDelete && onRestore && onUpdate && (
-        <ResourceLifecyclePanel
-          label="CRUD / архив / восстановление счета"
-          status={lifecycle.status}
-          target={lifecycleTarget}
-          archivedId={lifecycle.archivedId}
-          onArchive={onArchive}
-          onCreate={onCreate}
-          onDelete={onDelete}
-          onRestore={onRestore}
-          onUpdate={onUpdate}
-        />
-      )}
-      <div className="tableList">
-        {accounts.map((account) => (
-          <div className="tableRow" key={account.id} data-testid="account-row">
-            <div>
-              <strong>{account.name}</strong>
-              <span>
-                {account.ownerName} · {accountKindLabel(account.kind)} ·{" "}
-                {statusLabel(account.status)}
-              </span>
-            </div>
-            <b>{formatMoney(account.balance)}</b>
-          </div>
-        ))}
-      </div>
-    </section>
+      <b>{formatMoney(account.balance)}</b>
+    </article>
   );
 }
 
-function CategoriesSection({
-  categories,
-  householdId,
-  lifecycle,
-  onArchive,
-  onCreate,
-  onDelete,
-  onRestore,
-  onUpdate
+function CategoryTile({
+  category,
+  index
 }: {
-  categories: CategorySummary[];
-  householdId?: string | null;
-  lifecycle?: LifecycleState;
-  onArchive?: (category: CategorySummary) => Promise<void>;
-  onCreate?: (householdId: string | null) => Promise<void>;
-  onDelete?: (category: CategorySummary) => Promise<void>;
-  onRestore?: (categoryId: string) => Promise<void>;
-  onUpdate?: (category: CategorySummary) => Promise<void>;
+  category: CategorySummary;
+  index: number;
 }) {
-  const lifecycleTarget =
-    categories.find((category) => category.id === lifecycle?.targetId) ??
-    categories.find((category) => category.status !== "archived");
+  const Icon = category.direction === "income" ? CircleDollarSign : ShoppingCart;
+  const color = category.color || categoryPalette[index % categoryPalette.length];
 
   return (
-    <section className="panel" aria-labelledby="categories-title">
-      <div className="panelHeader">
-        <h3 id="categories-title">Категории</h3>
-        <span data-testid="category-count">{categories.length} видимых</span>
+    <article className="categoryTile">
+      <div className="categoryIcon" style={{ backgroundColor: color }} aria-hidden="true">
+        <Icon size={18} />
       </div>
-      {lifecycle && onArchive && onCreate && onDelete && onRestore && onUpdate && (
-        <ResourceLifecyclePanel
-          label="CRUD / архив / восстановление категории"
-          status={lifecycle.status}
-          target={lifecycleTarget}
-          archivedId={lifecycle.archivedId}
-          onArchive={onArchive}
-          onCreate={() => onCreate(householdId ?? null)}
-          onDelete={onDelete}
-          onRestore={onRestore}
-          onUpdate={onUpdate}
-        />
-      )}
-      <div className="tableList">
-        {categories.map((category) => (
-          <div className="tableRow" key={category.id} data-testid="category-row">
-            <div>
-              <strong>{category.name}</strong>
-              <span>
-                {category.direction === "income" ? "Доход" : "Расход"} ·{" "}
-                {category.scope === "household" ? "семейная" : "личная"} ·{" "}
-                {statusLabel(category.status)}
-              </span>
-            </div>
-            <b>{category.direction === "income" ? "поступления" : "списания"}</b>
-          </div>
-        ))}
+      <div>
+        <strong>{shortCategoryName(category.name)}</strong>
+        <span>{category.direction === "income" ? "Доход" : "Расход"}</span>
       </div>
-    </section>
+    </article>
   );
 }
 
-function OperationsSection({
-  accounts = [],
-  categories = [],
-  lifecycle,
-  operations,
-  compact = false,
-  onArchive,
-  onCreate,
-  onRestore,
-  onUpdate
+function AssetGroupRow({
+  group
 }: {
-  accounts?: AccountSummary[];
-  categories?: CategorySummary[];
-  lifecycle?: LifecycleState;
-  operations: OperationSummary[];
-  compact?: boolean;
-  onArchive?: (operation: OperationSummary) => Promise<void>;
-  onCreate?: (input: {
-    accountId: string;
-    categoryId: string | null;
-    currency: MoneyAmount["currency"];
-  }) => Promise<void>;
-  onRestore?: (transactionId: string) => Promise<void>;
-  onUpdate?: (operation: OperationSummary) => Promise<void>;
+  group: { kind: AccountKind; total: MoneyAmount; count: number };
 }) {
-  const firstAccount = accounts.find((account) => account.status !== "archived");
-  const compatibleExpenseCategory = categories.find((category) => {
-    if (category.status === "archived" || category.direction !== "expense") {
+  const Icon = accountKindIcons[group.kind];
+
+  return (
+    <div className="listRow">
+      <div className="rowIcon" aria-hidden="true">
+        <Icon size={18} />
+      </div>
+      <div>
+        <strong>{accountKindLabels[group.kind]}</strong>
+        <span>{group.count} шт.</span>
+      </div>
+      <b>{formatMoney(group.total)}</b>
+    </div>
+  );
+}
+
+function CategoryTotalRow({
+  category
+}: {
+  category: { name: string; amount: MoneyAmount; color: string };
+}) {
+  return (
+    <div className="listRow">
+      <span className="colorDot" style={{ backgroundColor: category.color }} />
+      <div>
+        <strong>{shortCategoryName(category.name)}</strong>
+        <span>Расходы</span>
+      </div>
+      <b>{formatMoney(category.amount)}</b>
+    </div>
+  );
+}
+
+function BarRow({
+  label,
+  amount
+}: {
+  label: string;
+  amount: MoneyAmount;
+}) {
+  return (
+    <div className="barRow">
+      <span>{label}</span>
+      <strong>{formatMoney(amount)}</strong>
+    </div>
+  );
+}
+
+type TimelineItem =
+  | {
+      type: "operation";
+      id: string;
+      date: string;
+      title: string;
+      subtitle: string;
+      amount: MoneyAmount;
+    }
+  | {
+      type: "transfer";
+      id: string;
+      date: string;
+      title: string;
+      subtitle: string;
+      amount: MoneyAmount;
+    };
+
+function TimelineList({ items }: { items: TimelineItem[] }) {
+  return (
+    <div className="listStack">
+      {items.map((item) => {
+        const isTransfer = item.type === "transfer";
+        const isExpense = item.amount.value < 0;
+        const Icon = isTransfer ? ArrowLeftRight : isExpense ? ArrowUpRight : ArrowDownLeft;
+
+        return (
+          <article className="operationRow" key={`${item.type}-${item.id}`}>
+            <div className="rowIcon" aria-hidden="true">
+              <Icon size={18} />
+            </div>
+            <div>
+              <strong>{item.title}</strong>
+              <span>{item.subtitle}</span>
+            </div>
+            <b className={isTransfer ? "neutral" : isExpense ? "negative" : "positive"}>
+              {isTransfer ? formatMoney(item.amount) : formatMoney(item.amount)}
+            </b>
+          </article>
+        );
+      })}
+      {items.length === 0 && <EmptyState text="Записей пока нет" />}
+    </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <div className="emptyState">{text}</div>;
+}
+
+function visibleAccounts(accounts: AccountSummary[], mode: ViewMode): AccountSummary[] {
+  return accounts.filter((account) => {
+    if (account.status === "deleted" || account.status === "archived") {
       return false;
     }
-    if (firstAccount?.ownershipType === "shared") {
-      return (
-        category.scope === "household" &&
-        category.householdId === firstAccount.householdId
-      );
-    }
 
-    return category.scope !== "household";
-  });
-  const targetOperation =
-    operations.find((operation) => operation.id === lifecycle?.targetId) ?? operations[0];
-
-  return (
-    <section className="panel" aria-labelledby={compact ? undefined : "operations-title"}>
-      <div className="panelHeader">
-        <h3 id={compact ? undefined : "operations-title"}>Операции</h3>
-        <span>{operations.length} активных</span>
-      </div>
-      {!compact && lifecycle && onCreate && onUpdate && onArchive && onRestore && (
-        <ResourceLifecyclePanel
-          label="CRUD / архив / восстановление операции"
-          status={lifecycle.status}
-          target={targetOperation}
-          archivedId={lifecycle.archivedId}
-          createDisabled={!firstAccount || !compatibleExpenseCategory}
-          onArchive={onArchive}
-          onCreate={() =>
-            firstAccount && compatibleExpenseCategory
-              ? onCreate({
-                  accountId: firstAccount.id,
-                  categoryId: compatibleExpenseCategory.id,
-                  currency: firstAccount.balance.currency
-                })
-              : Promise.resolve()
-          }
-          onRestore={onRestore}
-          onUpdate={onUpdate}
-        />
-      )}
-      <div className="tableList">
-        {operations.map((operation) => (
-          <div className="tableRow" key={operation.id}>
-            <div>
-              <strong>{operation.title}</strong>
-              <span>
-                {formatDate(operation.date)} · {operation.categoryName} ·{" "}
-                {operation.accountName}
-              </span>
-            </div>
-            <b className={operation.amount.value < 0 ? "negative" : "positive"}>
-              {formatMoney(operation.amount)}
-            </b>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TransfersSection({
-  accounts,
-  lifecycle,
-  transfers,
-  onCreate,
-  onDelete,
-  onRestore,
-  onUpdate
-}: {
-  accounts: AccountSummary[];
-  lifecycle: LifecycleState;
-  transfers: TransferSummary[];
-  onCreate: (input: {
-    fromAccountId: string;
-    toAccountId: string;
-    currency: MoneyAmount["currency"];
-  }) => Promise<void>;
-  onDelete: (transfer: TransferSummary) => Promise<void>;
-  onRestore: (transferId: string) => Promise<void>;
-  onUpdate: (transfer: TransferSummary) => Promise<void>;
-}) {
-  const transferPair = findCompatibleTransferPair(accounts);
-  const targetTransfer =
-    transfers.find((transfer) => transfer.id === lifecycle.targetId) ?? transfers[0];
-
-  return (
-    <section className="panel" aria-labelledby="transfers-title">
-      <div className="panelHeader">
-        <h3 id="transfers-title">Переводы</h3>
-        <span data-testid="transfer-count">{transfers.length} между счетами</span>
-      </div>
-      <ResourceLifecyclePanel
-        label="Ручной перевод: создать / обновить / удалить / восстановить"
-        status={lifecycle.status}
-        target={targetTransfer}
-        archivedId={lifecycle.archivedId}
-        createDisabled={!transferPair}
-        onCreate={() =>
-          transferPair
-            ? onCreate({
-                fromAccountId: transferPair.from.id,
-                toAccountId: transferPair.to.id,
-                currency: transferPair.from.balance.currency
-              })
-            : Promise.resolve()
-        }
-        onDelete={onDelete}
-        onRestore={onRestore}
-        onUpdate={onUpdate}
-        restoreLabel="Восстановить"
-      />
-      <div className="tableList">
-        {transfers.length === 0 && (
-          <div className="emptyState">В live seed пока нет переводов.</div>
-        )}
-        {transfers.map((transfer) => (
-          <div className="tableRow" key={transfer.id} data-testid="transfer-row">
-            <div>
-              <strong>
-                {transfer.fromAccountName} → {transfer.toAccountName}
-              </strong>
-              <span>
-                {formatDate(transfer.date)} · {transfer.transferStatus ?? "posted"} ·{" "}
-                {transfer.transferScope ?? "same-scope"}
-              </span>
-            </div>
-            <b>{formatMoney(transfer.amount)}</b>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ReportsSection({
-  reports,
-  activeMode,
-  onModeChange
-}: {
-  reports: ReportSummary[];
-  activeMode: ReportMode;
-  onModeChange: (mode: ReportMode) => void;
-}) {
-  const activeReport = reports.find((report) => report.mode === activeMode) ?? reports[0];
-
-  return (
-    <section className="panel" aria-labelledby="reports-title">
-      <div className="panelHeader">
-        <h3 id="reports-title">Отчеты</h3>
-        <span data-testid="report-mode-count">
-          {activeReport.periodLabel} · {reports.length} режима
-        </span>
-      </div>
-      <div className="segmentedControl" role="group" aria-label="Режим отчета">
-        {reports.map((report) => (
-          <button
-            key={report.mode}
-            className={report.mode === activeMode ? "selected" : ""}
-            type="button"
-            onClick={() => onModeChange(report.mode)}
-          >
-            {reportModeLabels[report.mode]}
-          </button>
-        ))}
-      </div>
-      <div className="reportSummary">
-        <MetricCard
-          label="Доход"
-          value={formatMoney(activeReport.income)}
-          tone="success"
-        />
-        <MetricCard
-          label="Расход"
-          value={formatMoney(activeReport.expense)}
-          tone="danger"
-        />
-        <MetricCard label="Итог" value={formatMoney(activeReport.balanceDelta)} />
-      </div>
-    </section>
-  );
-}
-
-function accountKindLabel(kind: AccountSummary["kind"]): string {
-  const labels: Record<AccountSummary["kind"], string> = {
-    cash: "наличные",
-    debit: "карта",
-    savings: "накопления"
-  };
-
-  return labels[kind];
-}
-
-function statusLabel(status: AccountSummary["status"] | CategorySummary["status"]): string {
-  const labels = {
-    active: "активно",
-    archived: "архив",
-    deleted: "удалено"
-  };
-
-  return labels[status ?? "active"];
-}
-
-function findCompatibleTransferPair(accounts: AccountSummary[]) {
-  const activeAccounts = accounts.filter((account) => account.status !== "archived");
-  for (const from of activeAccounts) {
-    const to = activeAccounts.find((candidate) => {
-      if (candidate.id === from.id || candidate.balance.currency !== from.balance.currency) {
-        return false;
-      }
-      if (from.ownershipType === "shared" || candidate.ownershipType === "shared") {
-        return (
-          from.ownershipType === "shared" &&
-          candidate.ownershipType === "shared" &&
-          from.householdId === candidate.householdId
-        );
-      }
-
+    if (mode === "overview") {
       return true;
-    });
-    if (to) {
-      return { from, to };
     }
+
+    return mode === "shared"
+      ? account.ownershipType === "shared"
+      : account.ownershipType !== "shared";
+  });
+}
+
+function visibleCategories(categories: CategorySummary[], mode: ViewMode): CategorySummary[] {
+  return categories.filter((category) => {
+    if (category.status === "deleted" || category.status === "archived") {
+      return false;
+    }
+
+    if (mode === "overview") {
+      return true;
+    }
+
+    return mode === "shared" ? category.scope === "household" : category.scope !== "household";
+  });
+}
+
+function visibleOperations(
+  operations: OperationSummary[],
+  accounts: AccountSummary[]
+): OperationSummary[] {
+  const accountIds = new Set(accounts.map((account) => account.id));
+  return operations.filter((operation) => accountIds.has(operation.accountId));
+}
+
+function visibleTransfers(
+  transfers: TransferSummary[],
+  accounts: AccountSummary[]
+): TransferSummary[] {
+  const accountIds = new Set(accounts.map((account) => account.id));
+  return transfers.filter(
+    (transfer) =>
+      accountIds.has(transfer.accountId) ||
+      (transfer.counterpartyAccountId ? accountIds.has(transfer.counterpartyAccountId) : false)
+  );
+}
+
+function groupAssets(accounts: AccountSummary[], currency: CurrencyCode) {
+  const groups = new Map<AccountKind, { kind: AccountKind; total: MoneyAmount; count: number }>();
+  for (const account of accounts) {
+    const current =
+      groups.get(account.kind) ??
+      {
+        kind: account.kind,
+        total: { value: 0, currency: account.balance.currency || currency },
+        count: 0
+      };
+    current.total.value += account.balance.value;
+    current.count += 1;
+    groups.set(account.kind, current);
   }
 
-  return null;
+  return [...groups.values()].sort((left, right) => right.total.value - left.total.value);
+}
+
+function categoryTotals(
+  operations: OperationSummary[],
+  categories: CategorySummary[],
+  currency: CurrencyCode
+) {
+  const totals = new Map<string, { name: string; amount: MoneyAmount; color: string }>();
+  for (const operation of operations) {
+    if (operation.amount.value >= 0) {
+      continue;
+    }
+    const category = categories.find((item) => item.id === operation.categoryId);
+    const name = operation.categoryName || category?.name || "Без категории";
+    const current =
+      totals.get(name) ??
+      {
+        name,
+        amount: { value: 0, currency: operation.amount.currency || currency },
+        color: category?.color || categoryPalette[totals.size % categoryPalette.length]
+      };
+    current.amount.value += Math.abs(operation.amount.value);
+    totals.set(name, current);
+  }
+
+  return [...totals.values()].sort((left, right) => right.amount.value - left.amount.value);
+}
+
+function recentTimeline(
+  operations: OperationSummary[],
+  transfers: TransferSummary[]
+): TimelineItem[] {
+  const operationItems: TimelineItem[] = operations.map((operation) => ({
+    type: "operation",
+    id: operation.id,
+    date: operation.date,
+    title: operation.title,
+    subtitle: `${formatDate(operation.date)} · ${operation.categoryName} · ${operation.accountName}`,
+    amount: operation.amount
+  }));
+  const transferItems: TimelineItem[] = transfers.map((transfer) => ({
+    type: "transfer",
+    id: transfer.id,
+    date: transfer.date,
+    title: `${transfer.fromAccountName} → ${transfer.toAccountName}`,
+    subtitle: `${formatDate(transfer.date)} · Перевод`,
+    amount: transfer.amount
+  }));
+
+  return [...operationItems, ...transferItems].sort(
+    (left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()
+  );
+}
+
+function sectionTitle(section: SectionId): string {
+  const titles: Record<SectionId, string> = {
+    analytics: "Аналитика",
+    assets: "Счета и активы",
+    categories: "Категории",
+    money: "Деньги",
+    operations: "Операции",
+    settings: "Настройки"
+  };
+
+  return titles[section];
+}
+
+function viewModeDescription(mode: ViewMode): string {
+  const descriptions: Record<ViewMode, string> = {
+    personal: "Личное видно только вам",
+    shared: "Общее для семьи",
+    overview: "Сводный обзор"
+  };
+
+  return descriptions[mode];
+}
+
+function modeLabel(mode: ImportMode): string {
+  const labels: Record<ImportMode, string> = {
+    personal: "Личное",
+    shared: "Общее",
+    overview: "Обзор"
+  };
+
+  return labels[mode];
+}
+
+function shortCategoryName(name: string): string {
+  return name.trim().split(/\s+/).slice(0, 2).join(" ");
+}
+
+function reportForView(snapshot: DashboardSnapshot, mode: ViewMode): ReportSummary {
+  const currency = snapshot.accounts[0]?.balance.currency ?? "RUB";
+
+  if (mode === "personal") {
+    const accounts = visibleAccounts(snapshot.accounts, "personal");
+    const operations = visibleOperations(snapshot.operations, accounts);
+    return reportFromOperations("personal", operations, currency);
+  }
+
+  const reportMode = reportModeByView[mode];
+  return (
+    snapshot.reports.find((report) => report.mode === reportMode) ??
+    snapshot.reports[0] ??
+    emptyReport(mode, currency)
+  );
+}
+
+function reportFromOperations(
+  mode: ViewMode,
+  operations: OperationSummary[],
+  currency: CurrencyCode
+): ReportSummary {
+  const totals = operations.reduce(
+    (current, operation) => {
+      if (operation.amount.value > 0) {
+        current.income += operation.amount.value;
+      }
+      if (operation.amount.value < 0) {
+        current.expense += Math.abs(operation.amount.value);
+      }
+      current.delta += operation.amount.value;
+      return current;
+    },
+    { income: 0, expense: 0, delta: 0 }
+  );
+
+  return {
+    ...emptyReport(mode, currency),
+    income: { value: totals.income, currency },
+    expense: { value: totals.expense, currency },
+    balanceDelta: { value: totals.delta, currency }
+  };
+}
+
+function emptyReport(mode: ViewMode, currency: CurrencyCode): ReportSummary {
+  const reportMode = mode === "shared" ? reportModeByView.shared : reportModeByView.overview;
+  const titles: Record<ViewMode, string> = {
+    personal: "Личное",
+    shared: "Общее",
+    overview: "Обзор"
+  };
+
+  return {
+    mode: reportMode,
+    title: titles[mode],
+    periodLabel: "Текущий месяц",
+    income: { value: 0, currency },
+    expense: { value: 0, currency },
+    balanceDelta: { value: 0, currency }
+  };
 }

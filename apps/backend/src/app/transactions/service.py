@@ -187,14 +187,18 @@ class TransactionService:
         if str(request.transaction_type) == "transfer":
             return self._create_transfer(actor=actor, request=request)
 
-        self._validate_manual_income_expense_shape(
+        self._validate_manual_non_transfer_shape(
             transaction_type=str(request.transaction_type),
             source_type=str(request.source_type),
             counterparty_account_id=request.counterparty_account_id,
             category_id=request.category_id,
         )
         account = self._require_visible_account(actor, request.account_id)
-        category = self._require_visible_category(actor, request.category_id)
+        category = self._visible_category_for_transaction(
+            actor,
+            transaction_type=str(request.transaction_type),
+            category_id=request.category_id,
+        )
         self._validate_currency(account, request.currency)
 
         decision = canCreateTransaction(
@@ -202,7 +206,7 @@ class TransactionService:
             TransactionDraft(
                 transaction_type=AuthzTransactionType(str(request.transaction_type)),
                 account=_authz_account(account),
-                category=_authz_category(category),
+                category=_authz_category(category) if category is not None else None,
                 source_type=AuthzSourceType(str(request.source_type)),
             ),
         )
@@ -213,7 +217,7 @@ class TransactionService:
             transaction_type=str(request.transaction_type),
             account_id=account.id,
             counterparty_account_id=None,
-            category_id=category.id,
+            category_id=category.id if category is not None else None,
             amount=Decimal(request.amount),
             currency=request.currency,
             occurred_at=_utc(request.occurred_at),
@@ -254,7 +258,7 @@ class TransactionService:
         category_id = request.category_id if request.category_id is not None else record.category_id
         currency = request.currency or record.currency
 
-        self._validate_manual_income_expense_shape(
+        self._validate_manual_non_transfer_shape(
             transaction_type=transaction_type,
             source_type=source_type,
             counterparty_account_id=(
@@ -263,7 +267,11 @@ class TransactionService:
             category_id=category_id,
         )
         account = self._require_visible_account(actor, account_id)
-        category = self._require_visible_category(actor, category_id)
+        category = self._visible_category_for_transaction(
+            actor,
+            transaction_type=transaction_type,
+            category_id=category_id,
+        )
         self._validate_currency(account, currency)
 
         transaction = self._authz_transaction(record)
@@ -271,7 +279,7 @@ class TransactionService:
             actor,
             transaction,
             proposed_account=_authz_account(account),
-            proposed_category=_authz_category(category),
+            proposed_category=_authz_category(category) if category is not None else None,
         )
         if not decision.allowed:
             raise _service_error_for_decision(decision.reason)
@@ -281,7 +289,7 @@ class TransactionService:
             transaction_type=transaction_type,
             account_id=account.id,
             counterparty_account_id=None,
-            category_id=category.id,
+            category_id=category.id if category is not None else None,
             amount=Decimal(request.amount) if request.amount is not None else record.amount,
             currency=currency,
             occurred_at=(
@@ -367,11 +375,13 @@ class TransactionService:
         category = (
             self._categories.get(record.category_id) if record.category_id is not None else None
         )
-        if account is None or category is None:
+        if account is None:
+            raise TransactionNotFoundOrInaccessible()
+        if record.transaction_type in {"income", "expense"} and category is None:
             raise TransactionNotFoundOrInaccessible()
         if not canReadAccount(actor, _authz_account(account)).allowed:
             raise TransactionNotFoundOrInaccessible()
-        if not canReadCategory(actor, _authz_category(category)).allowed:
+        if category is not None and not canReadCategory(actor, _authz_category(category)).allowed:
             raise TransactionNotFoundOrInaccessible()
 
         restored = replace(
@@ -554,6 +564,19 @@ class TransactionService:
             raise TransactionValidationError(DenialReason.ARCHIVED_RECORD_NOT_MUTABLE)
         return record
 
+    def _visible_category_for_transaction(
+        self,
+        actor: Actor,
+        *,
+        transaction_type: str,
+        category_id: str | None,
+    ) -> CategoryRecord | None:
+        if transaction_type in {"income", "expense"}:
+            return self._require_visible_category(actor, category_id)
+        if category_id is not None:
+            raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+        return None
+
     def _resolve_transfer_accounts(
         self,
         actor: Actor,
@@ -638,7 +661,7 @@ class TransactionService:
         if category_id is not None:
             raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
 
-    def _validate_manual_income_expense_shape(
+    def _validate_manual_non_transfer_shape(
         self,
         *,
         transaction_type: str,
@@ -652,11 +675,21 @@ class TransactionService:
             raise TransactionValidationError(DenialReason.TRANSFER_SCOPE_NOT_SUPPORTED)
         if transaction_type == "brokerage":
             raise TransactionValidationError(DenialReason.ACTION_NOT_ALLOWED)
-        if transaction_type not in {"income", "expense"}:
+        category_required_types = {"income", "expense"}
+        categoryless_types = {
+            "asset_buy",
+            "asset_sell",
+            "interest",
+            "dividend",
+            "adjustment",
+        }
+        if transaction_type not in category_required_types | categoryless_types:
             raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
         if counterparty_account_id is not None:
             raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
-        if category_id is None:
+        if transaction_type in category_required_types and category_id is None:
+            raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+        if transaction_type in categoryless_types and category_id is not None:
             raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
 
     def _validate_currency(self, account: AccountRecord, currency: str) -> None:

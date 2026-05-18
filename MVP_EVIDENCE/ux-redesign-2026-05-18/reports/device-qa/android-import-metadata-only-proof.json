@@ -1,0 +1,82 @@
+﻿{
+    "command":  "POST /api/v1/imports/report-preview",
+    "request":  {
+                    "mimeType":  "application/pdf",
+                    "reportType":  "bank_statement",
+                    "targetScope":  "personal",
+                    "fileName":  "android-placeholder.pdf",
+                    "sourceType":  "file_metadata_only",
+                    "fileSizeBytes":  12345
+                },
+    "response":  {
+                     "status":  "preview_placeholder",
+                     "canConfirm":  false,
+                     "willChangeData":  false,
+                     "message":  "Ð¤Ð°Ð¹Ð» Ð½Ðµ Ð¸Ð¼Ð¿Ð¾ÑÑÐ¸ÑÐ¾Ð²Ð°Ð½. Ð¡ÐµÐ¹ÑÐ°Ñ Ð¿Ð¾ÐºÐ°Ð·Ð°Ð½Ð° ÑÐ¾Ð»ÑÐºÐ¾ Ð¿ÑÐµÐ´Ð²Ð°ÑÐ¸ÑÐµÐ»ÑÐ½Ð°Ñ ÑÐ²Ð¾Ð´ÐºÐ°.",
+                     "scope":  {
+                                   "targetScope":  "personal",
+                                   "householdId":  null
+                               },
+                     "file":  {
+                                  "fileName":  "android-placeholder.pdf",
+                                  "fileSizeBytes":  12345,
+                                  "mimeType":  "application/pdf"
+                              },
+                     "summary":  {
+                                     "title":  "ÐÑÐµÐ´Ð²Ð°ÑÐ¸ÑÐµÐ»ÑÐ½ÑÐ¹ Ð¿ÑÐ¾ÑÐ¼Ð¾ÑÑ Ð¸Ð¼Ð¿Ð¾ÑÑÐ°",
+                                     "statusText":  "ÐÐ¼Ð¿Ð¾ÑÑ Ð¿Ð¾ÐºÐ° Ð½Ðµ Ð²ÑÐ¿Ð¾Ð»Ð½ÑÐµÑÑÑ",
+                                     "sections":  [
+                                                      {
+                                                          "key":  "accounts_assets",
+                                                          "title":  "Ð¡ÑÐµÑÐ° Ð¸ Ð°ÐºÑÐ¸Ð²Ñ",
+                                                          "status":  "not_recognized_yet",
+                                                          "text":  "Ð¡ÑÐµÑÐ° Ð¸ Ð°ÐºÑÐ¸Ð²Ñ Ð¿Ð¾ÐºÐ° Ð½Ðµ ÑÐ°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ñ Ð¸ Ð½Ðµ ÑÐ¾Ð·Ð´Ð°Ð½Ñ."
+                                                      },
+                                                      {
+                                                          "key":  "transactions",
+                                                          "title":  "ÐÐ¿ÐµÑÐ°ÑÐ¸Ð¸",
+                                                          "status":  "not_recognized_yet",
+                                                          "text":  "ÐÐ¿ÐµÑÐ°ÑÐ¸Ð¸ Ð½Ðµ ÑÐ°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ñ Ð¸ Ð½Ðµ Ð´Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ñ."
+                                                      },
+                                                      {
+                                                          "key":  "categories",
+                                                          "title":  "ÐÐ°ÑÐµÐ³Ð¾ÑÐ¸Ð¸",
+                                                          "status":  "not_recognized_yet",
+                                                          "text":  "ÐÐ°ÑÐµÐ³Ð¾ÑÐ¸Ð¸ Ð½Ðµ ÑÐ°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ñ Ð¸ Ð½Ðµ ÑÐ¾Ð·Ð´Ð°Ð½Ñ."
+                                                      },
+                                                      {
+                                                          "key":  "transfers",
+                                                          "title":  "ÐÐµÑÐµÐ²Ð¾Ð´Ñ",
+                                                          "status":  "not_recognized_yet",
+                                                          "text":  "ÐÐµÑÐµÐ²Ð¾Ð´Ñ Ð½Ðµ ÑÐ°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ñ Ð¸ Ð½Ðµ ÑÐ¾Ð·Ð´Ð°Ð½Ñ."
+                                                      },
+                                                      {
+                                                          "key":  "brokerage_deposits_metals",
+                                                          "title":  "ÐÑÐ¾ÐºÐµÑÑ, Ð²ÐºÐ»Ð°Ð´Ñ Ð¸ Ð¼ÐµÑÐ°Ð»Ð»Ñ",
+                                                          "status":  "not_recognized_yet",
+                                                          "text":  "ÐÑÐ¾ÐºÐµÑÑÐºÐ¸Ðµ Ð¾ÑÑÐµÑÑ, Ð²ÐºÐ»Ð°Ð´Ñ Ð¸ Ð¼ÐµÑÐ°Ð»Ð»Ñ Ð¿Ð¾ÐºÐ° Ð½Ðµ Ð¾Ð±ÑÐ°Ð±Ð°ÑÑÐ²Ð°ÑÑÑÑ."
+                                                      }
+                                                  ]
+                                 },
+                     "warnings":  [
+                                      {
+                                          "code":  "PLACEHOLDER_ONLY",
+                                          "text":  "ÐÐ¼Ð¿Ð¾ÑÑ Ð¿Ð¾ÐºÐ° Ð½Ðµ Ð²ÑÐ¿Ð¾Ð»Ð½ÑÐµÑÑÑ."
+                                      },
+                                      {
+                                          "code":  "NO_FILE_STORAGE_OR_PARSING",
+                                          "text":  "Ð¡Ð¾Ð´ÐµÑÐ¶Ð¸Ð¼Ð¾Ðµ ÑÐ°Ð¹Ð»Ð° Ð½Ðµ ÑÐ¾Ñ\u0085ÑÐ°Ð½ÑÐµÑÑÑ Ð¸ Ð½Ðµ ÑÐ°Ð·Ð±Ð¸ÑÐ°ÐµÑÑÑ."
+                                      },
+                                      {
+                                          "code":  "NO_DATA_CHANGES_WITHOUT_CONFIRMATION",
+                                          "text":  "ÐÐ°Ð½Ð½ÑÐµ Ð½Ðµ Ð¸Ð·Ð¼ÐµÐ½ÑÑÑÑ Ð±ÐµÐ· Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÐµÐ½Ð¸Ñ."
+                                      }
+                                  ]
+                 },
+    "checks":  {
+                   "sourceTypeIsMetadataOnly":  true,
+                   "noFileBody":  true,
+                   "canConfirmIsFalse":  true,
+                   "willChangeDataIsFalse":  true
+               }
+}

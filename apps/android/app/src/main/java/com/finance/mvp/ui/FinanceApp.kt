@@ -1,6 +1,8 @@
 package com.finance.mvp.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,20 +11,34 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.annotation.DrawableRes
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,21 +48,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiConfig
 import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
+import com.finance.mvp.api.ImportReportPreviewRequest
+import com.finance.mvp.api.ImportReportPreviewResponse
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
+import com.finance.mvp.api.userFacingSeedText
 import com.finance.mvp.ui.theme.FinanceTheme
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.text.NumberFormat
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,76 +90,127 @@ fun FinanceApp(
     apiClient: FinanceApiClient,
     modifier: Modifier = Modifier,
 ) {
-    var selectedSection by rememberSaveable { mutableStateOf(AppSection.Overview) }
-    var uiState by remember { mutableStateOf(FinanceUiState(apiUrl = apiClient.config.normalizedBaseUrl)) }
-    var createdAccountId by rememberSaveable { mutableStateOf<String?>(null) }
-    var archivedAccountId by rememberSaveable { mutableStateOf<String?>(null) }
-    var createdCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
-    var archivedCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
-    var lifecycleTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
-    var deletedTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
-    var lifecycleTransferId by rememberSaveable { mutableStateOf<String?>(null) }
-    var deletedTransferId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
+    var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    var showQuickAdd by rememberSaveable { mutableStateOf(false) }
+    var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
+    var uiState by remember { mutableStateOf(FinanceUiState()) }
     val scope = rememberCoroutineScope()
-    val sections = mvpSections()
+    val sections = financeSections()
 
-    fun loadDashboard(successMessage: String = "Данные загружены из live API") {
+    fun loadDashboard(successMessage: String = "Данные обновлены") {
         scope.launch {
-            uiState = uiState.copy(isLoading = true, message = "Обновляем данные...")
+            uiState = uiState.copy(isLoading = true, message = "Обновляем данные")
             uiState = when (val result = withContext(Dispatchers.IO) { apiClient.dashboard() }) {
                 is ApiResult.Success -> FinanceUiState(
-                    apiUrl = apiClient.config.normalizedBaseUrl,
                     session = result.value.session,
                     dashboard = result.value,
                     message = successMessage,
                 )
                 is ApiResult.Failure -> uiState.copy(
                     isLoading = false,
-                    message = result.message,
+                    message = result.userFacingMessage(),
                 )
             }
         }
     }
 
-    fun refresh() {
-        loadDashboard()
-    }
-
-    fun <T> runLifecycleAction(
-        loadingMessage: String,
-        successMessage: String,
-        action: suspend () -> ApiResult<T>,
-        onSuccess: (T) -> Unit = {},
-    ) {
+    fun login() {
         scope.launch {
-            uiState = uiState.copy(isLoading = true, message = loadingMessage)
-            when (val result = withContext(Dispatchers.IO) { action() }) {
-                is ApiResult.Success -> {
-                    onSuccess(result.value)
-                    when (val dashboard = withContext(Dispatchers.IO) { apiClient.dashboard() }) {
-                        is ApiResult.Success -> uiState = FinanceUiState(
-                            apiUrl = apiClient.config.normalizedBaseUrl,
-                            session = dashboard.value.session,
-                            dashboard = dashboard.value,
-                            message = successMessage,
-                        )
-                        is ApiResult.Failure -> uiState = uiState.copy(
-                            isLoading = false,
-                            message = "$successMessage; обновление списка не удалось: ${dashboard.message}",
-                        )
-                    }
-                }
-                is ApiResult.Failure -> uiState = uiState.copy(isLoading = false, message = result.message)
+            uiState = uiState.copy(isLoading = true, message = "Входим")
+            when (val login = withContext(Dispatchers.IO) { apiClient.login(DemoEmail, DemoPassword) }) {
+                is ApiResult.Success -> loadDashboard()
+                is ApiResult.Failure -> uiState = uiState.copy(
+                    isLoading = false,
+                    message = login.userFacingMessage(),
+                )
             }
         }
     }
 
-    fun loginDemo() {
+    fun logout() {
         scope.launch {
-            uiState = uiState.copy(isLoading = true, message = "Входим в демо-сессию...")
-            when (val login = withContext(Dispatchers.IO) { apiClient.login(DemoEmail, DemoPassword) }) {
-                is ApiResult.Success -> loadDashboard()
-                is ApiResult.Failure -> uiState = uiState.copy(isLoading = false, message = login.message)
+            uiState = uiState.copy(isLoading = true, message = "Выходим")
+            when (val result = withContext(Dispatchers.IO) { apiClient.logout() }) {
+                is ApiResult.Success -> uiState = FinanceUiState(message = "Сессия завершена")
+                is ApiResult.Failure -> uiState = uiState.copy(
+                    isLoading = false,
+                    message = result.userFacingMessage(),
+                )
+            }
+        }
+    }
+
+    fun submitQuickAdd(draft: QuickAddDraft) {
+        val dashboard = uiState.dashboard ?: return
+        val amount = draft.amount.normalizedAmount()
+        if (amount == null) {
+            quickAddError = "Проверьте сумму"
+            uiState = uiState.copy(message = "Проверьте сумму")
+            return
+        }
+
+        scope.launch {
+            quickAddError = null
+            uiState = uiState.copy(isLoading = true, message = "Сохраняем")
+            val result = withContext(Dispatchers.IO) {
+                when (draft.type) {
+                    QuickEntryType.Expense,
+                    QuickEntryType.Income,
+                    -> {
+                        val account = dashboard.accounts.firstByIdOrFirst(draft.accountId)
+                        val category = dashboard.categories.firstByIdOrFirst(draft.categoryId)
+                        if (account == null) {
+                            ApiResult.Failure("Нужен счет")
+                        } else {
+                            apiClient.createDemoTransaction(
+                                account = account,
+                                category = category,
+                                transactionType = draft.type.apiValue,
+                                amount = amount,
+                            )
+                        }
+                    }
+                    QuickEntryType.Transfer -> {
+                        val source = dashboard.accounts.firstByIdOrFirst(draft.accountId)
+                        val destination = dashboard.accounts
+                            .filter { it.id != source?.id }
+                            .firstByIdOrFirst(draft.destinationAccountId)
+                        val validationMessage = transferPairValidationMessage(source, destination)
+                        if (validationMessage != null) {
+                            ApiResult.Failure(validationMessage)
+                        } else {
+                            apiClient.createDemoTransfer(source!!, destination!!, amount)
+                        }
+                    }
+                    QuickEntryType.Asset -> {
+                        val currency = dashboard.accounts.firstOrNull()?.currency ?: "USD"
+                        val ownershipType = if (draft.visibility == FinanceMode.Shared) "shared" else "personal"
+                        apiClient.createDemoAccount(
+                            householdId = if (ownershipType == "shared") uiState.session?.householdId else null,
+                            currency = currency,
+                            initialBalance = amount,
+                            accountType = draft.assetKind.apiValue,
+                            ownershipType = ownershipType,
+                        )
+                    }
+                }
+            }
+
+            when (result) {
+                is ApiResult.Success -> {
+                    quickAddError = null
+                    showQuickAdd = false
+                    loadDashboard("Сохранено")
+                }
+                is ApiResult.Failure -> {
+                    val message = result.userFacingMessage()
+                    quickAddError = message
+                    uiState = uiState.copy(
+                        isLoading = false,
+                        message = message,
+                    )
+                }
             }
         }
     }
@@ -138,9 +219,9 @@ fun FinanceApp(
         when (val result = withContext(Dispatchers.IO) { apiClient.sessionStatus() }) {
             is ApiResult.Success -> uiState = uiState.copy(
                 session = result.value,
-                message = "Сессия найдена, можно обновить данные",
+                message = "Можно обновить данные",
             )
-            is ApiResult.Failure -> uiState = uiState.copy(message = "Нужен вход в демо-сессию")
+            is ApiResult.Failure -> uiState = uiState.copy(message = "Войдите, чтобы увидеть финансы")
         }
     }
 
@@ -150,11 +231,27 @@ fun FinanceApp(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Финансы MVP")
+                        Text("Финансы")
                         Text(
-                            text = "API: ${uiState.apiUrl}",
+                            text = selectedSection.subtitle,
                             style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { loadDashboard() },
+                        enabled = !uiState.isLoading && uiState.session?.isAuthenticated == true,
+                    ) {
+                        Icon(painterResource(R.drawable.ic_refresh_24), contentDescription = "Обновить")
+                    }
+                    TextButton(
+                        onClick = { logout() },
+                        enabled = !uiState.isLoading && uiState.session?.isAuthenticated == true,
+                    ) {
+                        Text("Выйти")
                     }
                 },
             )
@@ -165,13 +262,25 @@ fun FinanceApp(
                     NavigationBarItem(
                         selected = selectedSection == section,
                         onClick = { selectedSection = section },
-                        icon = { Text(section.title.take(1)) },
+                        icon = { Icon(painterResource(section.icon()), contentDescription = null) },
                         label = { Text(section.title) },
                     )
                 }
             }
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                modifier = Modifier.testTag("quick-add-fab"),
+                onClick = {
+                    quickAddError = null
+                    showQuickAdd = true
+                },
+            ) {
+                Icon(painterResource(R.drawable.ic_add_24), contentDescription = "Добавить")
+            }
+        },
     ) { innerPadding ->
+        val dashboard = uiState.dashboard
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -179,236 +288,259 @@ fun FinanceApp(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                SessionShell(
-                    state = uiState,
-                    onLogin = ::loginDemo,
-                    onRefresh = ::refresh,
-                )
-            }
-            item {
-                SectionHeader(selectedSection)
-            }
-            lifecyclePanel(
-                section = selectedSection,
-                state = uiState,
-                createdAccountId = createdAccountId,
-                archivedAccountId = archivedAccountId,
-                createdCategoryId = createdCategoryId,
-                archivedCategoryId = archivedCategoryId,
-                lifecycleTransactionId = lifecycleTransactionId,
-                deletedTransactionId = deletedTransactionId,
-                lifecycleTransferId = lifecycleTransferId,
-                deletedTransferId = deletedTransferId,
-                onCreateAccount = {
-                    val currency = uiState.dashboard?.accounts?.firstOrNull()?.currency ?: "USD"
-                    runLifecycleAction(
-                        loadingMessage = "Создаем счет через live API...",
-                        successMessage = "Счет создан через native Android control",
-                        action = { apiClient.createDemoAccount(uiState.session?.householdId, currency) },
-                        onSuccess = { createdAccountId = it.id; archivedAccountId = null },
+            if (uiState.session?.isAuthenticated != true || dashboard == null) {
+                item {
+                    SignInCard(
+                        state = uiState,
+                        onLogin = ::login,
                     )
-                },
-                onUpdateAccount = {
-                    targetAccountById(uiState.dashboard?.accounts, createdAccountId)
-                        ?.let { account ->
-                            runLifecycleAction(
-                                loadingMessage = "Обновляем счет...",
-                                successMessage = "Счет обновлен через PATCH",
-                                action = { apiClient.updateAccount(account) },
-                                onSuccess = { createdAccountId = it.id },
-                            )
-                        }
-                },
-                onArchiveAccount = {
-                    targetAccountById(uiState.dashboard?.accounts, createdAccountId)
-                        ?.let { account ->
-                            runLifecycleAction(
-                                loadingMessage = "Архивируем счет...",
-                                successMessage = "Счет архивирован",
-                                action = { apiClient.archiveAccount(account.id) },
-                                onSuccess = { archivedAccountId = it.id; createdAccountId = null },
-                            )
-                        }
-                },
-                onRestoreAccount = {
-                    archivedAccountId?.let { accountId ->
-                        runLifecycleAction(
-                            loadingMessage = "Восстанавливаем счет...",
-                            successMessage = "Счет восстановлен",
-                            action = { apiClient.restoreAccount(accountId) },
-                            onSuccess = { createdAccountId = it.id; archivedAccountId = null },
-                        )
-                    }
-                },
-                onCreateCategory = {
-                    runLifecycleAction(
-                        loadingMessage = "Создаем категорию...",
-                        successMessage = "Категория создана через native Android control",
-                        action = { apiClient.createDemoCategory(uiState.session?.householdId) },
-                        onSuccess = { createdCategoryId = it.id; archivedCategoryId = null },
-                    )
-                },
-                onUpdateCategory = {
-                    targetCategoryById(uiState.dashboard?.categories, createdCategoryId)
-                        ?.let { category ->
-                            runLifecycleAction(
-                                loadingMessage = "Обновляем категорию...",
-                                successMessage = "Категория обновлена через PATCH",
-                                action = { apiClient.updateCategory(category) },
-                                onSuccess = { createdCategoryId = it.id },
-                            )
-                        }
-                },
-                onArchiveCategory = {
-                    targetCategoryById(uiState.dashboard?.categories, createdCategoryId)
-                        ?.let { category ->
-                            runLifecycleAction(
-                                loadingMessage = "Архивируем категорию...",
-                                successMessage = "Категория архивирована",
-                                action = { apiClient.archiveCategory(category.id) },
-                                onSuccess = { archivedCategoryId = it.id; createdCategoryId = null },
-                            )
-                        }
-                },
-                onRestoreCategory = {
-                    archivedCategoryId?.let { categoryId ->
-                        runLifecycleAction(
-                            loadingMessage = "Восстанавливаем категорию...",
-                            successMessage = "Категория восстановлена",
-                            action = { apiClient.restoreCategory(categoryId) },
-                            onSuccess = { createdCategoryId = it.id; archivedCategoryId = null },
-                        )
-                    }
-                },
-                onCreateTransaction = {
-                    val account = uiState.dashboard?.accounts?.firstOrNull { it.id.isNotBlank() }
-                    val category = account?.let { compatibleExpenseCategory(it, uiState.dashboard?.categories.orEmpty()) }
-                    if (account != null) {
-                        runLifecycleAction(
-                            loadingMessage = "Создаем операцию...",
-                            successMessage = "Операция создана через live API",
-                            action = { apiClient.createDemoTransaction(account, category) },
-                            onSuccess = { lifecycleTransactionId = it.id; deletedTransactionId = null },
-                        )
-                    }
-                },
-                onUpdateTransaction = {
-                    targetTransaction(uiState.dashboard?.transactions, lifecycleTransactionId, includeTransfers = false)
-                        ?.let { transaction ->
-                            runLifecycleAction(
-                                loadingMessage = "Обновляем операцию...",
-                                successMessage = "Операция обновлена через PATCH",
-                                action = { apiClient.updateTransaction(transaction) },
-                                onSuccess = { lifecycleTransactionId = it.id },
-                            )
-                        }
-                },
-                onDeleteTransaction = {
-                    targetTransaction(uiState.dashboard?.transactions, lifecycleTransactionId, includeTransfers = false)
-                        ?.let { transaction ->
-                            runLifecycleAction(
-                                loadingMessage = "Удаляем операцию...",
-                                successMessage = "Операция удалена soft-delete",
-                                action = { apiClient.deleteTransaction(transaction.id) },
-                                onSuccess = { deletedTransactionId = transaction.id; lifecycleTransactionId = null },
-                            )
-                        }
-                },
-                onRestoreTransaction = {
-                    deletedTransactionId?.let { transactionId ->
-                        runLifecycleAction(
-                            loadingMessage = "Восстанавливаем операцию...",
-                            successMessage = "Операция восстановлена",
-                            action = { apiClient.restoreTransaction(transactionId) },
-                            onSuccess = { lifecycleTransactionId = it.id; deletedTransactionId = null },
-                        )
-                    }
-                },
-                onCreateTransfer = {
-                    compatibleTransferPair(uiState.dashboard?.accounts.orEmpty())?.let { (source, destination) ->
-                        runLifecycleAction(
-                            loadingMessage = "Создаем перевод...",
-                            successMessage = "Перевод создан через transactionType=transfer",
-                            action = { apiClient.createDemoTransfer(source, destination) },
-                            onSuccess = { lifecycleTransferId = it.id; deletedTransferId = null },
-                        )
-                    }
-                },
-                onUpdateTransfer = {
-                    targetTransaction(uiState.dashboard?.transactions, lifecycleTransferId, includeTransfers = true)
-                        ?.let { transfer ->
-                            runLifecycleAction(
-                                loadingMessage = "Обновляем перевод...",
-                                successMessage = "Перевод обновлен",
-                                action = { apiClient.updateTransaction(transfer) },
-                                onSuccess = { lifecycleTransferId = it.id },
-                            )
-                        }
-                },
-                onDeleteTransfer = {
-                    targetTransaction(uiState.dashboard?.transactions, lifecycleTransferId, includeTransfers = true)
-                        ?.let { transfer ->
-                            runLifecycleAction(
-                                loadingMessage = "Удаляем перевод...",
-                                successMessage = "Перевод удален soft-delete",
-                                action = { apiClient.deleteTransaction(transfer.id) },
-                                onSuccess = { deletedTransferId = transfer.id; lifecycleTransferId = null },
-                            )
-                        }
-                },
-                onRestoreTransfer = {
-                    deletedTransferId?.let { transactionId ->
-                        runLifecycleAction(
-                            loadingMessage = "Восстанавливаем перевод...",
-                            successMessage = "Перевод восстановлен",
-                            action = { apiClient.restoreTransaction(transactionId) },
-                            onSuccess = { lifecycleTransferId = it.id; deletedTransferId = null },
-                        )
-                    }
-                },
-            )
-            items(sectionCards(selectedSection, uiState.dashboard)) { card ->
-                MvpCard(card)
+                }
             }
+
+            when (selectedSection) {
+                AppSection.Home -> homeContent(dashboard, selectedMode) { selectedMode = it }
+                AppSection.Operations -> operationsContent(dashboard)
+                AppSection.Assets -> assetsContent(dashboard)
+                AppSection.Analytics -> analyticsContent(dashboard, selectedMode) { selectedMode = it }
+            }
+
+            item { Spacer(modifier = Modifier.height(72.dp)) }
         }
+    }
+
+    if (showQuickAdd) {
+        QuickAddSheet(
+            dashboard = uiState.dashboard,
+            errorMessage = quickAddError,
+            onDismiss = {
+                quickAddError = null
+                showQuickAdd = false
+            },
+            onSubmit = ::submitQuickAdd,
+        )
     }
 }
 
 @Composable
-private fun SessionShell(
+private fun SignInCard(
     state: FinanceUiState,
     onLogin: () -> Unit,
-    onRefresh: () -> Unit,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("signin-card"),
+        colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer,
         ),
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_wallet_24),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = state.session?.displayName ?: "Личный кабинет",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Button(
+                onClick = onLogin,
+                enabled = !state.isLoading,
+            ) {
+                Text("Войти")
+            }
+        }
+    }
+}
+
+private fun LazyListScope.homeContent(
+    dashboard: FinanceDashboard?,
+    selectedMode: FinanceMode,
+    onModeSelected: (FinanceMode) -> Unit,
+) {
+    val view = dashboard.viewFor(selectedMode)
+    item {
+        ModeChips(
+            selectedMode = selectedMode,
+            onModeSelected = onModeSelected,
+        )
+    }
+    item { CapitalCard(view) }
+    item { AssetChips(view.assetSummaries) }
+    item { MonthExpenseCard(view) }
+    item { TopCategoriesCard(view.topCategories) }
+    item { RecentOperationsCard(view.recentTransactions) }
+}
+
+private fun LazyListScope.operationsContent(dashboard: FinanceDashboard?) {
+    val items = dashboard?.transactions.orEmpty()
+    if (items.isEmpty()) {
+        item { EmptyState("Операций пока нет") }
+        return
+    }
+    item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+    items(items.sortedByDescending { it.occurredAt }) { transaction ->
+        TransactionRow(transaction, dashboard?.categories.orEmpty())
+    }
+}
+
+private fun LazyListScope.assetsContent(dashboard: FinanceDashboard?) {
+    val summaries = assetSummaries(dashboard?.accounts.orEmpty())
+    item { Text("Активы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+    items(summaries) { summary ->
+        AssetKindRow(summary)
+    }
+    if (dashboard?.accounts.isNullOrEmpty()) {
+        item { EmptyState("Активов пока нет") }
+    }
+}
+
+private fun LazyListScope.analyticsContent(
+    dashboard: FinanceDashboard?,
+    selectedMode: FinanceMode,
+    onModeSelected: (FinanceMode) -> Unit,
+) {
+    val view = dashboard.viewFor(selectedMode)
+    item {
+        ModeChips(
+            selectedMode = selectedMode,
+            onModeSelected = onModeSelected,
+        )
+    }
+    item { AnalyticsSummaryCard(view) }
+    item { ImportReportPlaceholderCard() }
+    item { CategoryBreakdownCard(view.topCategories) }
+    item { CapitalBreakdownCard(view.assetSummaries) }
+}
+
+@Composable
+private fun ModeChips(
+    selectedMode: FinanceMode,
+    onModeSelected: (FinanceMode) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(FinanceMode.entries.toList()) { mode ->
+            FilterChip(
+                selected = selectedMode == mode,
+                onClick = { onModeSelected(mode) },
+                label = { Text(mode.title) },
+                leadingIcon = {
+                    Icon(
+                        painter = painterResource(mode.icon()),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CapitalCard(view: DashboardView) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("capital-card"),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "Сессия",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                text = "Капитал",
+                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.labelLarge,
             )
-            Text(state.session?.displayName ?: "Вход не выполнен")
-            Text(state.message)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = onLogin,
-                    enabled = !state.isLoading,
-                ) {
-                    Text("Войти демо")
-                }
-                OutlinedButton(
-                    onClick = onRefresh,
-                    enabled = !state.isLoading && state.session?.isAuthenticated == true,
-                ) {
-                    Text("Обновить")
+            Text(
+                text = view.capital.formatMoney(view.primaryCurrency),
+                color = MaterialTheme.colorScheme.onPrimary,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "${view.accountCount} активов • ${view.operationCount} операций",
+                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AssetChips(summaries: List<AssetSummary>) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(summaries.filter { it.count > 0 }.ifEmpty { summaries.take(3) }) { summary ->
+            AssistChip(
+                onClick = {},
+                leadingIcon = {
+                    Icon(
+                        painter = painterResource(summary.kind.icon),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                label = { Text("${summary.kind.title} ${summary.balance.formatMoney(summary.currency)}") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MonthExpenseCard(view: DashboardView) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBubble(R.drawable.ic_receipt_24, Color(0xFFE35D4F))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Расходы месяца", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    text = view.monthExpenses.formatMoney(view.primaryCurrency),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("Доходы", style = MaterialTheme.typography.labelSmall)
+                Text(view.monthIncome.formatMoney(view.primaryCurrency), fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopCategoriesCard(categories: List<CategorySpend>) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Топ категории", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (categories.isEmpty()) {
+                Text("Расходов пока нет", style = MaterialTheme.typography.bodySmall)
+            } else {
+                categories.take(3).forEach { category ->
+                    CategorySpendRow(category)
                 }
             }
         }
@@ -416,156 +548,218 @@ private fun SessionShell(
 }
 
 @Composable
-private fun SectionHeader(section: AppSection) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = section.title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = section.subtitle,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-private fun LazyListScope.lifecyclePanel(
-    section: AppSection,
-    state: FinanceUiState,
-    createdAccountId: String?,
-    archivedAccountId: String?,
-    createdCategoryId: String?,
-    archivedCategoryId: String?,
-    lifecycleTransactionId: String?,
-    deletedTransactionId: String?,
-    lifecycleTransferId: String?,
-    deletedTransferId: String?,
-    onCreateAccount: () -> Unit,
-    onUpdateAccount: () -> Unit,
-    onArchiveAccount: () -> Unit,
-    onRestoreAccount: () -> Unit,
-    onCreateCategory: () -> Unit,
-    onUpdateCategory: () -> Unit,
-    onArchiveCategory: () -> Unit,
-    onRestoreCategory: () -> Unit,
-    onCreateTransaction: () -> Unit,
-    onUpdateTransaction: () -> Unit,
-    onDeleteTransaction: () -> Unit,
-    onRestoreTransaction: () -> Unit,
-    onCreateTransfer: () -> Unit,
-    onUpdateTransfer: () -> Unit,
-    onDeleteTransfer: () -> Unit,
-    onRestoreTransfer: () -> Unit,
-) {
-    val dashboard = state.dashboard
-    val authenticated = state.session?.isAuthenticated == true && dashboard != null
-    when (section) {
-        AppSection.Accounts -> item {
-            val hasCreated = targetAccountById(dashboard?.accounts, createdAccountId) != null
-            LifecycleCard(
-                title = "Lifecycle счета",
-                details = "Create/PATCH/archive/restore через /api/v1/accounts. Цель: ${createdAccountId?.take(8) ?: archivedAccountId?.take(8) ?: "нет"}",
-                testTag = "accounts-lifecycle-panel",
-                buttons = listOf(
-                    LifecycleButton("Создать", "create-account", authenticated, onCreateAccount),
-                    LifecycleButton("Обновить", "update-account", authenticated && hasCreated, onUpdateAccount),
-                    LifecycleButton("Архивировать", "archive-account", authenticated && hasCreated, onArchiveAccount),
-                    LifecycleButton("Восстановить", "restore-account", authenticated && archivedAccountId != null, onRestoreAccount),
-                ),
-            )
-        }
-        AppSection.Categories -> item {
-            val hasCreated = targetCategoryById(dashboard?.categories, createdCategoryId) != null
-            LifecycleCard(
-                title = "Lifecycle категории",
-                details = "Create/PATCH/archive/restore через /api/v1/categories. Цель: ${createdCategoryId?.take(8) ?: archivedCategoryId?.take(8) ?: "нет"}",
-                testTag = "categories-lifecycle-panel",
-                buttons = listOf(
-                    LifecycleButton("Создать", "create-category", authenticated, onCreateCategory),
-                    LifecycleButton("Обновить", "update-category", authenticated && hasCreated, onUpdateCategory),
-                    LifecycleButton("Архивировать", "archive-category", authenticated && hasCreated, onArchiveCategory),
-                    LifecycleButton("Восстановить", "restore-category", authenticated && archivedCategoryId != null, onRestoreCategory),
-                ),
-            )
-        }
-        AppSection.Operations -> item {
-            val hasTarget = targetTransaction(dashboard?.transactions, lifecycleTransactionId, includeTransfers = false) != null
-            val canCreate = dashboard?.accounts?.any { it.id.isNotBlank() } == true
-            LifecycleCard(
-                title = "CRUD операции",
-                details = "Create/PATCH/delete/restore через /api/v1/transactions. Цель: ${lifecycleTransactionId?.take(8) ?: deletedTransactionId?.take(8) ?: "нет"}",
-                testTag = "transactions-lifecycle-panel",
-                buttons = listOf(
-                    LifecycleButton("Создать", "create-transaction", authenticated && canCreate, onCreateTransaction),
-                    LifecycleButton("Обновить", "update-transaction", authenticated && hasTarget, onUpdateTransaction),
-                    LifecycleButton("Удалить", "delete-transaction", authenticated && hasTarget, onDeleteTransaction),
-                    LifecycleButton("Восстановить", "restore-transaction", authenticated && deletedTransactionId != null, onRestoreTransaction),
-                ),
-            )
-        }
-        AppSection.Transfers -> item {
-            val hasTarget = targetTransaction(dashboard?.transactions, lifecycleTransferId, includeTransfers = true) != null
-            val pair = compatibleTransferPair(dashboard?.accounts.orEmpty())
-            LifecycleCard(
-                title = "Lifecycle перевода",
-                details = "Transfer count: ${dashboard?.transferCount ?: 0}; report count: ${dashboard?.reportTransferCount ?: 0}; цель: ${lifecycleTransferId?.take(8) ?: deletedTransferId?.take(8) ?: "нет"}",
-                testTag = "transfer-lifecycle-panel",
-                buttons = listOf(
-                    LifecycleButton("Создать", "create-transfer", authenticated && pair != null, onCreateTransfer),
-                    LifecycleButton("Обновить", "update-transfer", authenticated && hasTarget, onUpdateTransfer),
-                    LifecycleButton("Удалить", "delete-transfer", authenticated && hasTarget, onDeleteTransfer),
-                    LifecycleButton("Восстановить", "restore-transfer", authenticated && deletedTransferId != null, onRestoreTransfer),
-                ),
-            )
-        }
-        else -> Unit
-    }
-}
-
-private data class LifecycleButton(
-    val label: String,
-    val tag: String,
-    val enabled: Boolean,
-    val onClick: () -> Unit,
-)
-
-@Composable
-private fun LifecycleCard(
-    title: String,
-    details: String,
-    testTag: String,
-    buttons: List<LifecycleButton>,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(testTag),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-    ) {
+private fun RecentOperationsCard(transactions: List<TransactionSummary>) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            Text("Последние операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (transactions.isEmpty()) {
+                Text("Движений пока нет", style = MaterialTheme.typography.bodySmall)
+            } else {
+                transactions.take(4).forEach { transaction ->
+                    CompactTransactionRow(transaction)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransactionRow(
+    transaction: TransactionSummary,
+    categories: List<CategorySummary>,
+) {
+    val category = categories.firstOrNull { it.id == transaction.categoryId }
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBubble(transaction.icon(), transaction.tint())
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = category?.displayName() ?: transaction.localizedType(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${transaction.occurredAt.take(10)} • ${transaction.displayDescription()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
+                text = transaction.signedAmount(),
+                color = transaction.tint(),
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(details)
-            buttons.chunked(2).forEach { rowButtons ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    rowButtons.forEach { button ->
-                        OutlinedButton(
-                            modifier = Modifier.testTag(button.tag),
-                            onClick = button.onClick,
-                            enabled = button.enabled,
-                        ) {
-                            Text(button.label)
+        }
+    }
+}
+
+@Composable
+private fun CompactTransactionRow(transaction: TransactionSummary) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        IconBubble(transaction.icon(), transaction.tint(), size = 34)
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = transaction.displayDescription(),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(transaction.occurredAt.take(10), style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            text = transaction.signedAmount(),
+            color = transaction.tint(),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun AssetKindRow(summary: AssetSummary) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBubble(summary.kind.icon, summary.kind.tint)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(summary.kind.title, fontWeight = FontWeight.SemiBold)
+                Text("${summary.count} шт.", style = MaterialTheme.typography.bodySmall)
+            }
+            Text(summary.balance.formatMoney(summary.currency), fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsSummaryCard(view: DashboardView) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Аналитика", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            MetricLine("Доходы", view.monthIncome.formatMoney(view.primaryCurrency), Color(0xFF2E7D62))
+            MetricLine("Расходы", view.monthExpenses.formatMoney(view.primaryCurrency), Color(0xFFE35D4F))
+            MetricLine("Переводы", view.transferTotal.formatMoney(view.primaryCurrency), Color(0xFF5B6EE1))
+        }
+    }
+}
+
+@Composable
+private fun ImportReportPlaceholderCard() {
+    var reportType by rememberSaveable { mutableStateOf(ImportReportType.Generic) }
+    var fileName by rememberSaveable { mutableStateOf("report.pdf") }
+    var targetScope by rememberSaveable { mutableStateOf(ImportTargetScope.Personal) }
+    var showPreview by rememberSaveable { mutableStateOf(true) }
+    val draft = ImportReportDraft(
+        reportType = reportType,
+        fileName = fileName.ifBlank { "report.pdf" },
+        targetScope = targetScope,
+    )
+    val preview = importReportPlaceholderPreview(draft)
+
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("import-report-placeholder"),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(R.drawable.ic_receipt_24, Color(0xFF227C9D), size = 36)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Импорт отчета", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Показана только предварительная сводка", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            Text("Тип отчета", style = MaterialTheme.typography.labelLarge)
+            ChipRow(
+                values = ImportReportType.entries.toList(),
+                selected = reportType,
+                onSelected = { reportType = it },
+                title = { it.title },
+                icon = { it.icon() },
+            )
+
+            OutlinedTextField(
+                value = fileName,
+                onValueChange = { fileName = it.take(255) },
+                label = { Text("Имя файла-заглушка") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Text("Режим видимости", style = MaterialTheme.typography.labelLarge)
+            ChipRow(
+                values = ImportTargetScope.entries.toList(),
+                selected = targetScope,
+                onSelected = { targetScope = it },
+                title = { it.title },
+                icon = { it.icon() },
+            )
+
+            Button(
+                onClick = { showPreview = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Показать сводку")
+            }
+
+            if (showPreview) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(preview.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(preview.statusText) },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_receipt_24),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                    Text(preview.fileStatusText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    Text(preview.summaryText, style = MaterialTheme.typography.bodySmall)
+                    Text(preview.scopeText, style = MaterialTheme.typography.bodySmall)
+                    Text("Что сможет распознать импорт", style = MaterialTheme.typography.labelLarge)
+                    preview.sections.forEach { section ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(section.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(section.text, style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    Text("Перед импортом", style = MaterialTheme.typography.labelLarge)
+                    preview.warnings.forEach { warning ->
+                        MetricLine(warning, " ", Color(0xFF8A6A12))
+                    }
+                    OutlinedButton(
+                        onClick = {},
+                        enabled = preview.canConfirm,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Подтверждение пока недоступно")
                     }
                 }
             }
@@ -574,38 +768,301 @@ private fun LifecycleCard(
 }
 
 @Composable
-private fun MvpCard(card: SectionCard) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
-    ) {
+private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = card.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+            Text("Категории", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (categories.isEmpty()) {
+                Text("Нет расходов для разбивки", style = MaterialTheme.typography.bodySmall)
+            } else {
+                categories.take(5).forEach { category ->
+                    CategorySpendRow(category)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CapitalBreakdownCard(summaries: List<AssetSummary>) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Структура капитала", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            summaries.filter { it.count > 0 }.forEach { summary ->
+                MetricLine(summary.kind.title, summary.balance.formatMoney(summary.currency), summary.kind.tint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategorySpendRow(category: CategorySpend) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBubble(category.icon, category.color, size = 34)
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = category.name,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(category.amount.formatMoney(category.currency), fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun MetricLine(label: String, value: String, color: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(label, modifier = Modifier.weight(1f))
+        Text(value, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun IconBubble(
+    @DrawableRes icon: Int,
+    color: Color,
+    size: Int = 40,
+) {
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(color.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size((size * 0.55f).dp),
+        )
+    }
+}
+
+@Composable
+private fun EmptyState(text: String) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(18.dp),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickAddSheet(
+    dashboard: FinanceDashboard?,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (QuickAddDraft) -> Unit,
+) {
+    var amount by rememberSaveable { mutableStateOf("") }
+    var type by rememberSaveable { mutableStateOf(QuickEntryType.Expense) }
+    var accountId by rememberSaveable { mutableStateOf("") }
+    var destinationAccountId by rememberSaveable { mutableStateOf("") }
+    var categoryId by rememberSaveable { mutableStateOf("") }
+    var assetKind by rememberSaveable { mutableStateOf(AssetKind.Bank) }
+    var visibility by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    val accounts = dashboard?.accounts.orEmpty()
+    val categories = dashboard?.categories.orEmpty().filter { it.type == type.apiValue }
+    val firstAccountId = accounts.firstOrNull()?.id.orEmpty()
+    val firstCategoryId = categories.firstOrNull()?.id.orEmpty()
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+                .testTag("quick-add-sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Добавить", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = amount,
+                onValueChange = { amount = it.filter { char -> char.isDigit() || char == '.' || char == ',' } },
+                label = { Text("Сумма") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
-            Text(card.body)
-            Spacer(modifier = Modifier.height(2.dp))
-            AssistChip(
-                onClick = {},
-                label = { Text(card.status) },
+            ChipRow(QuickEntryType.entries.toList(), type, { type = it }, { it.title }, { it.icon() })
+            if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("quick-add-error"),
+                )
+            }
+            if (type == QuickEntryType.Asset) {
+                ChipRow(AssetKind.entries.toList(), assetKind, { assetKind = it }, { it.title }, { it.icon })
+            } else {
+                AccountPicker(
+                    title = if (type == QuickEntryType.Transfer) "Со счета" else "Счет",
+                    accounts = accounts,
+                    selectedId = accountId.ifBlank { firstAccountId },
+                    onSelected = { accountId = it },
+                )
+                if (type == QuickEntryType.Transfer) {
+                    AccountPicker(
+                        title = "На счет",
+                        accounts = accounts.filter { it.id != accountId.ifBlank { firstAccountId } },
+                        selectedId = destinationAccountId,
+                        onSelected = { destinationAccountId = it },
+                    )
+                }
+                if (type != QuickEntryType.Transfer && categories.isNotEmpty()) {
+                    CategoryPicker(
+                        categories = categories,
+                        selectedId = categoryId.ifBlank { firstCategoryId },
+                        onSelected = { categoryId = it },
+                    )
+                }
+            }
+            ChipRow(FinanceMode.entries.toList(), visibility, { visibility = it }, { it.title }, { it.icon() })
+            Text("Сегодня", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Отмена")
+                }
+                Button(
+                    onClick = {
+                        onSubmit(
+                            QuickAddDraft(
+                                amount = amount,
+                                type = type,
+                                accountId = accountId.ifBlank { firstAccountId },
+                                destinationAccountId = destinationAccountId,
+                                categoryId = categoryId.ifBlank { firstCategoryId },
+                                assetKind = assetKind,
+                                visibility = visibility,
+                            ),
+                        )
+                    },
+                    enabled = amount.normalizedAmount() != null && (type == QuickEntryType.Asset || accounts.isNotEmpty()),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Сохранить")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun <T> ChipRow(
+    values: List<T>,
+    selected: T,
+    onSelected: (T) -> Unit,
+    title: (T) -> String,
+    icon: (T) -> Int,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(values) { value ->
+            FilterChip(
+                selected = selected == value,
+                onClick = { onSelected(value) },
+                label = { Text(title(value)) },
+                leadingIcon = {
+                    Icon(
+                            painter = painterResource(icon(value)),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
             )
+        }
+    }
+}
+
+@Composable
+private fun AccountPicker(
+    title: String,
+    accounts: List<AccountSummary>,
+    selectedId: String,
+    onSelected: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(accounts) { account ->
+                FilterChip(
+                    selected = selectedId == account.id,
+                    onClick = { onSelected(account.id) },
+                    label = { Text(account.displayName()) },
+                    leadingIcon = {
+                        Icon(
+                            painter = painterResource(account.assetKind().icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryPicker(
+    categories: List<CategorySummary>,
+    selectedId: String,
+    onSelected: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Категория", style = MaterialTheme.typography.labelLarge)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(categories) { category ->
+                FilterChip(
+                    selected = selectedId == category.id,
+                    onClick = { onSelected(category.id) },
+                    label = { Text(category.displayName()) },
+                    leadingIcon = {
+                        Icon(
+                            painter = painterResource(category.icon()),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                )
+            }
         }
     }
 }
 
 data class FinanceUiState(
-    val apiUrl: String,
     val session: SessionStatus? = null,
     val dashboard: FinanceDashboard? = null,
     val isLoading: Boolean = false,
-    val message: String = "Готово к подключению",
+    val message: String = "Готово",
 )
 
 data class SectionCard(
@@ -614,201 +1071,371 @@ data class SectionCard(
     val status: String,
 )
 
+data class DashboardView(
+    val primaryCurrency: String,
+    val capital: BigDecimal,
+    val monthIncome: BigDecimal,
+    val monthExpenses: BigDecimal,
+    val transferTotal: BigDecimal,
+    val accountCount: Int,
+    val operationCount: Int,
+    val assetSummaries: List<AssetSummary>,
+    val topCategories: List<CategorySpend>,
+    val recentTransactions: List<TransactionSummary>,
+)
+
+data class AssetSummary(
+    val kind: AssetKind,
+    val balance: BigDecimal,
+    val currency: String,
+    val count: Int,
+)
+
+data class CategorySpend(
+    val name: String,
+    val amount: BigDecimal,
+    val currency: String,
+    val color: Color,
+    @DrawableRes val icon: Int,
+)
+
+data class QuickAddDraft(
+    val amount: String,
+    val type: QuickEntryType,
+    val accountId: String,
+    val destinationAccountId: String,
+    val categoryId: String,
+    val assetKind: AssetKind,
+    val visibility: FinanceMode,
+)
+
+enum class FinanceMode(val title: String) {
+    Personal("Личное"),
+    Shared("Общее"),
+    Overview("Обзор"),
+}
+
+enum class QuickEntryType(
+    val title: String,
+    val apiValue: String,
+) {
+    Expense("Расход", "expense"),
+    Income("Доход", "income"),
+    Transfer("Перевод", "transfer"),
+    Asset("Актив", "asset"),
+}
+
+enum class AssetKind(
+    val title: String,
+    val apiValue: String,
+    @DrawableRes val icon: Int,
+    val tint: Color,
+) {
+    Card("Карта", "card", R.drawable.ic_card_24, Color(0xFF4267D5)),
+    Bank("Банк", "bank", R.drawable.ic_bank_24, Color(0xFF256B5F)),
+    Cash("Наличные", "cash", R.drawable.ic_cash_24, Color(0xFF9A6A24)),
+    Deposit("Вклад", "deposit", R.drawable.ic_savings_24, Color(0xFF6D5BD0)),
+    Brokerage("Брокер", "brokerage", R.drawable.ic_chart_24, Color(0xFF227C9D)),
+    Metal("Металл", "metal", R.drawable.ic_coin_24, Color(0xFF8A6A12)),
+}
+
 fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<SectionCard> {
+    val view = dashboard.viewFor(FinanceMode.Overview)
     return when (section) {
-        AppSection.Overview -> overviewCards(dashboard)
-        AppSection.Accounts -> dashboard?.accounts?.map(::accountCard) ?: emptyCards("Счета")
-        AppSection.Categories -> dashboard?.categories?.map(::categoryCard) ?: emptyCards("Категории")
-        AppSection.Operations -> dashboard?.transactions?.map(::transactionCard) ?: emptyCards("Операции")
-        AppSection.Transfers -> dashboard?.let(::transferCards) ?: emptyCards("Переводы")
-        AppSection.Reports -> dashboard?.let { it.totals.map(::totalCard) + transferReportCard(it) } ?: emptyCards("Отчеты")
-    }
-}
-
-private fun overviewCards(dashboard: FinanceDashboard?): List<SectionCard> {
-    if (dashboard == null) return emptyCards("Обзор")
-    val total = dashboard.totals.firstOrNull()
-    return listOf(
-        SectionCard(
-            title = "Итоги",
-            body = total?.let {
-                "Доходы ${it.incomeTotal} ${it.currency}, расходы ${it.expenseTotal} ${it.currency}, итог ${it.netTotal} ${it.currency}"
-            } ?: "Сводка пока без сумм",
-            status = "live API",
-        ),
-        SectionCard(
-            title = "Данные",
-            body = "Счетов: ${dashboard.accounts.size}; категорий: ${dashboard.categories.size}; операций: ${dashboard.transactions.size}; переводов: ${dashboard.transferCount}",
-            status = "обновлено",
-        ),
-    )
-}
-
-private fun accountCard(account: AccountSummary): SectionCard {
-    return SectionCard(
-        title = account.name,
-        body = "${account.currentBalance} ${account.currency}; ${account.type.localizedAccountType()}, ${account.ownershipType.localizedOwnership()}",
-        status = "live API",
-    )
-}
-
-private fun categoryCard(category: CategorySummary): SectionCard {
-    return SectionCard(
-        title = category.name,
-        body = "${category.type.localizedCategoryType()}, ${category.scope.localizedScope()}",
-        status = "live API",
-    )
-}
-
-private fun transactionCard(transaction: TransactionSummary): SectionCard {
-    val transferDetails = if (transaction.type == "transfer") {
-        "; статус: ${transaction.transferStatus ?: "не указан"}; контур: ${transaction.transferScope ?: "не указан"}"
-    } else {
-        ""
-    }
-    return SectionCard(
-        title = transaction.type.localizedTransactionType(),
-        body = "${transaction.amount} ${transaction.currency}; ${transaction.occurredAt.take(10)}${transaction.description?.let { "; $it" } ?: ""}$transferDetails",
-        status = "manual",
-    )
-}
-
-private fun transferCards(dashboard: FinanceDashboard): List<SectionCard> {
-    val transfers = dashboard.transactions.filter { it.type == "transfer" }
-    if (transfers.isEmpty()) {
-        return listOf(
-            SectionCard(
-                title = "Переводы",
-                body = "В активном live API списке переводов нет.",
-                status = "ожидает lifecycle",
-            ),
+        AppSection.Home -> listOf(
+            SectionCard("Капитал", view.capital.formatMoney(view.primaryCurrency), "${view.accountCount} активов"),
+            SectionCard("Расходы месяца", view.monthExpenses.formatMoney(view.primaryCurrency), "переводы отдельно"),
         )
+        AppSection.Operations -> dashboard?.transactions.orEmpty().map {
+            SectionCard(it.displayDescription(), it.signedAmount(), it.occurredAt.take(10))
+        }
+        AppSection.Assets -> view.assetSummaries.map {
+            SectionCard(it.kind.title, it.balance.formatMoney(it.currency), "${it.count} шт.")
+        }
+        AppSection.Analytics -> view.topCategories.map {
+            SectionCard(it.name, it.amount.formatMoney(it.currency), "категория")
+        }.ifEmpty {
+            listOf(SectionCard("Категории", "Нет расходов", "пусто"))
+        }
     }
-    return transfers.map { transfer ->
-        SectionCard(
-            title = "Перевод ${transfer.amount} ${transfer.currency}",
-            body = "id ${transfer.id.take(8)}; ${transfer.occurredAt.take(10)}; статус ${transfer.transferStatus ?: "не указан"}; контур ${transfer.transferScope ?: "не указан"}",
-            status = "transfer row",
+}
+
+fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
+    val dashboard = this
+    val accounts = dashboard?.accounts.orEmpty().filterByMode(mode)
+    val accountIds = accounts.map { it.id }.toSet()
+    val transactions = dashboard?.transactions.orEmpty()
+        .filter { tx -> tx.matchesMode(mode, accountIds) }
+    val currency = accounts.firstOrNull()?.currency
+        ?: transactions.firstOrNull()?.currency
+        ?: dashboard?.totals?.firstOrNull()?.currency
+        ?: "USD"
+    val expenses = transactions
+        .filter { it.type == "expense" }
+        .sumMoney()
+    val income = transactions
+        .filter { it.type == "income" }
+        .sumMoney()
+    val transferTotal = transactions
+        .filter { it.type == "transfer" }
+        .sumMoney()
+
+    return DashboardView(
+        primaryCurrency = currency,
+        capital = accounts.fold(BigDecimal.ZERO) { total, account -> total + account.currentBalance.toMoney() },
+        monthIncome = income,
+        monthExpenses = expenses,
+        transferTotal = transferTotal,
+        accountCount = accounts.size,
+        operationCount = transactions.size,
+        assetSummaries = assetSummaries(accounts),
+        topCategories = topCategories(transactions, dashboard?.categories.orEmpty(), currency),
+        recentTransactions = transactions.sortedByDescending { it.occurredAt }.take(6),
+    )
+}
+
+private fun assetSummaries(accounts: List<AccountSummary>): List<AssetSummary> {
+    val currency = accounts.firstOrNull()?.currency ?: "USD"
+    return AssetKind.entries.toList().map { kind ->
+        val matching = accounts.filter { it.assetKind() == kind }
+        AssetSummary(
+            kind = kind,
+            balance = matching.fold(BigDecimal.ZERO) { total, account -> total + account.currentBalance.toMoney() },
+            currency = matching.firstOrNull()?.currency ?: currency,
+            count = matching.size,
         )
     }
 }
 
-private fun totalCard(total: MoneyTotal): SectionCard {
-    return SectionCard(
-        title = "Сводка ${total.currency}",
-        body = "Доходы ${total.incomeTotal}; расходы ${total.expenseTotal}; итог ${total.netTotal}",
-        status = "live API",
-    )
+private fun topCategories(
+    transactions: List<TransactionSummary>,
+    categories: List<CategorySummary>,
+    fallbackCurrency: String,
+): List<CategorySpend> {
+    val byId = categories.associateBy { it.id }
+    return transactions
+        .filter { it.type == "expense" }
+        .groupBy { it.categoryId.orEmpty() }
+        .map { (categoryId, items) ->
+            val category = byId[categoryId]
+            CategorySpend(
+                name = category?.displayName() ?: "Без категории",
+                amount = items.sumMoney(),
+                currency = items.firstOrNull()?.currency ?: fallbackCurrency,
+                color = category.colorOrFallback(),
+                icon = category?.icon() ?: R.drawable.ic_category_24,
+            )
+        }
+        .sortedByDescending { it.amount }
 }
 
-private fun transferReportCard(dashboard: FinanceDashboard): SectionCard {
-    return SectionCard(
-        title = "Переводы в отчете",
-        body = "Report transactions transfer count: ${dashboard.reportTransferCount}; live transactions transfer count: ${dashboard.transferCount}",
-        status = "live API",
-    )
+private fun List<AccountSummary>.filterByMode(mode: FinanceMode): List<AccountSummary> {
+    return when (mode) {
+        FinanceMode.Personal -> filter { it.ownershipType != "shared" }
+        FinanceMode.Shared -> filter { it.ownershipType == "shared" }
+        FinanceMode.Overview -> this
+    }
 }
 
-private fun emptyCards(title: String): List<SectionCard> {
-    return listOf(
-        SectionCard(
-            title = title,
-            body = "Нажмите «Войти демо», затем «Обновить».",
-            status = "ожидает API",
-        ),
-    )
+private fun TransactionSummary.matchesMode(mode: FinanceMode, accountIds: Set<String>): Boolean {
+    if (mode == FinanceMode.Overview) {
+        return true
+    }
+    if (type == "transfer") {
+        return accountId in accountIds && counterpartyAccountId in accountIds
+    }
+    return accountId in accountIds
 }
 
-private fun String.localizedAccountType(): String = when (this) {
-    "cash" -> "наличные"
-    "deposit" -> "вклад"
-    else -> "платежный"
+internal fun transferPairValidationMessage(
+    source: AccountSummary?,
+    destination: AccountSummary?,
+): String? {
+    if (source == null || destination == null) {
+        return "Нужны два счета для перевода"
+    }
+    if (source.id == destination.id) {
+        return "Выберите два разных счета"
+    }
+    if (source.currency != destination.currency) {
+        return "Перевод между разными валютами недоступен"
+    }
+    if (source.ownershipType != destination.ownershipType) {
+        return "Перевод между личным и общим недоступен. Выберите счета одного режима."
+    }
+    if (
+        source.ownershipType == "shared" &&
+        source.householdId.orEmpty() != destination.householdId.orEmpty()
+    ) {
+        return "Перевод между разными общими бюджетами недоступен"
+    }
+    return null
 }
 
-private fun String.localizedOwnership(): String = when (this) {
-    "shared" -> "общий"
-    else -> "личный"
+private fun List<TransactionSummary>.sumMoney(): BigDecimal {
+    return fold(BigDecimal.ZERO) { total, transaction -> total + transaction.amount.toMoney() }
 }
 
-private fun String.localizedCategoryType(): String = when (this) {
-    "income" -> "доход"
-    else -> "расход"
+private fun String?.toMoney(): BigDecimal {
+    return runCatching { BigDecimal(this ?: "0") }.getOrDefault(BigDecimal.ZERO)
 }
 
-private fun String.localizedScope(): String = when (this) {
-    "household" -> "семейная"
-    else -> "личная"
+private fun String.normalizedAmount(): String? {
+    val normalized = trim().replace(',', '.')
+    val value = runCatching { BigDecimal(normalized) }.getOrNull()
+    return value?.takeIf { it > BigDecimal.ZERO }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString()
 }
 
-private fun String.localizedTransactionType(): String = when (this) {
+private fun BigDecimal.formatMoney(currency: String): String {
+    val formatter = NumberFormat.getNumberInstance(Locale("ru", "RU")).apply {
+        minimumFractionDigits = 2
+        maximumFractionDigits = 2
+    }
+    return "${formatter.format(this)} $currency"
+}
+
+private fun TransactionSummary.signedAmount(): String {
+    val prefix = when (type) {
+        "income" -> "+"
+        "expense" -> "-"
+        else -> ""
+    }
+    return "$prefix${amount.toMoney().formatMoney(currency)}"
+}
+
+private fun TransactionSummary.localizedType(): String = when (type) {
     "income" -> "Доход"
     "transfer" -> "Перевод"
+    "brokerage" -> "Актив"
+    "asset_buy" -> "Покупка актива"
+    "asset_sell" -> "Продажа актива"
+    "interest" -> "Проценты"
+    "dividend" -> "Дивиденды"
+    "adjustment" -> "Корректировка"
     else -> "Расход"
 }
 
-private val FinanceDashboard.transferCount: Int
-    get() = transactions.count { it.type == "transfer" }
-
-private fun targetAccountById(accounts: List<AccountSummary>?, accountId: String?): AccountSummary? {
-    return accounts.orEmpty().firstOrNull { it.id.isNotBlank() && it.id == accountId }
+@DrawableRes
+private fun TransactionSummary.icon(): Int = when (type) {
+    "income" -> R.drawable.ic_coin_24
+    "transfer" -> R.drawable.ic_swap_24
+    "brokerage", "asset_buy", "asset_sell" -> R.drawable.ic_chart_24
+    "interest", "dividend" -> R.drawable.ic_coin_24
+    "adjustment" -> R.drawable.ic_receipt_24
+    else -> R.drawable.ic_trending_down_24
 }
 
-private fun targetCategoryById(categories: List<CategorySummary>?, categoryId: String?): CategorySummary? {
-    return categories.orEmpty().firstOrNull { it.id.isNotBlank() && it.id == categoryId }
+private fun TransactionSummary.tint(): Color = when (type) {
+    "income" -> Color(0xFF2E7D62)
+    "transfer" -> Color(0xFF5B6EE1)
+    "brokerage", "asset_buy", "asset_sell" -> Color(0xFF227C9D)
+    "interest", "dividend" -> Color(0xFF2E7D62)
+    "adjustment" -> Color(0xFF6D5BD0)
+    else -> Color(0xFFE35D4F)
 }
 
-private fun targetTransaction(
-    transactions: List<TransactionSummary>?,
-    transactionId: String?,
-    includeTransfers: Boolean,
-): TransactionSummary? {
-    return transactions.orEmpty().firstOrNull {
-        it.id.isNotBlank() &&
-            it.id == transactionId &&
-            (includeTransfers || it.type != "transfer") &&
-            (!includeTransfers || it.type == "transfer")
+private fun AccountSummary.assetKind(): AssetKind {
+    val lowerName = name.lowercase(Locale.getDefault())
+    return when {
+        type == "metal" || "металл" in lowerName || "gold" in lowerName -> AssetKind.Metal
+        type == "card" -> AssetKind.Card
+        type == "cash" -> AssetKind.Cash
+        type == "deposit" -> AssetKind.Deposit
+        type == "brokerage" -> AssetKind.Brokerage
+        "карта" in lowerName || "card" in lowerName -> AssetKind.Card
+        else -> AssetKind.Bank
     }
 }
 
-private fun compatibleExpenseCategory(
-    account: AccountSummary,
-    categories: List<CategorySummary>,
-): CategorySummary? {
-    return categories.firstOrNull { category ->
-        category.id.isNotBlank() &&
-            category.type == "expense" &&
-            if (account.ownershipType == "shared") {
-                category.scope == "household" && category.householdId == account.householdId
-            } else {
-                category.scope != "household"
-            }
+private fun CategorySummary?.colorOrFallback(): Color {
+    val fallback = if (this?.type == "income") Color(0xFF2E7D62) else Color(0xFFE35D4F)
+    val raw = this?.color?.takeIf { it.startsWith("#") } ?: return fallback
+    return runCatching { Color(android.graphics.Color.parseColor(raw)) }.getOrDefault(fallback)
+}
+
+@DrawableRes
+private fun CategorySummary.icon(): Int {
+    val key = iconKey.lowercase(Locale.getDefault())
+    val name = name.lowercase(Locale.getDefault())
+    return when {
+        "food" in key || "продукт" in name || "кафе" in name -> R.drawable.ic_food_24
+        "transport" in key || "такси" in name || "транспорт" in name -> R.drawable.ic_car_24
+        "shop" in key || "покуп" in name -> R.drawable.ic_shopping_24
+        type == "income" -> R.drawable.ic_coin_24
+        else -> R.drawable.ic_category_24
     }
 }
 
-private fun compatibleTransferPair(accounts: List<AccountSummary>): Pair<AccountSummary, AccountSummary>? {
-    return accounts
-        .filter { it.id.isNotBlank() && it.currency.isNotBlank() }
-        .asSequence()
-        .flatMap { source -> accounts.asSequence().map { destination -> source to destination } }
-        .firstOrNull { (source, destination) ->
-            source.id != destination.id &&
-                source.currency == destination.currency &&
-                source.ownershipType == destination.ownershipType &&
-                if (source.ownershipType == "shared") {
-                    source.householdId != null && source.householdId == destination.householdId
-                } else {
-                    true
-                }
-        }
+@DrawableRes
+private fun AppSection.icon(): Int = when (this) {
+    AppSection.Home -> R.drawable.ic_home_24
+    AppSection.Operations -> R.drawable.ic_receipt_24
+    AppSection.Assets -> R.drawable.ic_wallet_24
+    AppSection.Analytics -> R.drawable.ic_analytics_24
+}
+
+@DrawableRes
+private fun FinanceMode.icon(): Int = when (this) {
+    FinanceMode.Personal -> R.drawable.ic_person_24
+    FinanceMode.Shared -> R.drawable.ic_group_24
+    FinanceMode.Overview -> R.drawable.ic_analytics_24
+}
+
+@DrawableRes
+private fun QuickEntryType.icon(): Int = when (this) {
+    QuickEntryType.Expense -> R.drawable.ic_trending_down_24
+    QuickEntryType.Income -> R.drawable.ic_coin_24
+    QuickEntryType.Transfer -> R.drawable.ic_swap_24
+    QuickEntryType.Asset -> R.drawable.ic_wallet_24
+}
+
+@DrawableRes
+private fun ImportReportType.icon(): Int = when (this) {
+    ImportReportType.Generic -> R.drawable.ic_receipt_24
+    ImportReportType.Bank -> R.drawable.ic_bank_24
+    ImportReportType.Broker -> R.drawable.ic_chart_24
+    ImportReportType.Deposit -> R.drawable.ic_savings_24
+    ImportReportType.Metals -> R.drawable.ic_coin_24
+}
+
+@DrawableRes
+private fun ImportTargetScope.icon(): Int = when (this) {
+    ImportTargetScope.Personal -> R.drawable.ic_person_24
+    ImportTargetScope.Shared -> R.drawable.ic_group_24
+}
+
+private fun List<AccountSummary>.firstByIdOrFirst(id: String): AccountSummary? {
+    return firstOrNull { it.id.isNotBlank() && it.id == id } ?: firstOrNull()
+}
+
+private fun List<CategorySummary>.firstByIdOrFirst(id: String): CategorySummary? {
+    return firstOrNull { it.id.isNotBlank() && it.id == id } ?: firstOrNull()
+}
+
+private fun AccountSummary.displayName(): String = userFacingSeedText(name)
+
+private fun CategorySummary.displayName(): String = userFacingSeedText(name)
+
+private fun TransactionSummary.displayDescription(): String {
+    return userFacingSeedText(description).ifBlank { localizedType() }
+}
+
+private fun ApiResult.Failure.userFacingMessage(): String {
+    return when {
+        message.contains("счет", ignoreCase = true) -> message
+        message.contains("сумм", ignoreCase = true) -> message
+        message.contains("перевод", ignoreCase = true) -> message
+        message.contains("валют", ignoreCase = true) -> message
+        message.contains("режим", ignoreCase = true) -> message
+        else -> "Не удалось выполнить действие"
+    }
 }
 
 @Preview(showBackground = true, widthDp = 390)
 @Composable
 private fun FinanceAppPreview() {
     FinanceTheme {
-        FinanceApp(
-            apiClient = PreviewFinanceApiClient(),
-        )
+        FinanceApp(apiClient = PreviewFinanceApiClient())
     }
 }
 
@@ -820,84 +1447,114 @@ private class PreviewFinanceApiClient : FinanceApiClient {
     }
 
     override suspend fun sessionStatus(): ApiResult<SessionStatus> {
-        return ApiResult.Success(SessionStatus(true, "Пользователь demo", "household"))
+        return ApiResult.Success(SessionStatus(true, "Пользователь", "household"))
     }
 
     override suspend fun dashboard(): ApiResult<FinanceDashboard> {
-        val session = SessionStatus(true, "Пользователь demo", "household")
-        return ApiResult.Success(
-            FinanceDashboard(
-                session = session,
-                accounts = listOf(
-                    AccountSummary("Наличные", "cash", "personal", "USD", "925.50", id = "acc-cash", version = 1),
-                    AccountSummary("Накопления", "deposit", "personal", "USD", "100.00", id = "acc-save", version = 1),
-                ),
-                categories = listOf(CategorySummary("Продукты", "expense", "personal", id = "cat-food", version = 1)),
-                transactions = listOf(
-                    TransactionSummary("transfer", "25.00", "USD", "2026-05-18T08:30:00Z", "Dev same-household transfer", "household_same_household", "posted", id = "txn-transfer", accountId = "acc-cash", counterpartyAccountId = "acc-save", version = 1),
-                    TransactionSummary("expense", "69.75", "USD", "2026-05-17T12:30:00Z", "Ручная операция", null, null, id = "txn-expense", accountId = "acc-cash", categoryId = "cat-food", version = 1),
-                ),
-                totals = listOf(MoneyTotal("USD", "250.00", "69.75", "180.25")),
-                reportTransferCount = 1,
-            ),
-        )
+        val session = SessionStatus(true, "Пользователь", "household")
+        return ApiResult.Success(previewDashboard(session))
     }
 
-    override suspend fun createDemoAccount(householdId: String?, currency: String): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary("Android CRUD счет", "cash", "personal", currency, "12.3400", id = "acc-created", version = 1))
+    override suspend fun createDemoAccount(
+        householdId: String?,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        ownershipType: String,
+    ): ApiResult<AccountSummary> {
+        return ApiResult.Success(AccountSummary("Новый актив", accountType, ownershipType, currency, initialBalance, id = "acc-created", householdId = householdId, version = 1))
     }
 
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> {
-        return ApiResult.Success(account.copy(name = "${account.name} upd", version = (account.version ?: 1) + 1))
+        return ApiResult.Success(account.copy(version = (account.version ?: 1) + 1))
     }
 
     override suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary("Android CRUD счет", "cash", "personal", "USD", "12.3400", id = accountId, status = "archived", version = 2))
+        return ApiResult.Success(AccountSummary("Архивный счет", "cash", "personal", "USD", "0.00", id = accountId, status = "archived", version = 2))
     }
 
     override suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary("Android CRUD счет", "cash", "personal", "USD", "12.3400", id = accountId, version = 3))
+        return ApiResult.Success(AccountSummary("Восстановленный счет", "cash", "personal", "USD", "0.00", id = accountId, version = 3))
     }
 
     override suspend fun createDemoCategory(householdId: String?): ApiResult<CategorySummary> {
-        return ApiResult.Success(CategorySummary("Android CRUD категория", "expense", "personal", id = "cat-created", version = 1))
+        return ApiResult.Success(CategorySummary("Дом", "expense", "personal", id = "cat-created", color = "#5B6EE1", version = 1))
     }
 
     override suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary> {
-        return ApiResult.Success(category.copy(name = "${category.name} upd", version = (category.version ?: 1) + 1))
+        return ApiResult.Success(category.copy(version = (category.version ?: 1) + 1))
     }
 
     override suspend fun archiveCategory(categoryId: String): ApiResult<CategorySummary> {
-        return ApiResult.Success(CategorySummary("Android CRUD категория", "expense", "personal", id = categoryId, status = "archived", version = 2))
+        return ApiResult.Success(CategorySummary("Дом", "expense", "personal", id = categoryId, status = "archived", version = 2))
     }
 
     override suspend fun restoreCategory(categoryId: String): ApiResult<CategorySummary> {
-        return ApiResult.Success(CategorySummary("Android CRUD категория", "expense", "personal", id = categoryId, version = 3))
+        return ApiResult.Success(CategorySummary("Дом", "expense", "personal", id = categoryId, version = 3))
     }
 
     override suspend fun createDemoTransaction(
         account: AccountSummary,
         category: CategorySummary?,
+        transactionType: String,
+        amount: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Success(TransactionSummary("expense", "17.0000", account.currency, "2026-05-18T09:00:00Z", "Android lifecycle: создано", null, null, id = "txn-created", accountId = account.id, categoryId = category?.id, version = 1))
+        return ApiResult.Success(TransactionSummary(transactionType, amount, account.currency, "2026-05-18T09:00:00Z", category?.name ?: "Новая операция", null, null, id = "txn-created", accountId = account.id, categoryId = category?.id, version = 1))
     }
 
     override suspend fun updateTransaction(transaction: TransactionSummary): ApiResult<TransactionSummary> {
-        return ApiResult.Success(transaction.copy(amount = "18.0000", description = "Android lifecycle: обновлено", version = (transaction.version ?: 1) + 1))
+        return ApiResult.Success(transaction.copy(version = (transaction.version ?: 1) + 1))
     }
 
     override suspend fun deleteTransaction(transactionId: String): ApiResult<Unit> = ApiResult.Success(Unit)
 
     override suspend fun restoreTransaction(transactionId: String): ApiResult<TransactionSummary> {
-        return ApiResult.Success(TransactionSummary("expense", "18.0000", "USD", "2026-05-18T09:00:00Z", "Android lifecycle: восстановлено", null, null, id = transactionId, accountId = "acc-cash", categoryId = "cat-food", version = 3))
+        return ApiResult.Success(TransactionSummary("expense", "18.00", "USD", "2026-05-18T09:00:00Z", "Восстановленная операция", null, null, id = transactionId, accountId = "acc-cash", categoryId = "cat-food", version = 3))
     }
 
     override suspend fun createDemoTransfer(
         source: AccountSummary,
         destination: AccountSummary,
+        amount: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Success(TransactionSummary("transfer", "1.0000", source.currency, "2026-05-18T09:00:00Z", "Android transfer lifecycle", "personal_same_owner", "posted", id = "txn-transfer-created", accountId = source.id, counterpartyAccountId = destination.id, version = 1))
+        return ApiResult.Success(TransactionSummary("transfer", amount, source.currency, "2026-05-18T09:00:00Z", "Между счетами", "personal_same_owner", "posted", id = "txn-transfer-created", accountId = source.id, counterpartyAccountId = destination.id, version = 1))
+    }
+
+    override suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse> {
+        return ApiResult.Success(
+            ImportReportPreviewResponse(
+                status = "preview_placeholder",
+                canConfirm = false,
+                willChangeData = false,
+                message = "Файл не импортирован. Сейчас показана только предварительная сводка.",
+            ),
+        )
     }
 
     override suspend fun logout(): ApiResult<Unit> = ApiResult.Success(Unit)
+}
+
+private fun previewDashboard(session: SessionStatus): FinanceDashboard {
+    return FinanceDashboard(
+        session = session,
+        accounts = listOf(
+            AccountSummary("Карта Everyday", "bank", "personal", "USD", "925.50", id = "acc-card", version = 1),
+            AccountSummary("Наличные", "cash", "personal", "USD", "180.00", id = "acc-cash", version = 1),
+            AccountSummary("Вклад", "deposit", "shared", "USD", "5400.00", id = "acc-save", householdId = "household", version = 1),
+            AccountSummary("Брокер", "brokerage", "personal", "USD", "2200.00", id = "acc-broker", version = 1),
+        ),
+        categories = listOf(
+            CategorySummary("Продукты", "expense", "personal", id = "cat-food", iconKey = "food", color = "#E35D4F", version = 1),
+            CategorySummary("Транспорт", "expense", "personal", id = "cat-transport", iconKey = "transport", color = "#5B6EE1", version = 1),
+            CategorySummary("Зарплата", "income", "personal", id = "cat-salary", iconKey = "income", color = "#2E7D62", version = 1),
+        ),
+        transactions = listOf(
+            TransactionSummary("income", "2500.00", "USD", "2026-05-18T08:30:00Z", "Зарплата", null, null, id = "txn-income", accountId = "acc-card", categoryId = "cat-salary", version = 1),
+            TransactionSummary("transfer", "150.00", "USD", "2026-05-17T08:30:00Z", "На вклад", "personal_same_owner", "posted", id = "txn-transfer", accountId = "acc-card", counterpartyAccountId = "acc-save", version = 1),
+            TransactionSummary("expense", "69.75", "USD", "2026-05-16T12:30:00Z", "Супермаркет", null, null, id = "txn-expense", accountId = "acc-card", categoryId = "cat-food", version = 1),
+            TransactionSummary("expense", "18.20", "USD", "2026-05-15T12:30:00Z", "Такси", null, null, id = "txn-taxi", accountId = "acc-card", categoryId = "cat-transport", version = 1),
+        ),
+        totals = listOf(MoneyTotal("USD", "2500.00", "87.95", "2412.05")),
+        reportTransferCount = 1,
+    )
 }

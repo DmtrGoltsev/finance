@@ -1,0 +1,2 @@
+﻿# Offline/background proof
+Starting: Intent { cmp=com.finance.mvp/.MainActivity }

@@ -43,6 +43,11 @@ class ReportTransactionType(StrEnum):
     EXPENSE = "expense"
     TRANSFER = "transfer"
     BROKERAGE = "brokerage"
+    ASSET_BUY = "asset_buy"
+    ASSET_SELL = "asset_sell"
+    INTEREST = "interest"
+    DIVIDEND = "dividend"
+    ADJUSTMENT = "adjustment"
 
 
 class ReportPeriodDto(ApiModel):
@@ -62,6 +67,8 @@ class MoneyTotalDto(ApiModel):
     currency: CurrencyCode
     income_total: MoneyAmount
     expense_total: MoneyAmount
+    transfer_total: MoneyAmount
+    net_cash_flow: MoneyAmount
     net_total: MoneyAmount
 
 
@@ -86,6 +93,7 @@ class ReportCategoryBreakdownDto(ApiModel):
     scope: ReportScopeDto
     period: ReportPeriodDto
     items: list[CategoryBreakdownItemDto]
+    expenses_by_category: list[CategoryBreakdownItemDto]
 
 
 class AccountBalanceDto(ApiModel):
@@ -100,11 +108,26 @@ class AccountBalanceDto(ApiModel):
     balance_as_of: datetime
 
 
+class AccountBalanceGroupDto(ApiModel):
+    account_type: Annotated[str, StringConstraints(max_length=40)]
+    currency: CurrencyCode
+    current_balance_total: MoneyAmount
+    account_count: Annotated[int, Field(ge=0)]
+
+
+class NetWorthTotalDto(ApiModel):
+    currency: CurrencyCode
+    net_worth_total: MoneyAmount
+
+
 class ReportAccountBalancesDto(ApiModel):
     scope: ReportScopeDto
     as_of_date: date | None = None
     timezone: Annotated[str, StringConstraints(min_length=1, max_length=80)]
     items: list[AccountBalanceDto]
+    balance_groups: list[AccountBalanceGroupDto]
+    assets_by_type: list[AccountBalanceGroupDto]
+    totals_by_currency: list[NetWorthTotalDto]
 
 
 class CashFlowPointDto(ApiModel):
@@ -145,4 +168,3 @@ class ReportCashFlowEnvelope(ApiModel):
 
 class ReportTransactionDrillDownEnvelope(ApiModel):
     data: ReportTransactionDrillDownDto
-

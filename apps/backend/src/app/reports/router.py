@@ -19,9 +19,11 @@ from app.transactions.schemas import PageInfo
 
 from .schemas import (
     AccountBalanceDto,
+    AccountBalanceGroupDto,
     CashFlowPointDto,
     CategoryBreakdownItemDto,
     MoneyTotalDto,
+    NetWorthTotalDto,
     ReportAccountBalancesDto,
     ReportAccountBalancesEnvelope,
     ReportBucket,
@@ -39,6 +41,7 @@ from .schemas import (
     ReportTransactionType,
 )
 from .service import (
+    AccountBalanceGroup,
     CashFlowPoint,
     CategoryBreakdownRow,
     ReportContext,
@@ -159,8 +162,9 @@ async def get_report_summary(
                 scope=_scope(context),
                 period=_period(context),
                 totals_by_currency=[
-                    _money_total(currency, income, expense, net)
-                    for currency, income, expense, net in svc.summary_totals(context)
+                    _money_total(currency, income, expense, transfer, net_cash_flow)
+                    for currency, income, expense, transfer, net_cash_flow
+                    in svc.summary_totals(context)
                 ],
             )
         )
@@ -206,6 +210,9 @@ async def get_report_category_breakdown(
                 scope=_scope(context),
                 period=_period(context),
                 items=[_category_breakdown_item(row) for row in svc.category_breakdown(context)],
+                expenses_by_category=[
+                    _category_breakdown_item(row) for row in svc.expenses_by_category(context)
+                ],
             )
         )
     except ReportServiceError as error:
@@ -263,6 +270,16 @@ async def get_report_account_balances(
                         balance_as_of=context.generated_at,
                     )
                     for account in svc.account_balances(context)
+                ],
+                balance_groups=[
+                    _account_balance_group(group) for group in svc.balance_groups(context)
+                ],
+                assets_by_type=[
+                    _account_balance_group(group) for group in svc.balance_groups(context)
+                ],
+                totals_by_currency=[
+                    NetWorthTotalDto(currency=currency, net_worth_total=amount)
+                    for currency, amount in svc.net_worth_totals(context)
                 ],
             )
         )
@@ -464,13 +481,16 @@ def _money_total(
     currency: str,
     income: Decimal,
     expense: Decimal,
-    net: Decimal,
+    transfer: Decimal,
+    net_cash_flow: Decimal,
 ) -> MoneyTotalDto:
     return MoneyTotalDto(
         currency=currency,
         income_total=income,
         expense_total=expense,
-        net_total=net,
+        transfer_total=transfer,
+        net_cash_flow=net_cash_flow,
+        net_total=net_cash_flow,
     )
 
 
@@ -493,7 +513,16 @@ def _cash_flow_point(point: CashFlowPoint) -> CashFlowPointDto:
         period_start_date=point.period_start_date,
         period_end_date=point.period_end_date,
         totals_by_currency=[
-            _money_total(currency, income, expense, net)
-            for currency, income, expense, net in point.totals_by_currency
+            _money_total(currency, income, expense, transfer, net_cash_flow)
+            for currency, income, expense, transfer, net_cash_flow in point.totals_by_currency
         ],
+    )
+
+
+def _account_balance_group(group: AccountBalanceGroup) -> AccountBalanceGroupDto:
+    return AccountBalanceGroupDto(
+        account_type=group.account_type,
+        currency=group.currency,
+        current_balance_total=group.current_balance_total,
+        account_count=group.account_count,
     )

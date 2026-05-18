@@ -4,30 +4,22 @@ enum class AppSection(
     val title: String,
     val subtitle: String,
 ) {
-    Overview(
-        title = "Обзор",
-        subtitle = "Сессия, баланс, расходы и доходы из live API.",
-    ),
-    Accounts(
-        title = "Счета",
-        subtitle = "Видимые денежные счета текущего пользователя.",
-    ),
-    Categories(
-        title = "Категории",
-        subtitle = "Доходы и расходы для ручной классификации.",
+    Home(
+        title = "Главная",
+        subtitle = "Капитал, расходы месяца и последние движения.",
     ),
     Operations(
         title = "Операции",
-        subtitle = "Список ручных доходов, расходов и переводов.",
+        subtitle = "Расходы, доходы и переводы без смешивания с тратами.",
     ),
-    Transfers(
-        title = "Переводы",
-        subtitle = "Жизненный цикл переводов через transactionType=transfer.",
+    Assets(
+        title = "Активы",
+        subtitle = "Карты, банки, наличные, вклады, брокерские счета и металлы.",
     ),
-    Reports(
-        title = "Отчеты",
-        subtitle = "Сводка по доступным данным за выбранный контур.",
+    Analytics(
+        title = "Аналитика",
+        subtitle = "Категории, структура капитала и денежный поток.",
     ),
 }
 
-fun mvpSections(): List<AppSection> = AppSection.entries
+fun financeSections(): List<AppSection> = AppSection.entries

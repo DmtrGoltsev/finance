@@ -1,0 +1,92 @@
+[
+  {
+    "filename": "pwa-desktop-01-main-money-overview.png",
+    "label": "Desktop main: Деньги/Обзор",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 68581,
+    "lumaRange": 223,
+    "sampledColoredPixels": 140
+  },
+  {
+    "filename": "pwa-desktop-02-quick-add.png",
+    "label": "Desktop quick add",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 80384,
+    "lumaRange": 225,
+    "sampledColoredPixels": 4233
+  },
+  {
+    "filename": "pwa-desktop-03-operations-transfer-proof.png",
+    "label": "Desktop operations with transfer as separate row",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 44630,
+    "lumaRange": 223,
+    "sampledColoredPixels": 80
+  },
+  {
+    "filename": "pwa-desktop-04-assets-card-deposit-brokerage-metal.png",
+    "label": "Desktop assets: card/deposit/brokerage/metal",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 39245,
+    "lumaRange": 223,
+    "sampledColoredPixels": 67
+  },
+  {
+    "filename": "pwa-desktop-05-categories-income-expense.png",
+    "label": "Desktop categories",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 34911,
+    "lumaRange": 223,
+    "sampledColoredPixels": 55
+  },
+  {
+    "filename": "pwa-desktop-06-analytics-personal.png",
+    "label": "Desktop analytics personal",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 43867,
+    "lumaRange": 223,
+    "sampledColoredPixels": 87
+  },
+  {
+    "filename": "pwa-desktop-07-report-switcher-shared.png",
+    "label": "Desktop report switcher: Общее",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 39122,
+    "lumaRange": 223,
+    "sampledColoredPixels": 115
+  },
+  {
+    "filename": "pwa-desktop-08-report-switcher-overview.png",
+    "label": "Desktop report switcher: Обзор",
+    "width": 1440,
+    "height": 1000,
+    "bytes": 43148,
+    "lumaRange": 223,
+    "sampledColoredPixels": 105
+  },
+  {
+    "filename": "pwa-mobile-09-overview-iphone.png",
+    "label": "Mobile iPhone overview",
+    "width": 780,
+    "height": 1688,
+    "bytes": 71466,
+    "lumaRange": 223,
+    "sampledColoredPixels": 302
+  },
+  {
+    "filename": "pwa-mobile-10-analytics-report-switcher-iphone.png",
+    "label": "Mobile iPhone analytics/report switcher",
+    "width": 780,
+    "height": 1688,
+    "bytes": 86578,
+    "lumaRange": 223,
+    "sampledColoredPixels": 434
+  }
+]

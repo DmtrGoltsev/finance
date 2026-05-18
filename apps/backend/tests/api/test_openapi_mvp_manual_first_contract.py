@@ -133,6 +133,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/reports/account-balances",
         "/reports/cash-flow",
         "/reports/transactions",
+        "/imports/report-preview",
     }
 
     assert paths == required_paths
@@ -151,7 +152,6 @@ def test_openapi_excludes_post_mvp_import_bank_sms_push_broker_routes() -> None:
         "/households",
         "/invites",
         "/memberships",
-        "/imports",
         "/import-jobs",
         "/files/imports",
         "/bank-connections",
@@ -178,7 +178,37 @@ def test_openapi_excludes_post_mvp_import_bank_sms_push_broker_routes() -> None:
 
 
 def test_openapi_manual_first_enum_boundaries() -> None:
+    assert _inline_array_value(_schema_block("AccountType"), "enum") == [
+        "cash",
+        "bank",
+        "card",
+        "deposit",
+        "brokerage",
+        "metal",
+        "other",
+    ]
+    assert _inline_array_value(_schema_block("TransactionType"), "enum") == [
+        "income",
+        "expense",
+        "transfer",
+        "brokerage",
+        "asset_buy",
+        "asset_sell",
+        "interest",
+        "dividend",
+        "adjustment",
+    ]
     assert _inline_array_value(_schema_block("SourceType"), "enum") == ["manual"]
+    assert _inline_array_value(_schema_block("ImportSourceType"), "enum") == [
+        "file_metadata_only",
+    ]
+    assert _inline_array_value(_schema_block("ImportReportType"), "enum") == [
+        "generic_finance_report",
+        "bank_statement",
+        "brokerage_report",
+        "deposit_report",
+        "metals_report",
+    ]
     assert _inline_array_value(_schema_block("ReportMode"), "enum") == [
         "shared_family_report",
         "combined_viewer_overview",

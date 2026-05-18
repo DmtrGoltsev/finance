@@ -4,6 +4,8 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
+  ImportReportPreviewRequest,
+  ImportReportPreviewResponse,
   MoneyAmount,
   OperationSummary,
   ReportMode,
@@ -58,6 +60,8 @@ type CategoryDto = {
   id: string;
   name: string;
   type: "income" | "expense";
+  iconKey?: string | null;
+  color?: string | null;
   scope?: "personal" | "household";
   householdId?: string | null;
   status?: "active" | "archived" | "deleted";
@@ -66,7 +70,16 @@ type CategoryDto = {
 
 type TransactionDto = {
   id: string;
-  transactionType: "income" | "expense" | "transfer";
+  transactionType:
+    | "income"
+    | "expense"
+    | "transfer"
+    | "brokerage"
+    | "asset_buy"
+    | "asset_sell"
+    | "interest"
+    | "dividend"
+    | "adjustment";
   accountId: string;
   counterpartyAccountId: string | null;
   categoryId: string | null;
@@ -109,9 +122,48 @@ type DataEnvelope<T> = {
   data: T;
 };
 
+type AccountCreateInput = {
+  name?: string;
+  kind?: AccountKind;
+  currency?: CurrencyCode;
+  initialBalance?: number;
+  ownershipType?: "personal" | "shared";
+};
+
+type OperationCreateInput = {
+  accountId: string;
+  categoryId: string | null;
+  currency: CurrencyCode;
+  transactionType?: "income" | "expense";
+  amount?: number;
+  occurredAt?: string;
+  description?: string | null;
+};
+
+type TransferCreateInput = {
+  fromAccountId: string;
+  toAccountId: string;
+  currency: CurrencyCode;
+  amount?: number;
+  occurredAt?: string;
+  description?: string | null;
+};
+
+class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly method: string,
+    readonly path: string
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 export interface FinanceApiClient {
   getDashboardSnapshot(): Promise<DashboardSnapshot>;
-  createDemoAccount(): Promise<AccountSummary>;
+  createDemoAccount(input?: AccountCreateInput): Promise<AccountSummary>;
   updateAccount(input: {
     accountId: string;
     version?: number;
@@ -127,28 +179,21 @@ export interface FinanceApiClient {
   archiveCategory(categoryId: string): Promise<CategorySummary>;
   restoreCategory(categoryId: string): Promise<CategorySummary>;
   deleteCategory(categoryId: string): Promise<void>;
-  createDemoOperation(input: {
-    accountId: string;
-    categoryId: string | null;
-    currency: CurrencyCode;
-  }): Promise<OperationSummary>;
+  createDemoOperation(input: OperationCreateInput): Promise<OperationSummary>;
   updateOperation(input: {
     transactionId: string;
     version?: number;
   }): Promise<OperationSummary>;
   archiveOperation(transactionId: string): Promise<void>;
   restoreOperation(transactionId: string): Promise<OperationSummary>;
-  createDemoTransfer(input: {
-    fromAccountId: string;
-    toAccountId: string;
-    currency: CurrencyCode;
-  }): Promise<TransferSummary>;
+  createDemoTransfer(input: TransferCreateInput): Promise<TransferSummary>;
   updateTransfer(input: {
     transactionId: string;
     version?: number;
   }): Promise<TransferSummary>;
   archiveTransfer(transactionId: string): Promise<void>;
   restoreTransfer(transactionId: string): Promise<TransferSummary>;
+  previewImportReport(input: ImportReportPreviewRequest): Promise<ImportReportPreviewResponse>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -202,9 +247,9 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
     return {
       session: {
-        viewerName: "Demo owner",
-        householdName: householdId ? "Демо-семья" : "Личный режим",
-        accessLabel: `Live API: ${session.actor.sessionId.slice(0, 8)}`
+        viewerName: "Владелец",
+        householdName: householdId ? "Общие финансы" : "Личный режим",
+        accessLabel: "Вход выполнен"
       },
       accounts,
       categories,
@@ -214,17 +259,17 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     };
   }
 
-  async createDemoAccount(): Promise<AccountSummary> {
+  async createDemoAccount(input: AccountCreateInput = {}): Promise<AccountSummary> {
     const envelope = await this.request<DataEnvelope<AccountDto>>(
       "/api/v1/accounts",
       {
         method: "POST",
         body: JSON.stringify({
-          name: `PWA E2E счет ${uniqueSuffix()}`,
-          accountType: "cash",
-          ownershipType: "personal",
-          currency: "RUB",
-          initialBalance: "123.0000"
+          name: input.name?.trim() || `Новый актив ${uniqueSuffix()}`,
+          accountType: accountTypeFromKind(input.kind ?? "cash"),
+          ownershipType: input.ownershipType ?? "personal",
+          currency: input.currency ?? "RUB",
+          initialBalance: String(input.initialBalance ?? 0)
         })
       }
     );
@@ -241,7 +286,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       {
         method: "PATCH",
         body: JSON.stringify({
-          name: `PWA E2E счет обновлен ${uniqueSuffix()}`,
+          name: `Обновленный счет ${uniqueSuffix()}`,
           ...(input.version ? { version: input.version } : {})
         })
       }
@@ -276,15 +321,16 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     );
   }
 
-  async createDemoCategory(): Promise<CategorySummary> {
+  async createDemoCategory(input: { householdId: string | null }): Promise<CategorySummary> {
     const envelope = await this.request<DataEnvelope<CategoryDto>>(
       "/api/v1/categories",
       {
         method: "POST",
         body: JSON.stringify({
-          name: `PWA E2E категория ${uniqueSuffix()}`,
+          name: `Категория ${uniqueSuffix()}`,
           type: "expense",
-          scope: "personal",
+          scope: input.householdId ? "household" : "personal",
+          householdId: input.householdId,
           iconKey: "tag",
           color: "#2563EB"
         })
@@ -303,7 +349,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       {
         method: "PATCH",
         body: JSON.stringify({
-          name: `PWA E2E категория обновлена ${uniqueSuffix()}`,
+          name: `Обновленная категория ${uniqueSuffix()}`,
           iconKey: "wallet",
           color: "#087F5B",
           ...(input.version ? { version: input.version } : {})
@@ -340,23 +386,21 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     );
   }
 
-  async createDemoOperation(input: {
-    accountId: string;
-    categoryId: string | null;
-    currency: CurrencyCode;
-  }): Promise<OperationSummary> {
+  async createDemoOperation(input: OperationCreateInput): Promise<OperationSummary> {
+    const transactionType = input.transactionType ?? "expense";
+    const amount = Math.max(0, input.amount ?? 17);
     const envelope = await this.request<DataEnvelope<TransactionDto>>(
       "/api/v1/transactions",
       {
         method: "POST",
         body: JSON.stringify({
-          transactionType: "expense",
+          transactionType,
           accountId: input.accountId,
           categoryId: input.categoryId,
-          amount: "17.0000",
+          amount: amount.toFixed(4),
           currency: input.currency,
-          occurredAt: new Date().toISOString(),
-          description: "PWA lifecycle: создано",
+          occurredAt: input.occurredAt ?? new Date().toISOString(),
+          description: input.description?.trim() || transactionTypeLabel(transactionType),
           sourceType: "manual"
         })
       }
@@ -375,7 +419,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         method: "PATCH",
         body: JSON.stringify({
           amount: "18.0000",
-          description: "PWA lifecycle: обновлено",
+          description: "Обновлено",
           ...(input.version ? { version: input.version } : {})
         })
       }
@@ -401,11 +445,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapOperation(envelope.data, [], []);
   }
 
-  async createDemoTransfer(input: {
-    fromAccountId: string;
-    toAccountId: string;
-    currency: CurrencyCode;
-  }): Promise<TransferSummary> {
+  async createDemoTransfer(input: TransferCreateInput): Promise<TransferSummary> {
+    const amount = Math.max(0, input.amount ?? 11);
     const envelope = await this.request<DataEnvelope<TransactionDto>>(
       "/api/v1/transactions",
       {
@@ -414,10 +455,10 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           transactionType: "transfer",
           accountId: input.fromAccountId,
           counterpartyAccountId: input.toAccountId,
-          amount: "11.0000",
+          amount: amount.toFixed(4),
           currency: input.currency,
-          occurredAt: new Date().toISOString(),
-          description: "PWA transfer lifecycle: создано",
+          occurredAt: input.occurredAt ?? new Date().toISOString(),
+          description: input.description?.trim() || "Перевод",
           sourceType: "manual"
         })
       }
@@ -436,7 +477,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         method: "PATCH",
         body: JSON.stringify({
           amount: "12.0000",
-          description: "PWA transfer lifecycle: обновлено",
+          description: "Перевод обновлен",
           ...(input.version ? { version: input.version } : {})
         })
       }
@@ -460,6 +501,28 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     );
 
     return mapTransfer(envelope.data, []);
+  }
+
+  async previewImportReport(
+    input: ImportReportPreviewRequest
+  ): Promise<ImportReportPreviewResponse> {
+    const payload = normalizeImportPreviewRequest(input);
+
+    try {
+      return await this.request<ImportReportPreviewResponse>(
+        "/api/v1/imports/report-preview",
+        {
+          method: "POST",
+          body: JSON.stringify(payload)
+        }
+      );
+    } catch (error) {
+      if (!shouldUseImportPreviewFallback(error)) {
+        throw error;
+      }
+
+      return buildImportPreviewPlaceholder(payload);
+    }
   }
 
   private async ensureSession(): Promise<SessionResponseDto> {
@@ -497,18 +560,16 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     householdId: string | null,
     currency: CurrencyCode
   ): Promise<ReportSummary[]> {
-    if (!householdId) {
-      return [
-        emptyReport("combined_viewer_overview", currency),
-        emptyReport("shared_family_report", currency)
-      ];
-    }
-
     const modes: ReportMode[] = [
       "shared_family_report",
       "combined_viewer_overview"
     ];
-    const reports = await Promise.all(
+
+    if (!householdId) {
+      return modes.map((mode) => emptyReport(mode, currency));
+    }
+
+    return Promise.all(
       modes.map(async (mode) => {
         const params = new URLSearchParams({
           reportMode: mode,
@@ -522,8 +583,6 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         return mapReport(envelope.data, currency);
       })
     );
-
-    return reports;
   }
 
   private get<T>(path: string): Promise<T> {
@@ -572,7 +631,12 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       });
     }
     if (!response.ok) {
-      throw new Error(`API ${init.method ?? "GET"} ${path} failed: ${response.status}`);
+      throw new ApiRequestError(
+        `API ${method} ${path} failed: ${response.status}`,
+        response.status,
+        method,
+        path
+      );
     }
 
     if (options.empty || response.status === 204) {
@@ -585,6 +649,14 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
 function isUnsafeMethod(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
+}
+
+function shouldUseImportPreviewFallback(error: unknown): boolean {
+  if (error instanceof ApiRequestError) {
+    return error.status === 404 || error.status === 405;
+  }
+
+  return Boolean(import.meta.env.DEV) && error instanceof TypeError;
 }
 
 function readCookie(name: string): string | null {
@@ -604,8 +676,8 @@ function readCookie(name: string): string | null {
 function mapAccount(account: AccountDto): AccountSummary {
   return {
     id: account.id,
-    name: account.name,
-    ownerName: account.ownershipType === "shared" ? "Семья" : "Личный",
+    name: userFacingSeedText(account.name),
+    ownerName: account.ownershipType === "shared" ? "Общее" : "Личное",
     kind: mapAccountKind(account.accountType),
     ownershipType: account.ownershipType,
     householdId: account.householdId,
@@ -616,21 +688,50 @@ function mapAccount(account: AccountDto): AccountSummary {
 }
 
 function mapAccountKind(accountType: string): AccountKind {
-  if (accountType === "cash") {
+  const normalized = accountType.toLowerCase();
+  if (["cash", "наличные"].includes(normalized)) {
     return "cash";
   }
-  if (accountType === "bank" || accountType === "card" || accountType === "debit") {
-    return "debit";
+  if (["card", "debit", "credit_card"].includes(normalized)) {
+    return "card";
+  }
+  if (["bank", "checking"].includes(normalized)) {
+    return "bank";
+  }
+  if (["deposit", "savings", "saving"].includes(normalized)) {
+    return "deposit";
+  }
+  if (["broker", "brokerage", "investment"].includes(normalized)) {
+    return "brokerage";
+  }
+  if (["metal", "metals", "gold"].includes(normalized)) {
+    return "metal";
   }
 
-  return "savings";
+  return "other";
+}
+
+function accountTypeFromKind(kind: AccountKind): string {
+  const accountTypes: Record<AccountKind, string> = {
+    bank: "bank",
+    brokerage: "brokerage",
+    card: "card",
+    cash: "cash",
+    deposit: "deposit",
+    metal: "metal",
+    other: "other"
+  };
+
+  return accountTypes[kind];
 }
 
 function mapCategory(category: CategoryDto): CategorySummary {
   return {
     id: category.id,
-    name: category.name,
+    name: userFacingSeedText(category.name),
     direction: category.type,
+    iconKey: category.iconKey,
+    color: category.color,
     scope: category.scope,
     householdId: category.householdId,
     status: category.status,
@@ -653,7 +754,9 @@ function mapOperation(
   return {
     id: transaction.id,
     date: transaction.occurredAt,
-    title: transaction.description || transactionTypeLabel(transaction.transactionType),
+    title:
+      userFacingSeedText(transaction.description) ||
+      transactionTypeLabel(transaction.transactionType),
     accountId: transaction.accountId,
     categoryId: transaction.categoryId,
     version: transaction.version,
@@ -681,10 +784,10 @@ function mapTransfer(
     transferStatus: transaction.transferStatus,
     fromAccountName:
       accounts.find((account) => account.id === transaction.accountId)?.name ??
-      "Счет списания",
+      "Откуда",
     toAccountName:
       accounts.find((account) => account.id === transaction.counterpartyAccountId)
-        ?.name ?? "Счет зачисления",
+        ?.name ?? "Куда",
     amount: money(transaction.amount, transaction.currency)
   };
 }
@@ -712,7 +815,7 @@ function mapReport(
   return {
     mode: mode ?? "combined_viewer_overview",
     title: reportModeLabels[mode ?? "combined_viewer_overview"],
-    periodLabel: "Текущий период",
+    periodLabel: "Текущий месяц",
     income: money(income, currency),
     expense: money(expense, currency),
     balanceDelta: money(delta, currency)
@@ -723,7 +826,7 @@ function emptyReport(mode: ReportMode, currency: CurrencyCode): ReportSummary {
   return {
     mode,
     title: reportModeLabels[mode],
-    periodLabel: "Текущий период",
+    periodLabel: "Текущий месяц",
     income: money(0, currency),
     expense: money(0, currency),
     balanceDelta: money(0, currency)
@@ -760,19 +863,133 @@ function transactionTypeLabel(type: TransactionDto["transactionType"]): string {
   const labels: Record<TransactionDto["transactionType"], string> = {
     income: "Доход",
     expense: "Расход",
-    transfer: "Перевод"
+    transfer: "Перевод",
+    brokerage: "Актив",
+    asset_buy: "Покупка актива",
+    asset_sell: "Продажа актива",
+    interest: "Проценты",
+    dividend: "Дивиденды",
+    adjustment: "Корректировка"
   };
 
   return labels[type];
 }
 
 const reportModeLabels: Record<ReportMode, string> = {
-  shared_family_report: "Общий семейный отчет",
-  combined_viewer_overview: "Сводный обзор участника"
+  shared_family_report: "Общее",
+  combined_viewer_overview: "Обзор"
 };
+
+function userFacingSeedText(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  const labels: Record<string, string> = {
+    "Dev Personal Cash": "Личные наличные",
+    "Dev Household Card": "Семейная карта",
+    "Dev Household Deposit": "Общий вклад",
+    "Dev Brokerage": "Брокерский счет",
+    "Dev Metal": "Металлы",
+    "Dev Groceries": "Продукты",
+    "Dev Home": "Дом",
+    "Dev Salary": "Зарплата",
+    "Dev household supplies": "Домашние покупки",
+    "Dev sample income": "Зарплата",
+    "Dev same-household transfer": "Между общими счетами",
+    "Dev brokerage asset buy": "Покупка актива",
+    "Dev deposit interest": "Проценты по вкладу",
+    "Dev brokerage dividend": "Дивиденды"
+  };
+
+  return labels[trimmed] ?? trimmed.replace(/^Dev\s+/i, "");
+}
 
 function uniqueSuffix(): string {
   return new Date().toISOString().replace(/\D/g, "").slice(4, 14);
+}
+
+function normalizeImportPreviewRequest(
+  input: ImportReportPreviewRequest
+): ImportReportPreviewRequest {
+  return {
+    reportType: input.reportType,
+    sourceType: "file_metadata_only",
+    targetScope: input.targetScope,
+    householdId: input.targetScope === "shared" ? input.householdId : null,
+    ...(input.fileName ? { fileName: input.fileName.slice(0, 255) } : {}),
+    ...(Number.isFinite(input.fileSizeBytes)
+      ? { fileSizeBytes: Math.max(0, Math.trunc(input.fileSizeBytes ?? 0)) }
+      : {}),
+    ...(input.mimeType ? { mimeType: input.mimeType } : {})
+  };
+}
+
+function buildImportPreviewPlaceholder(
+  input: ImportReportPreviewRequest
+): ImportReportPreviewResponse {
+  return {
+    status: "preview_placeholder",
+    canConfirm: false,
+    willChangeData: false,
+    message: "Файл не импортирован. Сейчас показана только предварительная сводка.",
+    scope: {
+      targetScope: input.targetScope,
+      householdId: input.targetScope === "shared" ? input.householdId : null
+    },
+    file: {
+      fileName: input.fileName,
+      fileSizeBytes: input.fileSizeBytes,
+      mimeType: input.mimeType
+    },
+    summary: {
+      title: "Предварительный просмотр импорта",
+      statusText: "Импорт пока не выполняется",
+      sections: [
+        {
+          key: "accounts_assets",
+          title: "Счета и активы",
+          status: "not_recognized_yet",
+          text: "Будущий импорт сможет показать найденные счета и активы."
+        },
+        {
+          key: "transactions",
+          title: "Операции",
+          status: "not_recognized_yet",
+          text: "Операции не распознаны и не добавлены."
+        },
+        {
+          key: "categories",
+          title: "Категории",
+          status: "not_recognized_yet",
+          text: "Категории не распознаны и не созданы."
+        },
+        {
+          key: "transfers",
+          title: "Переводы",
+          status: "not_recognized_yet",
+          text: "Переводы не распознаны и не созданы."
+        },
+        {
+          key: "brokerage_deposits_metals",
+          title: "Брокеры, вклады и металлы",
+          status: "not_recognized_yet",
+          text: "Специальные активы пока не обрабатываются."
+        }
+      ]
+    },
+    warnings: [
+      {
+        code: "NO_DATA_CHANGES_WITHOUT_CONFIRMATION",
+        text: "Данные не изменятся без подтверждения."
+      },
+      {
+        code: "NO_FILE_STORAGE_OR_PARSING",
+        text: "Содержимое файла не сохраняется и не разбирается."
+      },
+      {
+        code: "PLACEHOLDER_ONLY",
+        text: "Импорт пока не выполняется."
+      }
+    ]
+  };
 }
 
 export const financeApiClient: FinanceApiClient = new LiveFinanceApiClient();

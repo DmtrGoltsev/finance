@@ -2,8 +2,13 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.dev_seed import (
+    DEV_DEMO_ASSET_BUY_TRANSACTION_ID,
+    DEV_DEMO_BROKERAGE_ACCOUNT_ID,
+    DEV_DEMO_DIVIDEND_TRANSACTION_ID,
     DEV_DEMO_EMAIL,
     DEV_DEMO_HOUSEHOLD_ID,
+    DEV_DEMO_INTEREST_TRANSACTION_ID,
+    DEV_DEMO_METAL_ACCOUNT_ID,
     DEV_DEMO_PASSWORD,
     DEV_DEMO_SHARED_ACCOUNT_ID,
     DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID,
@@ -107,9 +112,20 @@ def test_seeded_dev_app_supports_login_and_minimal_data_smoke() -> None:
     assert transactions.status_code == 200
     assert transfers.status_code == 200
     assert summary.status_code == 200
-    assert len(accounts.json()["items"]) == 3
+    assert len(accounts.json()["items"]) == 5
     assert len(categories.json()["items"]) == 3
-    assert len(transactions.json()["items"]) == 3
+    assert len(transactions.json()["items"]) == 6
+    account_types = {item["id"]: item["accountType"] for item in accounts.json()["items"]}
+    assert account_types[DEV_DEMO_SHARED_ACCOUNT_ID] == "card"
+    assert account_types[DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID] == "deposit"
+    assert account_types[DEV_DEMO_BROKERAGE_ACCOUNT_ID] == "brokerage"
+    assert account_types[DEV_DEMO_METAL_ACCOUNT_ID] == "metal"
+    transaction_types = {
+        item["id"]: item["transactionType"] for item in transactions.json()["items"]
+    }
+    assert transaction_types[DEV_DEMO_ASSET_BUY_TRANSACTION_ID] == "asset_buy"
+    assert transaction_types[DEV_DEMO_INTEREST_TRANSACTION_ID] == "interest"
+    assert transaction_types[DEV_DEMO_DIVIDEND_TRANSACTION_ID] == "dividend"
     transfer_items = transfers.json()["items"]
     assert len(transfer_items) == 1
     assert transfer_items[0]["id"] == DEV_DEMO_TRANSFER_TRANSACTION_ID

@@ -21,8 +21,11 @@ class OwnershipType(DomainStrEnum):
 class AccountType(DomainStrEnum):
     CASH = "cash"
     BANK = "bank"
+    CARD = "card"
     DEPOSIT = "deposit"
     BROKERAGE = "brokerage"
+    METAL = "metal"
+    OTHER = "other"
 
 
 class CategoryScope(DomainStrEnum):
@@ -40,6 +43,11 @@ class TransactionType(DomainStrEnum):
     EXPENSE = "expense"
     TRANSFER = "transfer"
     BROKERAGE = "brokerage"
+    ASSET_BUY = "asset_buy"
+    ASSET_SELL = "asset_sell"
+    INTEREST = "interest"
+    DIVIDEND = "dividend"
+    ADJUSTMENT = "adjustment"
 
 
 class ReportMode(DomainStrEnum):

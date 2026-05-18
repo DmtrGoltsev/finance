@@ -1,0 +1,9 @@
+﻿# Android secure token storage proof
+Command: adb -s emulator-5556 exec-out run-as com.finance.mvp sh -c 'find ...; grep ...'
+
+Files:
+/data/data/com.finance.mvp/shared_prefs/finance_secure_session.xml
+/data/data/com.finance.mvp/files/profileInstalled
+
+Plaintext grep for dev-only-token/demo.owner/demo-password/Bearer:
+NO_MATCHES

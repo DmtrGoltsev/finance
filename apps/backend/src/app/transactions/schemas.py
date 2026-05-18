@@ -7,7 +7,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-
 ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
 DecimalString = Annotated[Decimal, Field(gt=0, max_digits=20, decimal_places=4)]
@@ -32,6 +31,11 @@ class TransactionType(StrEnum):
     EXPENSE = "expense"
     TRANSFER = "transfer"
     BROKERAGE = "brokerage"
+    ASSET_BUY = "asset_buy"
+    ASSET_SELL = "asset_sell"
+    INTEREST = "interest"
+    DIVIDEND = "dividend"
+    ADJUSTMENT = "adjustment"
 
 
 class SourceType(StrEnum):
@@ -129,4 +133,3 @@ class TransactionPageEnvelope(ApiModel):
 
 class TransactionAutocompleteListEnvelope(ApiModel):
     items: list[TransactionAutocompleteDto]
-

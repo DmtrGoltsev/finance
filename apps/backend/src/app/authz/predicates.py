@@ -75,6 +75,11 @@ class TransactionType(StringEnum):
     EXPENSE = "expense"
     TRANSFER = "transfer"
     BROKERAGE = "brokerage"
+    ASSET_BUY = "asset_buy"
+    ASSET_SELL = "asset_sell"
+    INTEREST = "interest"
+    DIVIDEND = "dividend"
+    ADJUSTMENT = "adjustment"
 
 
 class SourceType(StringEnum):

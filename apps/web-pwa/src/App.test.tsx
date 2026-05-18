@@ -1,21 +1,21 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { DashboardSnapshot } from "./api/types";
+import type { DashboardSnapshot, ImportReportPreviewRequest } from "./api/types";
 
-const liveSnapshot: DashboardSnapshot = {
+const financeSnapshot: DashboardSnapshot = {
   session: {
-    viewerName: "Demo owner",
-    householdName: "Демо-семья",
-    accessLabel: "Live API: session"
+    viewerName: "Мария",
+    householdName: "Дом",
+    accessLabel: "Вход выполнен"
   },
   accounts: [
     {
       id: "account-1",
-      name: "Dev Personal Cash",
-      ownerName: "Личный",
-      kind: "cash",
+      name: "Карта Мир",
+      ownerName: "Личное",
+      kind: "card",
       ownershipType: "personal",
       householdId: null,
       status: "active",
@@ -24,23 +24,62 @@ const liveSnapshot: DashboardSnapshot = {
     },
     {
       id: "account-2",
-      name: "Dev Personal Savings",
-      ownerName: "Личный",
-      kind: "savings",
+      name: "Вклад",
+      ownerName: "Личное",
+      kind: "deposit",
       ownershipType: "personal",
       householdId: null,
       status: "active",
       version: 1,
       balance: { value: 125, currency: "USD" }
+    },
+    {
+      id: "account-3",
+      name: "Семейный счет",
+      ownerName: "Общее",
+      kind: "bank",
+      ownershipType: "shared",
+      householdId: "household-1",
+      status: "active",
+      version: 1,
+      balance: { value: 300, currency: "USD" }
     }
   ],
   categories: [
     {
       id: "category-1",
-      name: "Dev Groceries",
+      name: "Продукты",
       direction: "expense",
+      iconKey: "shopping",
+      color: "#0f766e",
       scope: "personal",
       householdId: null,
+      status: "active",
+      version: 1,
+      planned: { value: 0, currency: "USD" },
+      actual: { value: 0, currency: "USD" }
+    },
+    {
+      id: "category-2",
+      name: "Зарплата",
+      direction: "income",
+      iconKey: "income",
+      color: "#2563eb",
+      scope: "personal",
+      householdId: null,
+      status: "active",
+      version: 1,
+      planned: { value: 0, currency: "USD" },
+      actual: { value: 0, currency: "USD" }
+    },
+    {
+      id: "category-3",
+      name: "Дом",
+      direction: "expense",
+      iconKey: "home",
+      color: "#c2410c",
+      scope: "household",
+      householdId: "household-1",
       status: "active",
       version: 1,
       planned: { value: 0, currency: "USD" },
@@ -51,13 +90,24 @@ const liveSnapshot: DashboardSnapshot = {
     {
       id: "operation-1",
       date: "2026-05-17T12:30:00Z",
-      title: "Dev household supplies",
+      title: "Покупка продуктов",
       accountId: "account-1",
       categoryId: "category-1",
       version: 1,
-      categoryName: "Dev Groceries",
-      accountName: "Dev Personal Cash",
+      categoryName: "Продукты",
+      accountName: "Карта Мир",
       amount: { value: -69.75, currency: "USD" }
+    },
+    {
+      id: "operation-2",
+      date: "2026-05-16T12:30:00Z",
+      title: "Домашняя покупка",
+      accountId: "account-3",
+      categoryId: "category-3",
+      version: 1,
+      categoryName: "Дом",
+      accountName: "Семейный счет",
+      amount: { value: -30, currency: "USD" }
     }
   ],
   transfers: [
@@ -69,111 +119,375 @@ const liveSnapshot: DashboardSnapshot = {
       version: 1,
       transferScope: "personal_same_owner",
       transferStatus: "posted",
-      fromAccountName: "Dev Personal Cash",
-      toAccountName: "Dev Personal Savings",
+      fromAccountName: "Карта Мир",
+      toAccountName: "Вклад",
       amount: { value: 25, currency: "USD" }
     }
   ],
   reports: [
     {
       mode: "shared_family_report",
-      title: "Общий семейный отчет",
-      periodLabel: "Текущий период",
-      income: { value: 250, currency: "USD" },
-      expense: { value: 69.75, currency: "USD" },
-      balanceDelta: { value: 180.25, currency: "USD" }
+      title: "Общее",
+      periodLabel: "Текущий месяц",
+      income: { value: 0, currency: "USD" },
+      expense: { value: 30, currency: "USD" },
+      balanceDelta: { value: -30, currency: "USD" }
     },
     {
       mode: "combined_viewer_overview",
-      title: "Сводный обзор участника",
-      periodLabel: "Текущий период",
+      title: "Обзор",
+      periodLabel: "Текущий месяц",
       income: { value: 250, currency: "USD" },
-      expense: { value: 0, currency: "USD" },
-      balanceDelta: { value: 250, currency: "USD" }
+      expense: { value: 99.75, currency: "USD" },
+      balanceDelta: { value: 150.25, currency: "USD" }
     }
   ]
 };
 
-function makeClient() {
+function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
   return {
-    archiveAccount: vi.fn(async () => liveSnapshot.accounts[0]),
-    archiveCategory: vi.fn(async () => liveSnapshot.categories[0]),
+    archiveAccount: vi.fn(async () => snapshot.accounts[0]),
+    archiveCategory: vi.fn(async () => snapshot.categories[0]),
     archiveOperation: vi.fn(async () => undefined),
     archiveTransfer: vi.fn(async () => undefined),
-    createDemoAccount: vi.fn(async () => liveSnapshot.accounts[0]),
-    createDemoCategory: vi.fn(async () => liveSnapshot.categories[0]),
-    createDemoOperation: vi.fn(async () => liveSnapshot.operations[0]),
-    createDemoTransfer: vi.fn(async () => liveSnapshot.transfers[0]),
+    createDemoAccount: vi.fn(async () => snapshot.accounts[0]),
+    createDemoCategory: vi.fn(async () => snapshot.categories[0]),
+    createDemoOperation: vi.fn(async () => snapshot.operations[0]),
+    createDemoTransfer: vi.fn(async () => snapshot.transfers[0]),
     deleteAccount: vi.fn(async () => undefined),
     deleteCategory: vi.fn(async () => undefined),
-    getDashboardSnapshot: vi.fn(async () => liveSnapshot),
-    restoreAccount: vi.fn(async () => liveSnapshot.accounts[0]),
-    restoreCategory: vi.fn(async () => liveSnapshot.categories[0]),
-    restoreOperation: vi.fn(async () => liveSnapshot.operations[0]),
-    restoreTransfer: vi.fn(async () => liveSnapshot.transfers[0]),
-    updateAccount: vi.fn(async () => liveSnapshot.accounts[0]),
-    updateCategory: vi.fn(async () => liveSnapshot.categories[0]),
-    updateOperation: vi.fn(async () => liveSnapshot.operations[0]),
-    updateTransfer: vi.fn(async () => liveSnapshot.transfers[0])
+    getDashboardSnapshot: vi.fn(async () => snapshot),
+    previewImportReport: vi.fn(async (input: ImportReportPreviewRequest) => ({
+      status: "preview_placeholder" as const,
+      canConfirm: false as const,
+      willChangeData: false as const,
+      message: "Файл не импортирован. Сейчас показана только предварительная сводка.",
+      scope: {
+        targetScope: input.targetScope,
+        householdId: input.householdId
+      },
+      file: {
+        fileName: input.fileName,
+        fileSizeBytes: input.fileSizeBytes,
+        mimeType: input.mimeType
+      },
+      summary: {
+        title: "Предварительный просмотр импорта",
+        statusText: "Импорт пока не выполняется",
+        sections: [
+          {
+            key: "accounts_assets" as const,
+            title: "Счета и активы",
+            status: "not_recognized_yet" as const,
+            text: "Будущий импорт сможет показать найденные счета и активы."
+          },
+          {
+            key: "transactions" as const,
+            title: "Операции",
+            status: "not_recognized_yet" as const,
+            text: "Операции не распознаны и не добавлены."
+          },
+          {
+            key: "categories" as const,
+            title: "Категории",
+            status: "not_recognized_yet" as const,
+            text: "Категории не распознаны и не созданы."
+          },
+          {
+            key: "transfers" as const,
+            title: "Переводы",
+            status: "not_recognized_yet" as const,
+            text: "Переводы не распознаны и не созданы."
+          },
+          {
+            key: "brokerage_deposits_metals" as const,
+            title: "Брокеры, вклады и металлы",
+            status: "not_recognized_yet" as const,
+            text: "Специальные активы пока не обрабатываются."
+          }
+        ]
+      },
+      warnings: [
+        {
+          code: "NO_DATA_CHANGES_WITHOUT_CONFIRMATION" as const,
+          text: "Данные не изменятся без подтверждения."
+        },
+        {
+          code: "NO_FILE_STORAGE_OR_PARSING" as const,
+          text: "Содержимое файла не сохраняется и не разбирается."
+        },
+        {
+          code: "PLACEHOLDER_ONLY" as const,
+          text: "Импорт пока не выполняется."
+        }
+      ]
+    })),
+    restoreAccount: vi.fn(async () => snapshot.accounts[0]),
+    restoreCategory: vi.fn(async () => snapshot.categories[0]),
+    restoreOperation: vi.fn(async () => snapshot.operations[0]),
+    restoreTransfer: vi.fn(async () => snapshot.transfers[0]),
+    updateAccount: vi.fn(async () => snapshot.accounts[0]),
+    updateCategory: vi.fn(async () => snapshot.categories[0]),
+    updateOperation: vi.fn(async () => snapshot.operations[0]),
+    updateTransfer: vi.fn(async () => snapshot.transfers[0])
   };
 }
 
-describe("PWA live shell", () => {
-  it("renders Russian finance shell with live API data", async () => {
+describe("PWA finance experience", () => {
+  it("renders the financial dashboard and hides technical wording", async () => {
     render(<App client={makeClient()} />);
 
-    expect(
-      await screen.findByRole("heading", { name: "Финансовая панель" })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Обзор/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Счета/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Категории/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Операции/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Переводы/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Отчеты/i })).toBeInTheDocument();
-    expect(screen.getByText("Dev Personal Cash")).toBeInTheDocument();
-    expect(screen.getByText("Dev household supplies")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Деньги" })).toBeInTheDocument();
+    expect(screen.getByText("Капитал")).toBeInTheDocument();
+    expect(screen.getByText("Расходы месяца")).toBeInTheDocument();
+    expect(screen.getByText("Доходы")).toBeInTheDocument();
+    expect(screen.getByText("Чистый поток")).toBeInTheDocument();
+    expect(screen.getByText("Группы активов")).toBeInTheDocument();
+    expect(screen.getByText("Топ категорий")).toBeInTheDocument();
+    expect(screen.getByText("Последние операции")).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    expect(within(nav).getByRole("button", { name: /Деньги/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Операции/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Счета и активы/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Категории/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Аналитика/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Настройки/i })).toBeInTheDocument();
+
+    expect(document.body).not.toHaveTextContent(
+      /MVP|CRUD|PATCH|Live API|session id|demo|E2E/i
+    );
   });
 
-  it("shows explicit Russian report mode vocabulary", async () => {
+  it("adds an expense from quick add", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "345");
+    await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
+
+    await waitFor(() => {
+      expect(client.createDemoOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: "account-1",
+          amount: 345,
+          categoryId: "category-1",
+          transactionType: "expense"
+        })
+      );
+    });
+    expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds a transfer from quick add without routing it through expense creation", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.click(within(sheet).getByRole("button", { name: /Перевод/i }));
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "125");
+    await user.selectOptions(within(sheet).getByLabelText("Откуда"), "account-1");
+    await user.selectOptions(within(sheet).getByLabelText("Куда"), "account-2");
+    await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
+
+    await waitFor(() => {
+      expect(client.createDemoTransfer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromAccountId: "account-1",
+          toAccountId: "account-2",
+          amount: 125
+        })
+      );
+    });
+    expect(client.createDemoOperation).not.toHaveBeenCalled();
+  });
+
+  it("preserves shared visibility when adding an asset from quick add", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.click(within(sheet).getByRole("button", { name: /Актив/i }));
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "222");
+    await user.selectOptions(within(sheet).getByLabelText("Тип"), "deposit");
+    await user.click(within(sheet).getByText("Еще"));
+    await user.click(within(sheet).getByLabelText("Общее"));
+    await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
+
+    await waitFor(() => {
+      expect(client.createDemoAccount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "deposit",
+          initialBalance: 222,
+          ownershipType: "shared"
+        })
+      );
+    });
+    expect(client.createDemoOperation).not.toHaveBeenCalled();
+  });
+
+  it("keeps transfers out of monthly spending", async () => {
+    render(<App client={makeClient()} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const spendingMetric = screen.getByText("Расходы месяца").closest("article");
+
+    expect(spendingMetric).toHaveTextContent("70");
+    expect(spendingMetric).not.toHaveTextContent("95");
+    expect(screen.getByText("Карта Мир → Вклад")).toBeInTheDocument();
+  });
+
+  it("navigates to assets, categories and analytics", async () => {
     const user = userEvent.setup();
     render(<App client={makeClient()} />);
 
-    await screen.findByRole("heading", { name: "Финансовая панель" });
-    await user.click(screen.getByRole("button", { name: /Отчеты/i }));
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Счета и активы/i }));
+    expect(screen.getByRole("heading", { level: 2, name: "Счета и активы" })).toBeInTheDocument();
+    expect(screen.getByText("Карта Мир")).toBeInTheDocument();
 
-    expect(
-      screen.getByRole("button", { name: "Общий семейный отчет" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Сводный обзор участника" })
-    ).toBeInTheDocument();
+    await user.click(within(nav).getByRole("button", { name: /Категории/i }));
+    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByText("Продукты")).toBeInTheDocument();
+
+    await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
+    expect(screen.getByRole("heading", { level: 2, name: "Аналитика" })).toBeInTheDocument();
+    expect(screen.getByText("Итог")).toBeInTheDocument();
   });
 
-  it("exposes account, category, operation and transfer lifecycle controls", async () => {
+  it("opens operations, assets and categories from the mobile bottom navigation", async () => {
     const user = userEvent.setup();
     render(<App client={makeClient()} />);
 
-    await screen.findByRole("heading", { name: "Финансовая панель" });
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Нижняя навигация" });
+    await user.click(screen.getByTestId("mobile-nav-operations"));
+    expect(screen.getByRole("heading", { level: 2, name: "Операции" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Счета/i }));
-    expect(screen.getByText("CRUD / архив / восстановление счета")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Создать/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Обновить/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Архив/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Удалить/i })).toBeEnabled();
+    await user.click(screen.getByTestId("mobile-nav-assets"));
+    expect(screen.getByRole("heading", { level: 2, name: "Счета и активы" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Категории/i }));
-    expect(screen.getByText("CRUD / архив / восстановление категории")).toBeInTheDocument();
+    await user.click(within(nav).getByRole("button", { name: /Категории/i }));
 
-    await user.click(screen.getByRole("button", { name: /Операции/i }));
-    expect(screen.getByText("CRUD / архив / восстановление операции")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByText("Продукты")).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: /Переводы/i }));
-    expect(
-      screen.getByText("Ручной перевод: создать / обновить / удалить / восстановить")
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("transfer-count")).toHaveTextContent("1 между счетами");
-    expect(screen.getByTestId("transfer-row")).toHaveTextContent("Dev Personal Cash");
+  it("keeps mobile quick add controls and import controls clickable", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByTestId("mobile-quick-add"));
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+    await user.click(screen.getByTestId("quick-add-more"));
+    expect(within(sheet).getByLabelText("Дата")).toBeInTheDocument();
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "456");
+    await user.click(screen.getByTestId("quick-add-submit"));
+
+    await waitFor(() => {
+      expect(client.createDemoOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 456,
+          transactionType: "expense"
+        })
+      );
+    });
+
+    const nav = screen.getByRole("navigation", { name: "Нижняя навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Операции/i }));
+    await user.upload(
+      screen.getByLabelText("Файл отчета"),
+      new File(["placeholder only"], "mobile-statement.csv", { type: "text/csv" })
+    );
+    await user.click(screen.getByRole("button", { name: /Показать сводку/i }));
+
+    await waitFor(() => expect(client.previewImportReport).toHaveBeenCalled());
+  });
+
+  it("shows report import placeholder without changing data", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
+
+    expect(screen.getByRole("heading", { name: "Импорт отчета" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Тип отчета"), "brokerage_report");
+    await user.upload(
+      screen.getByLabelText("Файл отчета"),
+      new File(["placeholder only"], "broker-report.csv", { type: "text/csv" })
+    );
+    await user.click(screen.getByRole("button", { name: /Показать сводку/i }));
+
+    await waitFor(() => {
+      expect(client.previewImportReport).toHaveBeenCalledWith({
+        reportType: "brokerage_report",
+        sourceType: "file_metadata_only",
+        targetScope: "personal",
+        householdId: null,
+        fileName: "broker-report.csv",
+        fileSizeBytes: 16,
+        mimeType: "text/csv"
+      });
+    });
+    const preview = screen.getByLabelText("Предварительный просмотр импорта");
+    expect(preview).toHaveTextContent(
+      "Импорт пока не выполняется"
+    );
+    expect(screen.getByText("Данные не изменятся без подтверждения.")).toBeInTheDocument();
+    expect(screen.getAllByText("Содержимое файла не сохраняется и не разбирается.").length).toBeGreaterThan(0);
+    expect(within(preview).getByText("Счета и активы")).toBeInTheDocument();
+    expect(within(preview).getByText("Операции")).toBeInTheDocument();
+    expect(within(preview).getByText("Категории")).toBeInTheDocument();
+    expect(within(preview).getByText("Переводы")).toBeInTheDocument();
+    expect(within(preview).getByText("Брокеры, вклады и металлы")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/Импорт выполнен|Мы распознали операции|CRUD|endpoint/i);
+  });
+
+  it("shows explicit personal, shared and overview modes without technical wording", async () => {
+    const user = userEvent.setup();
+    render(<App client={makeClient()} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const modeSwitch = screen.getByRole("group", { name: "Режим просмотра" });
+    expect(within(modeSwitch).getByRole("button", { name: /Личное/i })).toBeInTheDocument();
+    expect(within(modeSwitch).getByRole("button", { name: /Общее/i })).toBeInTheDocument();
+    expect(within(modeSwitch).getByRole("button", { name: /Обзор/i })).toBeInTheDocument();
+    expect(screen.getByText("Личное видно только вам")).toBeInTheDocument();
+    expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
+    expect(screen.queryByText("Домашняя покупка")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Общее/i }));
+    expect(screen.getByText("Общее для семьи")).toBeInTheDocument();
+    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
+    expect(screen.queryByText("Покупка продуктов")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Обзор/i }));
+    expect(screen.getByText("Сводный обзор")).toBeInTheDocument();
+    expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
+    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/combined_viewer_overview|shared_family_report/i);
   });
 });

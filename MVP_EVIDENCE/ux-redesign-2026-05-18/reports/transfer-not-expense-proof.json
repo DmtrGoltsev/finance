@@ -1,0 +1,19 @@
+﻿{
+    "checkedAt":  "2026-05-18T20:41:06.9694780+03:00",
+    "sharedExpenseTotal":  "69.7500",
+    "sharedIncomeTotal":  "5.0000",
+    "overviewExpenseTotal":  "69.7500",
+    "overviewIncomeTotal":  "262.5000",
+    "transferRowsInFilteredReport":  1,
+    "transactionTypes":  [
+                             "dividend:1",
+                             "interest:1",
+                             "asset_buy:1",
+                             "transfer:1",
+                             "income:1",
+                             "expense:1"
+                         ],
+    "transferAmounts":  [
+                            "25.00"
+                        ]
+}

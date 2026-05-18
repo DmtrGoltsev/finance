@@ -1,0 +1,230 @@
+{
+  "ok": true,
+  "pwaUrl": "http://127.0.0.1:63518/",
+  "checks": [
+    {
+      "name": "PWA loaded",
+      "ok": true,
+      "details": "http://127.0.0.1:63518/"
+    },
+    {
+      "name": "tap FAB for Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap kind Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill amount Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select category Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap Еще Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill comment Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap submit Расход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap FAB for Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap kind Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill amount Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select category Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap Еще Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill comment Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap submit Доход",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap FAB for Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap kind Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill amount Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select transfer from",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select transfer to",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap Еще Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill comment Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap submit Перевод",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "transfer does not increase Расходы месяца",
+      "ok": true,
+      "details": "before=1 555 $; after=1 555 $"
+    },
+    {
+      "name": "tap FAB for Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap kind Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill amount Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select asset type",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap Еще Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "fill comment Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap submit Актив",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap nav Операции",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "heading Операции visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap nav Активы",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "heading Счета и активы visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap nav Категории",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "heading Категории visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap nav Аналитика",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "heading Аналитика visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "select import report type",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "set import fixture file",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "tap import preview submit",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "import preview metadata only",
+      "ok": true,
+      "details": "{\"reportType\":\"bank_statement\",\"sourceType\":\"file_metadata_only\",\"targetScope\":\"personal\",\"householdId\":null,\"fileName\":\"iphone-flow-import-sample.csv\",\"fileSizeBytes\":26,\"mimeType\":\"text/csv\"}"
+    }
+  ],
+  "importRequest": {
+    "reportType": "bank_statement",
+    "sourceType": "file_metadata_only",
+    "targetScope": "personal",
+    "householdId": null,
+    "fileName": "iphone-flow-import-sample.csv",
+    "fileSizeBytes": 26,
+    "mimeType": "text/csv"
+  }
+}

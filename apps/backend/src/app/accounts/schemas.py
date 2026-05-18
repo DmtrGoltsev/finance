@@ -34,8 +34,11 @@ class OwnershipType(StrEnum):
 class AccountType(StrEnum):
     CASH = "cash"
     BANK = "bank"
+    CARD = "card"
     DEPOSIT = "deposit"
     BROKERAGE = "brokerage"
+    METAL = "metal"
+    OTHER = "other"
 
 
 class RecordStatus(StrEnum):

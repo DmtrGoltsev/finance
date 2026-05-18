@@ -1,0 +1,8 @@
+﻿{
+    "scope":  "clean seed android-window XML, excluding inherited polluted pre-restart captures 00/01",
+    "patterns":  "CRUD|PATCH|Live API|session id|MVP|Manual-first",
+    "fileCount":  30,
+    "matches":  [
+
+                ]
+}

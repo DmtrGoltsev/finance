@@ -1,0 +1,16 @@
+﻿{
+    "scannedFiles":  26,
+    "forbiddenTerms":  [
+                           "Dev",
+                           "CRUD",
+                           "PATCH",
+                           "Live API",
+                           "session id",
+                           "MVP",
+                           "Manual-first"
+                       ],
+    "findings":  [
+
+                 ],
+    "pass":  true
+}

@@ -151,6 +151,54 @@ def test_report_breakdown_cash_flow_and_detail_drilldown_are_visible_only(
     _assert_report_response_has_no_hidden_signals(cash_flow)
 
 
+def test_report_totals_keep_transfers_and_asset_ops_out_of_spending(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    params = _params(transaction_graph, "shared_family_report")
+
+    with _client_for_actor(owner) as client:
+        transfer = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "transfer",
+                "accountId": transaction_graph["accounts"]["acc_ab_cash"],
+                "counterpartyAccountId": transaction_graph["accounts"]["acc_ab_savings"],
+                "amount": "3.0000",
+                "currency": "RUB",
+                "occurredAt": "2026-05-17T14:00:00+00:00",
+                "sourceType": "manual",
+            },
+        )
+        asset_buy = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "asset_buy",
+                "accountId": transaction_graph["accounts"]["acc_ab_savings"],
+                "amount": "4.0000",
+                "currency": "RUB",
+                "occurredAt": "2026-05-17T14:15:00+00:00",
+                "sourceType": "manual",
+            },
+        )
+        summary = client.get("/api/v1/reports/summary", params=params)
+        breakdown = client.get("/api/v1/reports/category-breakdown", params=params)
+
+    assert transfer.status_code == 201
+    assert asset_buy.status_code == 201
+    assert summary.status_code == 200
+    rub = _summary_by_currency(summary.json())["RUB"]
+    assert rub["incomeTotal"] == "15.0000"
+    assert rub["expenseTotal"] == "16.0000"
+    assert rub["transferTotal"] == "3.0000"
+    assert rub["netCashFlow"] == "-1.0000"
+    assert rub["netTotal"] == "-1.0000"
+    assert {
+        item["categoryType"]
+        for item in breakdown.json()["data"]["expensesByCategory"]
+    } == {"expense"}
+
+
 def test_non_members_invited_and_former_get_neutral_report_denials(
     transaction_graph: dict[str, Any],
 ) -> None:

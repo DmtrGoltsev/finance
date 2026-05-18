@@ -18,6 +18,9 @@ This scaffold intentionally contains README and ignore files only. Do not add `p
 
 - `docs/architecture/decision-records/adr-0001-stack-repo-layout.md`
 - `docs/architecture/wave-2-implementation-plan.md`
+- `docs/product/ux-quorum-design-decision-ru.md`
+- `docs/user-guide-ru.md`
+- `MVP_EVIDENCE/reports/2026-05-18_ux-screenshot-checklist.md`
 - Wave 1 architecture, security, compliance, and testing docs under `docs/**`
 
 ## Privacy Invariants

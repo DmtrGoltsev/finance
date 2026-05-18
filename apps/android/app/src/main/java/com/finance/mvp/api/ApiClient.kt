@@ -27,7 +27,13 @@ interface FinanceApiClient {
     suspend fun login(email: String, password: String): ApiResult<SessionStatus>
     suspend fun sessionStatus(): ApiResult<SessionStatus>
     suspend fun dashboard(): ApiResult<FinanceDashboard>
-    suspend fun createDemoAccount(householdId: String?, currency: String): ApiResult<AccountSummary>
+    suspend fun createDemoAccount(
+        householdId: String?,
+        currency: String,
+        initialBalance: String = "12.34",
+        accountType: String = "cash",
+        ownershipType: String = if (householdId.isNullOrBlank()) "personal" else "shared",
+    ): ApiResult<AccountSummary>
     suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary>
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
@@ -35,11 +41,21 @@ interface FinanceApiClient {
     suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary>
     suspend fun archiveCategory(categoryId: String): ApiResult<CategorySummary>
     suspend fun restoreCategory(categoryId: String): ApiResult<CategorySummary>
-    suspend fun createDemoTransaction(account: AccountSummary, category: CategorySummary?): ApiResult<TransactionSummary>
+    suspend fun createDemoTransaction(
+        account: AccountSummary,
+        category: CategorySummary?,
+        transactionType: String = "expense",
+        amount: String = "17.00",
+    ): ApiResult<TransactionSummary>
     suspend fun updateTransaction(transaction: TransactionSummary): ApiResult<TransactionSummary>
     suspend fun deleteTransaction(transactionId: String): ApiResult<Unit>
     suspend fun restoreTransaction(transactionId: String): ApiResult<TransactionSummary>
-    suspend fun createDemoTransfer(source: AccountSummary, destination: AccountSummary): ApiResult<TransactionSummary>
+    suspend fun createDemoTransfer(
+        source: AccountSummary,
+        destination: AccountSummary,
+        amount: String = "1.00",
+    ): ApiResult<TransactionSummary>
+    suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse>
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -77,6 +93,8 @@ data class CategorySummary(
     val id: String = "",
     val householdId: String? = null,
     val status: String = "active",
+    val iconKey: String = "",
+    val color: String = "",
     val version: Int? = null,
 )
 
@@ -101,6 +119,23 @@ data class MoneyTotal(
     val incomeTotal: String,
     val expenseTotal: String,
     val netTotal: String,
+)
+
+data class ImportReportPreviewRequest(
+    val reportType: String,
+    val targetScope: String,
+    val householdId: String? = null,
+    val fileName: String? = null,
+    val fileSizeBytes: Long? = null,
+    val mimeType: String? = null,
+    val sourceType: String = "file_metadata_only",
+)
+
+data class ImportReportPreviewResponse(
+    val status: String,
+    val canConfirm: Boolean,
+    val willChangeData: Boolean,
+    val message: String,
 )
 
 sealed interface ApiResult<out T> {
@@ -181,17 +216,26 @@ class LiveFinanceApiClient(
         )
     }
 
-    override suspend fun createDemoAccount(householdId: String?, currency: String): ApiResult<AccountSummary> = safeCall {
+    override suspend fun createDemoAccount(
+        householdId: String?,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        ownershipType: String,
+    ): ApiResult<AccountSummary> = safeCall {
         val stamp = System.currentTimeMillis().toString().takeLast(6)
         request(
             path = "/api/v1/accounts",
             method = "POST",
             body = JSONObject()
-                .put("name", "Android CRUD счет $stamp")
-                .put("accountType", "cash")
-                .put("ownershipType", "personal")
+                .put("name", "Новый актив $stamp")
+                .put("accountType", accountType)
+                .put("ownershipType", normalizeAccountOwnershipType(ownershipType))
+                .apply {
+                    accountHouseholdIdForOwnership(householdId, ownershipType)?.let { put("householdId", it) }
+                }
                 .put("currency", currency)
-                .put("initialBalance", "12.3400")
+                .put("initialBalance", initialBalance)
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         ).dataObject().let(::parseAccount)
@@ -226,9 +270,10 @@ class LiveFinanceApiClient(
             path = "/api/v1/categories",
             method = "POST",
             body = JSONObject()
-                .put("name", "Android CRUD категория $stamp")
+                .put("name", "Новая категория $stamp")
                 .put("type", "expense")
-                .put("scope", "personal")
+                .put("scope", categoryScopeForHousehold(householdId))
+                .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
                 .put("iconKey", "android")
                 .put("color", "#2E7D32")
                 .toString(),
@@ -263,18 +308,20 @@ class LiveFinanceApiClient(
     override suspend fun createDemoTransaction(
         account: AccountSummary,
         category: CategorySummary?,
+        transactionType: String,
+        amount: String,
     ): ApiResult<TransactionSummary> = safeCall {
         request(
             path = "/api/v1/transactions",
             method = "POST",
             body = JSONObject()
-                .put("transactionType", "expense")
+                .put("transactionType", transactionType)
                 .put("accountId", account.id)
                 .apply { category?.id?.takeIf { it.isNotBlank() }?.let { put("categoryId", it) } }
-                .put("amount", "17.0000")
+                .put("amount", amount)
                 .put("currency", account.currency)
                 .put("occurredAt", nowIso())
-                .put("description", "Android lifecycle: создано")
+                .put("description", category?.name ?: if (transactionType == "income") "Доход" else "Расход")
                 .put("sourceType", "manual")
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
@@ -287,7 +334,7 @@ class LiveFinanceApiClient(
             method = "PATCH",
             body = JSONObject()
                 .put("amount", "18.0000")
-                .put("description", "Android lifecycle: обновлено")
+                .put("description", "Операция обновлена")
                 .apply { transaction.version?.let { put("version", it) } }
                 .toString(),
         ).dataObject().let(::parseTransaction)
@@ -311,6 +358,7 @@ class LiveFinanceApiClient(
     override suspend fun createDemoTransfer(
         source: AccountSummary,
         destination: AccountSummary,
+        amount: String,
     ): ApiResult<TransactionSummary> = safeCall {
         request(
             path = "/api/v1/transactions",
@@ -319,14 +367,34 @@ class LiveFinanceApiClient(
                 .put("transactionType", "transfer")
                 .put("accountId", source.id)
                 .put("counterpartyAccountId", destination.id)
-                .put("amount", "1.0000")
+                .put("amount", amount)
                 .put("currency", source.currency)
                 .put("occurredAt", nowIso())
-                .put("description", "Android transfer lifecycle")
+                .put("description", "Между счетами")
                 .put("sourceType", "manual")
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         ).dataObject().let(::parseTransaction)
+    }
+
+    override suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse> = safeCall {
+        val body = JSONObject()
+            .put("reportType", request.reportType)
+            .put("sourceType", "file_metadata_only")
+            .put("targetScope", request.targetScope)
+            .put("householdId", request.householdId)
+            .apply {
+                request.fileName?.take(255)?.let { put("fileName", it) }
+                request.fileSizeBytes?.takeIf { it >= 0 }?.let { put("fileSizeBytes", it) }
+                request.mimeType?.let { put("mimeType", it) }
+            }
+            .toString()
+
+        request(
+            path = "/api/v1/imports/report-preview",
+            method = "POST",
+            body = body,
+        ).let(::parseImportReportPreview)
     }
 
     override suspend fun logout(): ApiResult<Unit> = safeCall {
@@ -422,7 +490,7 @@ private fun parseSession(json: JSONObject): SessionStatus {
 
 private fun parseAccount(json: JSONObject): AccountSummary {
     return AccountSummary(
-        name = json.optString("name", "Счет"),
+        name = userFacingSeedText(json.optString("name", "Счет")),
         type = json.optString("accountType"),
         ownershipType = json.optString("ownershipType"),
         currency = json.optString("currency"),
@@ -436,12 +504,14 @@ private fun parseAccount(json: JSONObject): AccountSummary {
 
 private fun parseCategory(json: JSONObject): CategorySummary {
     return CategorySummary(
-        name = json.optString("name", "Категория"),
+        name = userFacingSeedText(json.optString("name", "Категория")),
         type = json.optString("type"),
         scope = json.optString("scope"),
         id = json.optString("id"),
         householdId = json.optString("householdId").takeIf { it.isNotBlank() && it != "null" },
         status = json.optString("status", "active"),
+        iconKey = json.optString("iconKey"),
+        color = json.optString("color"),
         version = json.optIntOrNull("version"),
     )
 }
@@ -452,7 +522,8 @@ private fun parseTransaction(json: JSONObject): TransactionSummary {
         amount = json.optString("amount"),
         currency = json.optString("currency"),
         occurredAt = json.optString("occurredAt"),
-        description = json.optString("description").takeIf { it.isNotBlank() && it != "null" },
+        description = userFacingSeedText(json.optString("description"))
+            .takeIf { it.isNotBlank() && it != "null" },
         transferScope = json.optString("transferScope").takeIf { it.isNotBlank() && it != "null" },
         transferStatus = json.optString("transferStatus").takeIf { it.isNotBlank() && it != "null" },
         id = json.optString("id"),
@@ -471,6 +542,49 @@ private fun parseMoneyTotal(json: JSONObject): MoneyTotal {
         expenseTotal = json.optString("expenseTotal"),
         netTotal = json.optString("netTotal"),
     )
+}
+
+private fun parseImportReportPreview(json: JSONObject): ImportReportPreviewResponse {
+    return ImportReportPreviewResponse(
+        status = json.optString("status", "preview_placeholder"),
+        canConfirm = json.optBoolean("canConfirm", false),
+        willChangeData = json.optBoolean("willChangeData", false),
+        message = json.optString("message", "Файл не импортирован. Сейчас показана только предварительная сводка."),
+    )
+}
+
+internal fun normalizeAccountOwnershipType(value: String): String {
+    return if (value == "shared") "shared" else "personal"
+}
+
+internal fun categoryScopeForHousehold(householdId: String?): String {
+    return if (householdId.isNullOrBlank()) "personal" else "household"
+}
+
+internal fun userFacingSeedText(value: String?): String {
+    val trimmed = value?.trim().orEmpty()
+    val labels = mapOf(
+        "Dev Personal Cash" to "Личные наличные",
+        "Dev Household Card" to "Семейная карта",
+        "Dev Household Deposit" to "Общий вклад",
+        "Dev Brokerage" to "Брокерский счет",
+        "Dev Metal" to "Металлы",
+        "Dev Groceries" to "Продукты",
+        "Dev Home" to "Дом",
+        "Dev Salary" to "Зарплата",
+        "Dev household supplies" to "Домашние покупки",
+        "Dev sample income" to "Зарплата",
+        "Dev same-household transfer" to "Между общими счетами",
+        "Dev brokerage asset buy" to "Покупка актива",
+        "Dev deposit interest" to "Проценты по вкладу",
+        "Dev brokerage dividend" to "Дивиденды",
+    )
+
+    return labels[trimmed] ?: trimmed.replace(Regex("^Dev\\s+", RegexOption.IGNORE_CASE), "")
+}
+
+internal fun accountHouseholdIdForOwnership(householdId: String?, ownershipType: String): String? {
+    return householdId?.takeIf { normalizeAccountOwnershipType(ownershipType) == "shared" && it.isNotBlank() }
 }
 
 private fun JSONObject.items(): List<JSONObject> = optJSONArray("items")?.toObjectList() ?: emptyList()

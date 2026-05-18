@@ -1,0 +1,392 @@
+{
+  "pwaUrl": "http://127.0.0.1:63518/",
+  "environment": {
+    "device": "Playwright Chromium iPhone 14",
+    "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1",
+    "mockApi": false
+  },
+  "probes": [
+    {
+      "name": "FAB",
+      "box": {
+        "x": 318,
+        "y": 534,
+        "width": 54,
+        "height": 54
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 318,
+        "top": 534,
+        "right": 372,
+        "bottom": 588,
+        "width": 54,
+        "height": 54
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "fab",
+        "testId": "mobile-quick-add",
+        "zIndex": "110",
+        "pointerEvents": "auto",
+        "position": "fixed",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "path",
+        "className": {},
+        "testId": null,
+        "text": "",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "nav-money",
+      "box": {
+        "x": 6,
+        "y": 605,
+        "width": 75.59375,
+        "height": 52
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 6,
+        "top": 605,
+        "right": 81.59375,
+        "bottom": 657,
+        "width": 75.59375,
+        "height": 52
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "active",
+        "testId": "mobile-nav-money",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "active",
+        "testId": "mobile-nav-money",
+        "text": "Деньги",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "nav-operations",
+      "box": {
+        "x": 81.59375,
+        "y": 605,
+        "width": 75.59375,
+        "height": 52
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 81.59375,
+        "top": 605,
+        "right": 157.1875,
+        "bottom": 657,
+        "width": 75.59375,
+        "height": 52
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-operations",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-operations",
+        "text": "Операции",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "nav-assets",
+      "box": {
+        "x": 157.1875,
+        "y": 605,
+        "width": 75.609375,
+        "height": 52
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 157.1875,
+        "top": 605,
+        "right": 232.796875,
+        "bottom": 657,
+        "width": 75.609375,
+        "height": 52
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-assets",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-assets",
+        "text": "Активы",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "nav-categories",
+      "box": {
+        "x": 232.796875,
+        "y": 605,
+        "width": 75.59375,
+        "height": 52
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 232.796875,
+        "top": 605,
+        "right": 308.390625,
+        "bottom": 657,
+        "width": 75.59375,
+        "height": 52
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-categories",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-categories",
+        "text": "Категории",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "nav-analytics",
+      "box": {
+        "x": 308.390625,
+        "y": 605,
+        "width": 75.59375,
+        "height": 52
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 308.390625,
+        "top": 605,
+        "right": 383.984375,
+        "bottom": 657,
+        "width": 75.59375,
+        "height": 52
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-analytics",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static",
+        "display": "grid",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "",
+        "testId": "mobile-nav-analytics",
+        "text": "Аналитика",
+        "zIndex": "auto",
+        "pointerEvents": "auto",
+        "position": "static"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "quick-add-more",
+      "box": {
+        "x": 27,
+        "y": 539,
+        "width": 336,
+        "height": 42
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 27,
+        "top": 539,
+        "right": 363,
+        "bottom": 581,
+        "width": 336,
+        "height": 42
+      },
+      "element": {
+        "tag": "SUMMARY",
+        "className": "",
+        "testId": "quick-add-more",
+        "zIndex": "2",
+        "pointerEvents": "auto",
+        "position": "relative",
+        "display": "flex",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "SUMMARY",
+        "className": "",
+        "testId": "quick-add-more",
+        "text": "Еще",
+        "zIndex": "2",
+        "pointerEvents": "auto",
+        "position": "relative"
+      },
+      "containsHit": true
+    },
+    {
+      "name": "quick-add-submit",
+      "box": {
+        "x": 16,
+        "y": 604,
+        "width": 358,
+        "height": 42
+      },
+      "viewport": {
+        "width": 390,
+        "height": 664,
+        "visualWidth": 390,
+        "visualHeight": 664,
+        "scale": 1
+      },
+      "rect": {
+        "left": 16,
+        "top": 604,
+        "right": 374,
+        "bottom": 646,
+        "width": 358,
+        "height": 42
+      },
+      "element": {
+        "tag": "BUTTON",
+        "className": "submitButton",
+        "testId": "quick-add-submit",
+        "zIndex": "2",
+        "pointerEvents": "auto",
+        "position": "relative",
+        "display": "flex",
+        "visibility": "visible"
+      },
+      "hit": {
+        "tag": "BUTTON",
+        "className": "submitButton",
+        "testId": "quick-add-submit",
+        "text": "Готово",
+        "zIndex": "2",
+        "pointerEvents": "auto",
+        "position": "relative"
+      },
+      "containsHit": true
+    }
+  ],
+  "clicks": [
+    {
+      "name": "tap FAB",
+      "ok": true
+    },
+    {
+      "name": "tap Quick Add More",
+      "ok": true
+    },
+    {
+      "name": "tap Quick Add Submit",
+      "ok": true
+    },
+    {
+      "name": "tap nav-operations",
+      "ok": true
+    },
+    {
+      "name": "tap nav-assets",
+      "ok": true
+    },
+    {
+      "name": "tap nav-categories",
+      "ok": true
+    },
+    {
+      "name": "tap nav-analytics",
+      "ok": true
+    }
+  ]
+}

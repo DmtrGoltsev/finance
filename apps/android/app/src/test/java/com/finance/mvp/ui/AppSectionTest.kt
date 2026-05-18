@@ -6,64 +6,244 @@ import com.finance.mvp.api.FinanceDashboard
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
+import java.math.BigDecimal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppSectionTest {
     @Test
-    fun exposesManualFirstMvpSections() {
-        val titles = mvpSections().map { it.title }
+    fun exposesFourMobileFinanceSections() {
+        val titles = financeSections().map { it.title }
 
-        assertEquals(
-            listOf("Обзор", "Счета", "Категории", "Операции", "Переводы", "Отчеты"),
-            titles,
+        assertEquals(listOf("Главная", "Операции", "Активы", "Аналитика"), titles)
+    }
+
+    @Test
+    fun sectionTextDoesNotExposeDebugLanguage() {
+        val allText = financeSections().joinToString(" ") { "${it.title} ${it.subtitle}" }
+
+        listOf("MVP", "CRUD", "PATCH", "Live API", "session id", "E2E").forEach { forbidden ->
+            assertFalse(allText.contains(forbidden, ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun transfersAreSeparateFromMonthlyExpenses() {
+        val dashboard = dashboardFixture()
+
+        val view = dashboard.viewFor(FinanceMode.Overview)
+
+        assertEquals(BigDecimal("69.75"), view.monthExpenses)
+        assertEquals(BigDecimal("25.00"), view.transferTotal)
+        assertTrue(sectionCards(AppSection.Home, dashboard).joinToString(" ") { it.status }.contains("переводы отдельно"))
+    }
+
+    @Test
+    fun capitalIncludesDepositsBrokerageAndMetalAssets() {
+        val dashboard = dashboardFixture()
+
+        val view = dashboard.viewFor(FinanceMode.Overview)
+
+        assertEquals(BigDecimal("3525.50"), view.capital)
+        assertTrue(view.assetSummaries.any { it.kind == AssetKind.Card && it.balance == BigDecimal("925.50") })
+        assertTrue(view.assetSummaries.any { it.kind == AssetKind.Deposit && it.balance == BigDecimal("100.00") })
+        assertTrue(view.assetSummaries.any { it.kind == AssetKind.Brokerage && it.balance == BigDecimal("2200.00") })
+        assertTrue(view.assetSummaries.any { it.kind == AssetKind.Metal && it.balance == BigDecimal("300.00") })
+    }
+
+    @Test
+    fun personalSharedAndOverviewModesFilterAccountsAndTransactions() {
+        val dashboard = dashboardFixture().copy(
+            accounts = dashboardFixture().accounts + AccountSummary(
+                "Семейный счет",
+                "bank",
+                "shared",
+                "USD",
+                "400.00",
+                id = "acc-shared",
+                householdId = "household",
+            ),
+            transactions = dashboardFixture().transactions + TransactionSummary(
+                type = "expense",
+                amount = "30.00",
+                currency = "USD",
+                occurredAt = "2026-05-18T10:00:00Z",
+                description = "Дом",
+                transferScope = null,
+                transferStatus = null,
+                id = "txn-shared",
+                accountId = "acc-shared",
+                categoryId = "cat-food",
+            ),
         )
+
+        val personal = dashboard.viewFor(FinanceMode.Personal)
+        val shared = dashboard.viewFor(FinanceMode.Shared)
+        val overview = dashboard.viewFor(FinanceMode.Overview)
+
+        assertEquals(BigDecimal("3525.50"), personal.capital)
+        assertEquals(2, personal.operationCount)
+        assertEquals(BigDecimal("400.00"), shared.capital)
+        assertEquals(1, shared.operationCount)
+        assertEquals(BigDecimal("3925.50"), overview.capital)
+        assertEquals(3, overview.operationCount)
     }
 
     @Test
-    fun excludesNonMvpBankingSurfaces() {
-        val allText = mvpSections().joinToString(" ") { "${it.title} ${it.subtitle}" }
+    fun reportModeAggregationDoesNotFallbackAcrossPersonalAndSharedScopes() {
+        val dashboard = dashboardFixture().copy(
+            accounts = listOf(
+                AccountSummary("Личная карта", "card", "personal", "USD", "100.00", id = "acc-personal"),
+                AccountSummary(
+                    "Семейный счет",
+                    "bank",
+                    "shared",
+                    "USD",
+                    "200.00",
+                    id = "acc-shared",
+                    householdId = "household",
+                ),
+            ),
+            transactions = listOf(
+                TransactionSummary(
+                    type = "income",
+                    amount = "250.00",
+                    currency = "USD",
+                    occurredAt = "2026-05-18T08:00:00Z",
+                    description = "Зарплата",
+                    transferScope = null,
+                    transferStatus = null,
+                    id = "txn-personal-income",
+                    accountId = "acc-personal",
+                    categoryId = "cat-food",
+                ),
+                TransactionSummary(
+                    type = "expense",
+                    amount = "30.00",
+                    currency = "USD",
+                    occurredAt = "2026-05-18T10:00:00Z",
+                    description = "Дом",
+                    transferScope = null,
+                    transferStatus = null,
+                    id = "txn-shared-expense",
+                    accountId = "acc-shared",
+                    categoryId = "cat-food",
+                ),
+            ),
+            totals = listOf(MoneyTotal("USD", "250.00", "30.00", "220.00")),
+        )
 
-        assertTrue(!allText.contains("SMS", ignoreCase = true))
-        assertTrue(!allText.contains("push", ignoreCase = true))
-        assertTrue(!allText.contains("broker", ignoreCase = true))
-        assertTrue(!allText.contains("импорт", ignoreCase = true))
-        assertTrue(!allText.contains("банк", ignoreCase = true))
+        val personal = dashboard.viewFor(FinanceMode.Personal)
+        val shared = dashboard.viewFor(FinanceMode.Shared)
+
+        assertEquals(BigDecimal("250.00"), personal.monthIncome)
+        assertEquals(BigDecimal.ZERO, personal.monthExpenses)
+        assertEquals(BigDecimal.ZERO, shared.monthIncome)
+        assertEquals(BigDecimal("30.00"), shared.monthExpenses)
     }
 
     @Test
-    fun exposesTransferProofInOverviewOperationsAndReports() {
-        val dashboard = FinanceDashboard(
-            session = SessionStatus(true, "Пользователь demo", "household"),
-            accounts = listOf(AccountSummary("Наличные", "cash", "personal", "USD", "925.50")),
-            categories = listOf(CategorySummary("Продукты", "expense", "personal")),
+    fun invalidTransferPairsReturnActionableMessages() {
+        val personal = AccountSummary("Личная карта", "card", "personal", "USD", "10.00", id = "personal")
+        val shared = AccountSummary(
+            "Семейный счет",
+            "bank",
+            "shared",
+            "USD",
+            "10.00",
+            id = "shared",
+            householdId = "household",
+        )
+        val eur = personal.copy(id = "eur", currency = "EUR")
+
+        assertEquals("Нужны два счета для перевода", transferPairValidationMessage(personal, null))
+        assertEquals("Выберите два разных счета", transferPairValidationMessage(personal, personal))
+        assertEquals("Перевод между личным и общим недоступен. Выберите счета одного режима.", transferPairValidationMessage(personal, shared))
+        assertEquals("Перевод между разными валютами недоступен", transferPairValidationMessage(personal, eur))
+        assertEquals(null, transferPairValidationMessage(personal, personal.copy(id = "personal-2")))
+    }
+
+    @Test
+    fun sectionCardsDoNotExposeDevSeedText() {
+        val dashboard = dashboardFixture().copy(
+            categories = listOf(
+                CategorySummary("Dev Home", "expense", "household", id = "cat-home", iconKey = "home", color = "#E35D4F"),
+            ),
+            transactions = listOf(
+                TransactionSummary(
+                    type = "expense",
+                    amount = "69.75",
+                    currency = "USD",
+                    occurredAt = "2026-05-17T12:30:00Z",
+                    description = "Dev household supplies",
+                    transferScope = null,
+                    transferStatus = null,
+                    id = "txn-expense",
+                    accountId = "acc-card",
+                    categoryId = "cat-home",
+                ),
+            ),
+        )
+
+        val renderedText = buildString {
+            append(sectionCards(AppSection.Operations, dashboard).joinToString(" ") { "${it.title} ${it.body} ${it.status}" })
+            append(" ")
+            append(sectionCards(AppSection.Analytics, dashboard).joinToString(" ") { "${it.title} ${it.body} ${it.status}" })
+        }
+
+        assertFalse(renderedText.contains("Dev ", ignoreCase = true))
+        assertTrue(renderedText.contains("Домашние покупки"))
+        assertTrue(renderedText.contains("Дом"))
+    }
+
+    @Test
+    fun assetKindsUseBackendAccountTypeValues() {
+        assertEquals("card", AssetKind.Card.apiValue)
+        assertEquals("metal", AssetKind.Metal.apiValue)
+    }
+
+    private fun dashboardFixture(): FinanceDashboard {
+        return FinanceDashboard(
+            session = SessionStatus(true, "Пользователь", "household"),
+            accounts = listOf(
+                AccountSummary("Карта", "card", "personal", "USD", "925.50", id = "acc-card"),
+                AccountSummary("Вклад", "deposit", "personal", "USD", "100.00", id = "acc-save"),
+                AccountSummary("Брокер", "brokerage", "personal", "USD", "2200.00", id = "acc-broker"),
+                AccountSummary("Металл", "metal", "personal", "USD", "300.00", id = "acc-metal"),
+            ),
+            categories = listOf(
+                CategorySummary("Продукты", "expense", "personal", id = "cat-food", iconKey = "food", color = "#E35D4F"),
+            ),
             transactions = listOf(
                 TransactionSummary(
                     type = "transfer",
                     amount = "25.00",
                     currency = "USD",
                     occurredAt = "2026-05-18T08:30:00Z",
-                    description = "Dev same-household transfer",
-                    transferScope = "household_same_household",
+                    description = "На вклад",
+                    transferScope = "personal_same_owner",
                     transferStatus = "posted",
+                    id = "txn-transfer",
+                    accountId = "acc-card",
+                    counterpartyAccountId = "acc-save",
+                ),
+                TransactionSummary(
+                    type = "expense",
+                    amount = "69.75",
+                    currency = "USD",
+                    occurredAt = "2026-05-17T12:30:00Z",
+                    description = "Супермаркет",
+                    transferScope = null,
+                    transferStatus = null,
+                    id = "txn-expense",
+                    accountId = "acc-card",
+                    categoryId = "cat-food",
                 ),
             ),
             totals = listOf(MoneyTotal("USD", "250.00", "69.75", "180.25")),
             reportTransferCount = 1,
         )
-
-        val overviewText = sectionCards(AppSection.Overview, dashboard).joinToString(" ") { it.body }
-        val operationText = sectionCards(AppSection.Operations, dashboard).joinToString(" ") { "${it.title} ${it.body}" }
-        val transferText = sectionCards(AppSection.Transfers, dashboard).joinToString(" ") { "${it.title} ${it.body} ${it.status}" }
-        val reportText = sectionCards(AppSection.Reports, dashboard).joinToString(" ") { "${it.title} ${it.body}" }
-
-        assertTrue(overviewText.contains("переводов: 1"))
-        assertTrue(operationText.contains("Перевод"))
-        assertTrue(operationText.contains("household_same_household"))
-        assertTrue(operationText.contains("posted"))
-        assertTrue(transferText.contains("Перевод"))
-        assertTrue(transferText.contains("transfer row"))
-        assertTrue(reportText.contains("Report transactions transfer count: 1"))
     }
 }

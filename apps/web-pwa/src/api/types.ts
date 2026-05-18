@@ -5,7 +5,14 @@ export type MoneyAmount = {
   currency: CurrencyCode;
 };
 
-export type AccountKind = "cash" | "debit" | "savings";
+export type AccountKind =
+  | "card"
+  | "bank"
+  | "cash"
+  | "deposit"
+  | "brokerage"
+  | "metal"
+  | "other";
 
 export type AccountSummary = {
   id: string;
@@ -25,6 +32,8 @@ export type CategorySummary = {
   id: string;
   name: string;
   direction: CategoryDirection;
+  iconKey?: string | null;
+  color?: string | null;
   scope?: "personal" | "household";
   householdId?: string | null;
   status?: "active" | "archived" | "deleted";
@@ -84,4 +93,63 @@ export type DashboardSnapshot = {
   operations: OperationSummary[];
   transfers: TransferSummary[];
   reports: ReportSummary[];
+};
+
+export type ImportReportType =
+  | "generic_finance_report"
+  | "bank_statement"
+  | "brokerage_report"
+  | "deposit_report"
+  | "metals_report";
+
+export type ImportTargetScope = "personal" | "shared";
+
+export type ImportReportPreviewRequest = {
+  reportType: ImportReportType;
+  sourceType: "file_metadata_only";
+  targetScope: ImportTargetScope;
+  householdId: string | null;
+  fileName?: string;
+  fileSizeBytes?: number;
+  mimeType?: string;
+};
+
+export type ImportRecognitionSection = {
+  key:
+    | "accounts_assets"
+    | "transactions"
+    | "categories"
+    | "transfers"
+    | "brokerage_deposits_metals";
+  title: string;
+  status: "not_recognized_yet";
+  text: string;
+};
+
+export type ImportReportPreviewResponse = {
+  status: "preview_placeholder";
+  canConfirm: false;
+  willChangeData: false;
+  message: string;
+  scope: {
+    targetScope: ImportTargetScope;
+    householdId: string | null;
+  };
+  file: {
+    fileName?: string;
+    fileSizeBytes?: number;
+    mimeType?: string;
+  };
+  summary: {
+    title: string;
+    statusText: string;
+    sections: ImportRecognitionSection[];
+  };
+  warnings: Array<{
+    code:
+      | "NO_DATA_CHANGES_WITHOUT_CONFIRMATION"
+      | "NO_FILE_STORAGE_OR_PARSING"
+      | "PLACEHOLDER_ONLY";
+    text: string;
+  }>;
 };

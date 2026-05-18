@@ -1,0 +1,50 @@
+﻿{
+    "command":  "GET reports summary + transfer/expense filtered transactions",
+    "summaryTotals":  [
+                          {
+                              "currency":  "USD",
+                              "incomeTotal":  "284.0000",
+                              "expenseTotal":  "83.1200",
+                              "transferTotal":  "40.0000",
+                              "netCashFlow":  "200.8800",
+                              "netTotal":  "200.8800"
+                          }
+                      ],
+    "transferItems":  [
+                          {
+                              "transactionType":  "transfer",
+                              "amount":  "15.00",
+                              "description":  "ÐÐµÐ¶Ð´Ñ ÑÑÐµÑÐ°Ð¼Ð¸"
+                          },
+                          {
+                              "transactionType":  "transfer",
+                              "amount":  "25.00",
+                              "description":  "Dev same-household transfer"
+                          }
+                      ],
+    "expenseItems":  [
+                         {
+                             "transactionType":  "expense",
+                             "amount":  "13.37",
+                             "description":  "Dev Groceries"
+                         },
+                         {
+                             "transactionType":  "expense",
+                             "amount":  "69.75",
+                             "description":  "Dev household supplies"
+                         }
+                     ],
+    "checks":  {
+                   "transferCount":  2,
+                   "expenseCount":  2,
+                   "transferAmounts":  [
+                                           "15.00",
+                                           "25.00"
+                                       ],
+                   "expenseAmounts":  [
+                                          "13.37",
+                                          "69.75"
+                                      ],
+                   "transferNotInExpenseFilter":  true
+               }
+}

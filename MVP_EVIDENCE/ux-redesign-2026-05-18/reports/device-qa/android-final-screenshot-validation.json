@@ -1,0 +1,215 @@
+﻿{
+    "screenshotDir":  "C:\\Users\\style\\Documents\\Codex\\Финансы\\MVP_EVIDENCE\\ux-redesign-2026-05-18\\screenshots\\android-device-qa-final",
+    "count":  26,
+    "allValid":  true,
+    "screenshots":  [
+                        {
+                            "file":  "00-login.png",
+                            "bytes":  214918,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "01-home-personal.png",
+                            "bytes":  260904,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "02-home-shared.png",
+                            "bytes":  274335,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "03-home-overview.png",
+                            "bytes":  288923,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "04-operations.png",
+                            "bytes":  265668,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "05-assets.png",
+                            "bytes":  200958,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "06-analytics-overview.png",
+                            "bytes":  246371,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "07-analytics-personal.png",
+                            "bytes":  241016,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "08-analytics-shared.png",
+                            "bytes":  244434,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "09-quickadd-open.png",
+                            "bytes":  238337,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "10-quickadd-expense-ready.png",
+                            "bytes":  229349,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "11-quickadd-expense-saved.png",
+                            "bytes":  244050,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "12-quickadd-income-ready.png",
+                            "bytes":  227672,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "13-quickadd-income-saved.png",
+                            "bytes":  244929,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "14-quickadd-asset-ready.png",
+                            "bytes":  234955,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "15-quickadd-asset-saved.png",
+                            "bytes":  244929,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "16-quickadd-transfer-invalid-ready.png",
+                            "bytes":  238628,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "17-quickadd-transfer-invalid-error.png",
+                            "bytes":  257535,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "18-quickadd-transfer-valid-ready.png",
+                            "bytes":  245043,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "19-quickadd-transfer-saved.png",
+                            "bytes":  243959,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "20-import-placeholder-metadata-only.png",
+                            "bytes":  243914,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "21-home-personal-after-flows.png",
+                            "bytes":  281432,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "22-home-shared-after-flows.png",
+                            "bytes":  289770,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "23-home-overview-after-flows.png",
+                            "bytes":  280170,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "24-assets-after-flows.png",
+                            "bytes":  203162,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        },
+                        {
+                            "file":  "25-operations-after-flows.png",
+                            "bytes":  326691,
+                            "width":  1440,
+                            "height":  3120,
+                            "nonEmpty":  true,
+                            "validPng":  true
+                        }
+                    ]
+}

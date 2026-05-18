@@ -27,12 +27,17 @@ DEV_DEMO_HOUSEHOLD_ID = "22222222-2222-4222-8222-222222222222"
 DEV_DEMO_PERSONAL_ACCOUNT_ID = "33333333-3333-4333-8333-333333333333"
 DEV_DEMO_SHARED_ACCOUNT_ID = "44444444-4444-4444-8444-444444444444"
 DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+DEV_DEMO_BROKERAGE_ACCOUNT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+DEV_DEMO_METAL_ACCOUNT_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 DEV_DEMO_PERSONAL_CATEGORY_ID = "55555555-5555-4555-8555-555555555555"
 DEV_DEMO_SHARED_CATEGORY_ID = "66666666-6666-4666-8666-666666666666"
 DEV_DEMO_INCOME_CATEGORY_ID = "77777777-7777-4777-8777-777777777777"
 DEV_DEMO_EXPENSE_TRANSACTION_ID = "88888888-8888-4888-8888-888888888888"
 DEV_DEMO_INCOME_TRANSACTION_ID = "99999999-9999-4999-8999-999999999999"
 DEV_DEMO_TRANSFER_TRANSACTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+DEV_DEMO_ASSET_BUY_TRANSACTION_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+DEV_DEMO_INTEREST_TRANSACTION_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+DEV_DEMO_DIVIDEND_TRANSACTION_ID = "12121212-1212-4212-8212-121212121212"
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +123,7 @@ def seed_dev_surface() -> AuthSessionService:
             AccountRecord(
                 id=DEV_DEMO_SHARED_ACCOUNT_ID,
                 name="Dev Household Card",
-                account_type="bank",
+                account_type="card",
                 ownership_type=AccountOwnershipType.SHARED,
                 owner_user_id=None,
                 household_id=DEV_DEMO_HOUSEHOLD_ID,
@@ -132,14 +137,44 @@ def seed_dev_surface() -> AuthSessionService:
             ),
             AccountRecord(
                 id=DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID,
-                name="Dev Household Savings",
-                account_type="bank",
+                name="Dev Household Deposit",
+                account_type="deposit",
                 ownership_type=AccountOwnershipType.SHARED,
                 owner_user_id=None,
                 household_id=DEV_DEMO_HOUSEHOLD_ID,
                 currency="USD",
                 initial_balance=Decimal("100.00"),
                 current_balance=Decimal("125.00"),
+                created_by_user_id=DEV_DEMO_USER_ID,
+                created_at=now,
+                updated_at=now,
+                status=ResourceStatus.ACTIVE,
+            ),
+            AccountRecord(
+                id=DEV_DEMO_BROKERAGE_ACCOUNT_ID,
+                name="Dev Brokerage",
+                account_type="brokerage",
+                ownership_type=AccountOwnershipType.PERSONAL,
+                owner_user_id=DEV_DEMO_USER_ID,
+                household_id=None,
+                currency="USD",
+                initial_balance=Decimal("1000.00"),
+                current_balance=Decimal("1042.00"),
+                created_by_user_id=DEV_DEMO_USER_ID,
+                created_at=now,
+                updated_at=now,
+                status=ResourceStatus.ACTIVE,
+            ),
+            AccountRecord(
+                id=DEV_DEMO_METAL_ACCOUNT_ID,
+                name="Dev Metal",
+                account_type="metal",
+                ownership_type=AccountOwnershipType.PERSONAL,
+                owner_user_id=DEV_DEMO_USER_ID,
+                household_id=None,
+                currency="USD",
+                initial_balance=Decimal("500.00"),
+                current_balance=Decimal("530.00"),
                 created_by_user_id=DEV_DEMO_USER_ID,
                 created_at=now,
                 updated_at=now,
@@ -259,6 +294,69 @@ def seed_dev_surface() -> AuthSessionService:
                 source_type="manual",
                 transfer_scope="household_same_household",
                 transfer_status="posted",
+                record_status="active",
+                created_by_user_id=DEV_DEMO_USER_ID,
+                last_edited_by_user_id=DEV_DEMO_USER_ID,
+                created_at=now,
+                updated_at=now,
+                deleted_at=None,
+                version=1,
+            ),
+            TransactionRecord(
+                id=DEV_DEMO_ASSET_BUY_TRANSACTION_ID,
+                transaction_type="asset_buy",
+                account_id=DEV_DEMO_BROKERAGE_ACCOUNT_ID,
+                counterparty_account_id=None,
+                category_id=None,
+                amount=Decimal("300.00"),
+                currency="USD",
+                occurred_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+                description="Dev brokerage asset buy",
+                source_type="manual",
+                transfer_scope=None,
+                transfer_status=None,
+                record_status="active",
+                created_by_user_id=DEV_DEMO_USER_ID,
+                last_edited_by_user_id=DEV_DEMO_USER_ID,
+                created_at=now,
+                updated_at=now,
+                deleted_at=None,
+                version=1,
+            ),
+            TransactionRecord(
+                id=DEV_DEMO_INTEREST_TRANSACTION_ID,
+                transaction_type="interest",
+                account_id=DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID,
+                counterparty_account_id=None,
+                category_id=None,
+                amount=Decimal("5.00"),
+                currency="USD",
+                occurred_at=datetime(2026, 5, 18, 9, 30, tzinfo=UTC),
+                description="Dev deposit interest",
+                source_type="manual",
+                transfer_scope=None,
+                transfer_status=None,
+                record_status="active",
+                created_by_user_id=DEV_DEMO_USER_ID,
+                last_edited_by_user_id=DEV_DEMO_USER_ID,
+                created_at=now,
+                updated_at=now,
+                deleted_at=None,
+                version=1,
+            ),
+            TransactionRecord(
+                id=DEV_DEMO_DIVIDEND_TRANSACTION_ID,
+                transaction_type="dividend",
+                account_id=DEV_DEMO_BROKERAGE_ACCOUNT_ID,
+                counterparty_account_id=None,
+                category_id=None,
+                amount=Decimal("7.50"),
+                currency="USD",
+                occurred_at=datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
+                description="Dev brokerage dividend",
+                source_type="manual",
+                transfer_scope=None,
+                transfer_status=None,
                 record_status="active",
                 created_by_user_id=DEV_DEMO_USER_ID,
                 last_edited_by_user_id=DEV_DEMO_USER_ID,

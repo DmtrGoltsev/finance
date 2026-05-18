@@ -6,7 +6,7 @@
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
-        android:label="Финансы MVP"
+        android:label="Финансы"
         android:supportsRtl="true"
         android:theme="@style/Theme.FinanceMvp">
         <activity

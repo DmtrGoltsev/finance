@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from decimal import Decimal
-from pathlib import Path
 import sys
 import types
 import unittest
-
+from decimal import Decimal
+from pathlib import Path
 
 BACKEND_SRC = Path(__file__).resolve().parents[2] / "src"
 sys.path.insert(0, str(BACKEND_SRC))
@@ -29,6 +28,8 @@ from app.domain import (  # noqa: E402
 class DomainTypesTest(unittest.TestCase):
     def test_enums_are_wire_string_compatible(self) -> None:
         self.assertEqual(AccountType.CASH, "cash")
+        self.assertEqual(AccountType.CARD.value, "card")
+        self.assertEqual(AccountType.METAL.value, "metal")
         self.assertEqual(OwnershipType.SHARED.value, "shared")
         self.assertEqual(SourceType.MANUAL.value, "manual")
 

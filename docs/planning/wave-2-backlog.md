@@ -33,6 +33,7 @@ Current known planning blockers:
 All Wave 2 tickets must preserve these invariants:
 
 - MVP is manual-entry only: no import, bank API, SMS, push, broker connection, external financial credential or raw statement surface.
+- Import report placeholder is allowed only as metadata-only preview: no file content storage, no parser execution, no account/category/transaction/transfer/asset changes, and no confirm action.
 - Personal accounts, transactions, categories, aggregates, reports, exports, logs, audit payloads, cache and errors are owner-only.
 - Shared data is visible only to active members of the same `Household`.
 - Invited and former members do not get shared financial access before accept/activation or after `left`/`revoked`.
@@ -470,7 +471,7 @@ Escalate immediately to orchestrator and the relevant Product/Security/Privacy/L
 - Missing and inaccessible resources produce different user-facing shape for sensitive endpoints.
 - Hidden counts, hidden facets, hidden placeholders, member financial badges or "partially hidden" copy appear.
 - Logs/audit/telemetry/debug output include financial values, descriptions, account/category names, tokens, secrets, raw bodies or hidden-side details.
-- Imports, bank API, SMS/push, broker credentials, external credentials or raw statements enter routes, schema, config, logs, backups or tests.
+- Real imports, parser pipeline, bank API, SMS/push, broker credentials, external credentials or raw statements enter routes, schema, config, logs, backups or tests without a separate approved product/security/privacy plan. The metadata-only "Импорт отчета" placeholder must escalate if it starts accepting file bodies, parsed rows, amounts, account names or a confirm/apply action.
 - Restore fails, backup is incomplete, backup storage is too broad, or tenant boundaries are not proven.
 - Public launch, SaaS/self-hosted, jurisdiction, formal retention/deletion SLA, backup deletion promise, 2FA/passkeys, production secret manager or support/admin financial access becomes required.
 - Repeated QA failures occur in authz predicates, report aggregation, transfer atomicity/neutrality, cache invalidation, logs or privacy flows.

@@ -1,0 +1,59 @@
+﻿{
+    "date":  "2026-05-18",
+    "backendBaseUrl":  "http://127.0.0.1:8010",
+    "endpoint":  "POST /api/v1/imports/report-preview",
+    "routePresentInOpenApi":  true,
+    "request":  {
+                    "reportType":  "bank_statement",
+                    "sourceType":  "file_metadata_only",
+                    "targetScope":  "personal",
+                    "fileName":  "qa-placeholder-statement.pdf",
+                    "fileSizeBytes":  245760,
+                    "mimeType":  "application/pdf"
+                },
+    "responseContract":  {
+                             "status":  "preview_placeholder",
+                             "canConfirm":  false,
+                             "willChangeData":  false,
+                             "scope":  {
+                                           "targetScope":  "personal",
+                                           "householdId":  null
+                                       },
+                             "file":  {
+                                          "fileName":  "qa-placeholder-statement.pdf",
+                                          "fileSizeBytes":  245760,
+                                          "mimeType":  "application/pdf"
+                                      },
+                             "sectionKeys":  [
+                                                 "accounts_assets",
+                                                 "transactions",
+                                                 "categories",
+                                                 "transfers",
+                                                 "brokerage_deposits_metals"
+                                             ],
+                             "sectionStatuses":  [
+                                                     "not_recognized_yet"
+                                                 ],
+                             "warningCodes":  [
+                                                  "PLACEHOLDER_ONLY",
+                                                  "NO_FILE_STORAGE_OR_PARSING",
+                                                  "NO_DATA_CHANGES_WITHOUT_CONFIRMATION"
+                                              ]
+                         },
+    "beforeCounts":  {
+                         "accounts":  5,
+                         "categories":  3,
+                         "transactions":  6
+                     },
+    "afterCounts":  {
+                        "accounts":  5,
+                        "categories":  3,
+                        "transactions":  6
+                    },
+    "unchanged":  {
+                      "accounts":  true,
+                      "categories":  true,
+                      "transactions":  true
+                  },
+    "result":  "PASS"
+}

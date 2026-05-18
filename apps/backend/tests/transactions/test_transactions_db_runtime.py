@@ -404,3 +404,46 @@ def test_transfer_writes_are_available_for_same_scope_runtime_worker(
     assert response.status_code == 201
     assert response.json()["data"]["transactionType"] == "transfer"
     assert response.json()["data"]["transferScope"] == "personal_same_owner"
+
+
+def test_asset_operations_are_categoryless_manual_transactions(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    account_id = transaction_graph["accounts"]["acc_a_savings"]
+    category_id = transaction_graph["categories"]["cat_a_food"]
+
+    with _client_for_actor(owner) as client:
+        created = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "asset_buy",
+                "accountId": account_id,
+                "amount": "25.0000",
+                "currency": "RUB",
+                "occurredAt": "2026-05-17T14:00:00+00:00",
+                "description": "manual asset buy",
+                "sourceType": "manual",
+            },
+        )
+        with_category = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "asset_sell",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "25.0000",
+                "currency": "RUB",
+                "occurredAt": "2026-05-17T14:00:00+00:00",
+                "description": "asset op with category",
+                "sourceType": "manual",
+            },
+        )
+        listed = client.get("/api/v1/transactions", params={"transactionType": "asset_buy"})
+
+    assert created.status_code == 201
+    assert created.json()["data"]["transactionType"] == "asset_buy"
+    assert created.json()["data"]["categoryId"] is None
+    assert created.json()["data"]["counterpartyAccountId"] is None
+    assert with_category.status_code == 422
+    assert created.json()["data"]["id"] in {item["id"] for item in listed.json()["items"]}

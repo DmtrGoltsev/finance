@@ -1,0 +1,43 @@
+﻿{
+    "device":  "2_Pixel 6 Pro / emulator-5556",
+    "requestedSourceType":  "file_metadata_only",
+    "request":  {
+                    "mimeType":  "application/pdf",
+                    "reportType":  "generic_finance_report",
+                    "targetScope":  "personal",
+                    "fileName":  "report.pdf",
+                    "sourceType":  "file_metadata_only",
+                    "fileSizeBytes":  12345
+                },
+    "previewStatus":  "preview_placeholder",
+    "canConfirm":  false,
+    "willChangeData":  false,
+    "file":  {
+                 "fileName":  "report.pdf",
+                 "fileSizeBytes":  12345,
+                 "mimeType":  "application/pdf"
+             },
+    "warningCodes":  [
+                         "PLACEHOLDER_ONLY",
+                         "NO_FILE_STORAGE_OR_PARSING",
+                         "NO_DATA_CHANGES_WITHOUT_CONFIRMATION"
+                     ],
+    "summarySectionKeys":  [
+                               "accounts_assets",
+                               "transactions",
+                               "categories",
+                               "transfers",
+                               "brokerage_deposits_metals"
+                           ],
+    "countsBefore":  {
+                         "accounts":  6,
+                         "categories":  3,
+                         "transactions":  9
+                     },
+    "countsAfter":  {
+                        "accounts":  6,
+                        "categories":  3,
+                        "transactions":  9
+                    },
+    "unchanged":  true
+}
