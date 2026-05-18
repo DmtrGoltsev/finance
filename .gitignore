@@ -1,0 +1,110 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.key
+*.pem
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.token
+*.session
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Node / web
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+coverage/
+.vitest/
+playwright-report/
+test-results/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Android / Gradle
+.gradle/
+local.properties
+*.iml
+captures/
+*.apk
+*.aab
+*.ap_
+app/build/
+*/build/
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and runtime state
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+log/
+tmp/
+temp/
+*.tmp
+*.pid
+*.seed
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.dump
+*.bak
+
+# Generated evidence and scanner outputs
+artifacts/evidence/**
+security/scans/**
+qa/traces/**
+*.sarif
+sbom*.json
+sbom*.xml
+
+# Raw/local MVP evidence: keep curated markdown reports trackable, keep
+# screenshots, browser profiles, DOM/XML dumps, cookie jars, and raw runs local.
+MVP_EVIDENCE/screenshots/**
+MVP_EVIDENCE/test-runs/**
+!MVP_EVIDENCE/test-runs/*.md
+!MVP_EVIDENCE/reports/**
+
+# Generated clients and derived artifacts
+packages/generated/**
+
+# Keep source-of-truth docs and source files trackable
+!docs/**
+!api/openapi/**
+!api/schemas/**
+!**/README.md
+artifacts/evidence/**
+security/scans/**

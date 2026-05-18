@@ -1,0 +1,93 @@
+{
+  "artifactVersion": "w3-ttr-golden-transfer-denials-v1",
+  "fixtureSet": "owner-member-other-invited-former-v1",
+  "sourceDocuments": [
+    "docs/architecture/w3-transactions-transfers-reports-preflight.md",
+    "docs/testing/w3-ttr-privacy-safety-matrix.md"
+  ],
+  "allowedScopes": ["personal_same_owner", "household_same_household"],
+  "forbiddenPublicSignals": [
+    "counterparty owner",
+    "counterparty household",
+    "hidden account label",
+    "hidden membership",
+    "hidden balance",
+    "financial value",
+    "transaction description",
+    "raw request"
+  ],
+  "cases": [
+    {
+      "label": "trf_denied_personal_to_shared",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_ab_cash",
+      "expectedPublicCode": "TRANSFER_SCOPE_NOT_SUPPORTED",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_shared_to_personal",
+      "actor": "owner_a",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_a_cash",
+      "expectedPublicCode": "TRANSFER_SCOPE_NOT_SUPPORTED",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_cross_user_personal",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_b_cash",
+      "expectedPublicCode": "REFERENCED_RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_cross_household_shared",
+      "actor": "owner_a",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_c_shared",
+      "expectedPublicCode": "REFERENCED_RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_invited_shared",
+      "actor": "invited_ab",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_ab_savings",
+      "expectedPublicCode": "REFERENCED_RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_former_shared_restore",
+      "actor": "former_ab",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_ab_savings",
+      "expectedPublicCode": "RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "expectedPersistence": "no_restore_no_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_cross_currency",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_a_usd",
+      "expectedPublicCode": "INVALID_CURRENCY",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    },
+    {
+      "label": "trf_denied_missing_counterparty",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "missing_counterparty_account",
+      "expectedPublicCode": "REFERENCED_RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "expectedPersistence": "no_transaction_row_no_one_sided_effect",
+      "expectedReportTrace": "none"
+    }
+  ]
+}

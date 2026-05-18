@@ -1,0 +1,624 @@
+{
+  "artifactVersion": "w3-ttr-fixtures-contracts-v1",
+  "fixtureSet": "owner-member-other-invited-former-v1",
+  "sourceDocuments": [
+    "docs/architecture/w3-transactions-transfers-reports-preflight.md",
+    "docs/testing/w3-ttr-privacy-safety-matrix.md"
+  ],
+  "safety": {
+    "syntheticOnly": true,
+    "containsConcreteFinancialValues": false,
+    "containsSecrets": false,
+    "containsRealPersonalData": false,
+    "notes": "UUIDs, labels and profiles are synthetic contract fixtures only."
+  },
+  "actors": [
+    {
+      "label": "owner_a",
+      "canonicalId": "00000000-0000-4000-8000-000000000001",
+      "state": "active_member_ab",
+      "personalScope": "personal:owner_a",
+      "sharedScopes": ["household:hh_ab"]
+    },
+    {
+      "label": "member_b",
+      "canonicalId": "00000000-0000-4000-8000-000000000002",
+      "state": "active_member_ab",
+      "personalScope": "personal:member_b",
+      "sharedScopes": ["household:hh_ab"]
+    },
+    {
+      "label": "other_c",
+      "canonicalId": "00000000-0000-4000-8000-000000000003",
+      "state": "active_member_c",
+      "personalScope": "personal:other_c",
+      "sharedScopes": ["household:hh_c"]
+    },
+    {
+      "label": "invited_ab",
+      "canonicalId": "00000000-0000-4000-8000-000000000004",
+      "state": "invited_only_ab",
+      "personalScope": "personal:invited_ab",
+      "sharedScopes": []
+    },
+    {
+      "label": "former_ab",
+      "canonicalId": "00000000-0000-4000-8000-000000000005",
+      "state": "former_member_ab",
+      "personalScope": "personal:former_ab",
+      "sharedScopes": []
+    }
+  ],
+  "households": [
+    {
+      "label": "hh_ab",
+      "canonicalId": "10000000-0000-4000-8000-000000000001",
+      "activeActors": ["owner_a", "member_b"],
+      "inactiveActors": ["invited_ab", "former_ab"]
+    },
+    {
+      "label": "hh_c",
+      "canonicalId": "10000000-0000-4000-8000-000000000002",
+      "activeActors": ["other_c"],
+      "inactiveActors": []
+    }
+  ],
+  "memberships": [
+    {
+      "label": "mem_a_ab_active",
+      "canonicalId": "20000000-0000-4000-8000-000000000001",
+      "actor": "owner_a",
+      "household": "hh_ab",
+      "role": "owner",
+      "status": "active"
+    },
+    {
+      "label": "mem_b_ab_active",
+      "canonicalId": "20000000-0000-4000-8000-000000000002",
+      "actor": "member_b",
+      "household": "hh_ab",
+      "role": "member",
+      "status": "active"
+    },
+    {
+      "label": "mem_invited_ab_invited",
+      "canonicalId": "20000000-0000-4000-8000-000000000003",
+      "actor": "invited_ab",
+      "household": "hh_ab",
+      "role": "invitee",
+      "status": "invited"
+    },
+    {
+      "label": "mem_former_ab_left",
+      "canonicalId": "20000000-0000-4000-8000-000000000004",
+      "actor": "former_ab",
+      "household": "hh_ab",
+      "role": "former",
+      "status": "left"
+    },
+    {
+      "label": "mem_c_c_active",
+      "canonicalId": "20000000-0000-4000-8000-000000000005",
+      "actor": "other_c",
+      "household": "hh_c",
+      "role": "owner",
+      "status": "active"
+    }
+  ],
+  "accounts": [
+    {
+      "label": "acc_a_cash",
+      "canonicalId": "30000000-0000-4000-8000-000000000001",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_a_savings",
+      "canonicalId": "30000000-0000-4000-8000-000000000002",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_a_usd",
+      "canonicalId": "30000000-0000-4000-8000-000000000003",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "USD",
+      "state": "active"
+    },
+    {
+      "label": "acc_b_cash",
+      "canonicalId": "30000000-0000-4000-8000-000000000004",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_b_savings",
+      "canonicalId": "30000000-0000-4000-8000-000000000005",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_ab_cash",
+      "canonicalId": "30000000-0000-4000-8000-000000000006",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_ab_savings",
+      "canonicalId": "30000000-0000-4000-8000-000000000007",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_ab_usd",
+      "canonicalId": "30000000-0000-4000-8000-000000000008",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "USD",
+      "state": "active"
+    },
+    {
+      "label": "acc_c_shared",
+      "canonicalId": "30000000-0000-4000-8000-000000000009",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_c",
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_c_shared_2",
+      "canonicalId": "30000000-0000-4000-8000-000000000010",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_c",
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_invited_personal",
+      "canonicalId": "30000000-0000-4000-8000-000000000011",
+      "scope": "personal",
+      "ownerActor": "invited_ab",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    },
+    {
+      "label": "acc_former_personal",
+      "canonicalId": "30000000-0000-4000-8000-000000000012",
+      "scope": "personal",
+      "ownerActor": "former_ab",
+      "household": null,
+      "currency": "RUB",
+      "state": "active"
+    }
+  ],
+  "categories": [
+    {
+      "label": "cat_a_income",
+      "canonicalId": "40000000-0000-4000-8000-000000000001",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "categoryType": "income"
+    },
+    {
+      "label": "cat_a_food",
+      "canonicalId": "40000000-0000-4000-8000-000000000002",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_b_income",
+      "canonicalId": "40000000-0000-4000-8000-000000000003",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "categoryType": "income"
+    },
+    {
+      "label": "cat_b_food",
+      "canonicalId": "40000000-0000-4000-8000-000000000004",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_ab_salary",
+      "canonicalId": "40000000-0000-4000-8000-000000000005",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "categoryType": "income"
+    },
+    {
+      "label": "cat_ab_groceries",
+      "canonicalId": "40000000-0000-4000-8000-000000000006",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_c_foreign",
+      "canonicalId": "40000000-0000-4000-8000-000000000007",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_c",
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_invited_personal",
+      "canonicalId": "40000000-0000-4000-8000-000000000008",
+      "scope": "personal",
+      "ownerActor": "invited_ab",
+      "household": null,
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_former_personal",
+      "canonicalId": "40000000-0000-4000-8000-000000000009",
+      "scope": "personal",
+      "ownerActor": "former_ab",
+      "household": null,
+      "categoryType": "expense"
+    },
+    {
+      "label": "cat_uncategorized",
+      "canonicalId": "40000000-0000-4000-8000-000000000010",
+      "scope": "virtual",
+      "ownerActor": null,
+      "household": null,
+      "categoryType": "uncategorized"
+    }
+  ],
+  "plannedTransactions": [
+    {
+      "label": "txn_a_income_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000001",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "account": "acc_a_cash",
+      "category": "cat_a_income",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_income_small",
+      "allowedActors": ["owner_a"],
+      "deniedActors": ["member_b", "other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_a_expense_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000002",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_a_cash",
+      "category": "cat_a_food",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["owner_a"],
+      "deniedActors": ["member_b", "other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_b_income_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000003",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "account": "acc_b_cash",
+      "category": "cat_b_income",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_income_small",
+      "allowedActors": ["member_b"],
+      "deniedActors": ["owner_a", "other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_b_expense_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000004",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_b_cash",
+      "category": "cat_b_food",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["member_b"],
+      "deniedActors": ["owner_a", "other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_ab_income_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000005",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "account": "acc_ab_cash",
+      "category": "cat_ab_salary",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_income_small",
+      "allowedActors": ["owner_a", "member_b"],
+      "deniedActors": ["other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_ab_expense_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000006",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_ab_cash",
+      "category": "cat_ab_groceries",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["owner_a", "member_b"],
+      "deniedActors": ["other_c", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_c_shared_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000007",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_c_shared",
+      "category": "cat_c_foreign",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["other_c"],
+      "deniedActors": ["owner_a", "member_b", "invited_ab", "former_ab"]
+    },
+    {
+      "label": "txn_invited_personal_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000008",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_invited_personal",
+      "category": "cat_invited_personal",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["invited_ab"],
+      "deniedActors": ["owner_a", "member_b", "other_c", "former_ab"]
+    },
+    {
+      "label": "txn_former_personal_may",
+      "canonicalId": "50000000-0000-4000-8000-000000000009",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "account": "acc_former_personal",
+      "category": "cat_former_personal",
+      "recordStatus": "active",
+      "period": "period_may_2026",
+      "valueProfile": "synthetic_expense_small",
+      "allowedActors": ["former_ab"],
+      "deniedActors": ["owner_a", "member_b", "other_c", "invited_ab"]
+    }
+  ],
+  "plannedTransfers": [
+    {
+      "label": "trf_a_personal_same_owner",
+      "canonicalId": "60000000-0000-4000-8000-000000000001",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_a_savings",
+      "expectedScope": "personal_same_owner",
+      "expectedResult": "allow"
+    },
+    {
+      "label": "trf_b_personal_same_owner",
+      "canonicalId": "60000000-0000-4000-8000-000000000002",
+      "actor": "member_b",
+      "sourceAccount": "acc_b_cash",
+      "counterpartyAccount": "acc_b_savings",
+      "expectedScope": "personal_same_owner",
+      "expectedResult": "allow"
+    },
+    {
+      "label": "trf_ab_shared_same_household_by_a",
+      "canonicalId": "60000000-0000-4000-8000-000000000003",
+      "actor": "owner_a",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_ab_savings",
+      "expectedScope": "household_same_household",
+      "expectedResult": "allow"
+    },
+    {
+      "label": "trf_ab_shared_same_household_by_b",
+      "canonicalId": "60000000-0000-4000-8000-000000000004",
+      "actor": "member_b",
+      "sourceAccount": "acc_ab_savings",
+      "counterpartyAccount": "acc_ab_cash",
+      "expectedScope": "household_same_household",
+      "expectedResult": "allow"
+    },
+    {
+      "label": "trf_denied_personal_to_shared",
+      "canonicalId": "60000000-0000-4000-8000-000000000005",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_ab_cash",
+      "expectedScope": "unsupported",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_shared_to_personal",
+      "canonicalId": "60000000-0000-4000-8000-000000000006",
+      "actor": "owner_a",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_a_cash",
+      "expectedScope": "unsupported",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_cross_user_personal",
+      "canonicalId": "60000000-0000-4000-8000-000000000007",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_b_cash",
+      "expectedScope": "hidden_or_missing_counterparty",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_cross_household_shared",
+      "canonicalId": "60000000-0000-4000-8000-000000000008",
+      "actor": "owner_a",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_c_shared",
+      "expectedScope": "hidden_or_missing_counterparty",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_invited_shared",
+      "canonicalId": "60000000-0000-4000-8000-000000000009",
+      "actor": "invited_ab",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_ab_savings",
+      "expectedScope": "hidden_or_missing_counterparty",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_former_shared_restore",
+      "canonicalId": "60000000-0000-4000-8000-000000000010",
+      "actor": "former_ab",
+      "sourceAccount": "acc_ab_cash",
+      "counterpartyAccount": "acc_ab_savings",
+      "expectedScope": "hidden_or_missing_counterparty",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_cross_currency",
+      "canonicalId": "60000000-0000-4000-8000-000000000011",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "acc_a_usd",
+      "expectedScope": "invalid_currency_after_visibility",
+      "expectedResult": "deny"
+    },
+    {
+      "label": "trf_denied_missing_counterparty",
+      "canonicalId": "60000000-0000-4000-8000-000000000012",
+      "actor": "owner_a",
+      "sourceAccount": "acc_a_cash",
+      "counterpartyAccount": "missing_counterparty_account",
+      "expectedScope": "hidden_or_missing_counterparty",
+      "expectedResult": "deny"
+    }
+  ],
+  "plannedReports": [
+    {
+      "label": "rep_a_shared_family_ab",
+      "canonicalId": "70000000-0000-4000-8000-000000000001",
+      "actor": "owner_a",
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_b_cash", "acc_c_shared"]
+    },
+    {
+      "label": "rep_b_shared_family_ab",
+      "canonicalId": "70000000-0000-4000-8000-000000000002",
+      "actor": "member_b",
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_b_cash", "acc_c_shared"]
+    },
+    {
+      "label": "rep_a_combined_ab",
+      "canonicalId": "70000000-0000-4000-8000-000000000003",
+      "actor": "owner_a",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_a_cash", "acc_a_savings", "acc_a_usd", "acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_b_cash", "acc_b_savings", "acc_c_shared"]
+    },
+    {
+      "label": "rep_b_combined_ab",
+      "canonicalId": "70000000-0000-4000-8000-000000000004",
+      "actor": "member_b",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_b_cash", "acc_b_savings", "acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_a_savings", "acc_a_usd", "acc_c_shared"]
+    },
+    {
+      "label": "rep_c_ab_denied",
+      "canonicalId": "70000000-0000-4000-8000-000000000005",
+      "actor": "other_c",
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": [],
+      "mustExclude": ["acc_ab_cash", "acc_a_cash", "acc_b_cash"]
+    },
+    {
+      "label": "rep_invited_ab_denied",
+      "canonicalId": "70000000-0000-4000-8000-000000000006",
+      "actor": "invited_ab",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": [],
+      "mustExclude": ["acc_ab_cash", "acc_a_cash", "acc_b_cash"]
+    },
+    {
+      "label": "rep_former_ab_denied",
+      "canonicalId": "70000000-0000-4000-8000-000000000007",
+      "actor": "former_ab",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": [],
+      "mustExclude": ["acc_ab_cash", "acc_a_cash", "acc_b_cash"]
+    }
+  ],
+  "periods": [
+    {
+      "label": "period_may_2026",
+      "canonicalId": "80000000-0000-4000-8000-000000000001",
+      "startDate": "2026-05-01",
+      "endDate": "2026-05-31",
+      "timezone": "Europe/Moscow"
+    },
+    {
+      "label": "period_empty_visible",
+      "canonicalId": "80000000-0000-4000-8000-000000000002",
+      "startDate": "2026-06-01",
+      "endDate": "2026-06-30",
+      "timezone": "Europe/Moscow"
+    }
+  ],
+  "contracts": {
+    "sourceType": ["manual"],
+    "reportModes": ["shared_family_report", "combined_viewer_overview"],
+    "transferScopes": ["personal_same_owner", "household_same_household"],
+    "unmountedUntilRuntimeWorker": [
+      "/api/v1/transactions",
+      "/api/v1/reports/summary",
+      "/api/v1/reports/category-breakdown",
+      "/api/v1/reports/account-balances",
+      "/api/v1/reports/cash-flow",
+      "/api/v1/reports/transactions"
+    ],
+    "forbiddenRouteFamilies": ["/api/v1/transfers"]
+  }
+}

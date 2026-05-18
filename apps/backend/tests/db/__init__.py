@@ -1,0 +1,1 @@
+"""Database model metadata tests."""

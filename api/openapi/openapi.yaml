@@ -1,0 +1,1720 @@
+openapi: 3.1.0
+info:
+  title: Finance MVP API
+  version: 0.1.0
+  summary: Canonical OpenAPI contract for the mounted closed-MVP runtime surface.
+  license:
+    name: Proprietary/Internal
+    url: https://example.invalid/proprietary-internal-license
+  description: |
+    This document is the source of truth for the mounted MVP wire routes, DTO field names,
+    enum values, error codes, pagination envelopes, and auth requirements.
+
+    MVP boundaries are intentionally narrow: financial data is manual-entry only,
+    `sourceType` accepts only `manual`, transfers are same-scope only, and there
+    are no import, bank API, SMS, push, broker, external credential, card, IBAN,
+    raw statement, or notification-token endpoints.
+
+    Privacy invariants:
+    - personal data is owner-only;
+    - shared data is visible only to active members of the same Household;
+    - reports use only `shared_family_report` and `combined_viewer_overview`;
+    - every list, report, search, autocomplete, cache, count, and aggregation
+      filters visible rows before any aggregation or pagination;
+    - responses never expose hidden counts, filtered-out counts, hidden facets,
+      or diagnostics that confirm inaccessible resources.
+servers:
+  - url: /api/v1
+    description: MVP API prefix.
+tags:
+  - name: Auth
+    description: Login, current session state, and current-session logout.
+  - name: Accounts
+    description: Manual personal and shared financial accounts visible to the caller.
+  - name: Transactions
+    description: Manual transaction entry, search, autocomplete, and lifecycle operations.
+  - name: Categories
+    description: Personal and household category management for manual finance records.
+  - name: Reports
+    description: Privacy-filtered MVP reports over visible manual financial data.
+security:
+  - pwaCookieAuth: []
+    csrfHeader: []
+  - androidBearerAuth: []
+paths:
+  /sessions:
+    post:
+      tags: [Auth]
+      operationId: createSession
+      summary: Login and create current session.
+      description: Account-neutral login. PWA receives HttpOnly cookie transport; Android receives bearer-capable token material by implementation policy.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateRequest'
+      responses:
+        '201':
+          description: Current session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sessions/current:
+    get:
+      tags: [Auth]
+      operationId: getCurrentSession
+      summary: Get current session.
+      responses:
+        '200':
+          description: Current session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Auth]
+      operationId: deleteCurrentSession
+      summary: Logout current session.
+      responses:
+        '204':
+          description: Current session revoked.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /accounts:
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: List/search visible accounts.
+      description: Personal accounts require ownerUserId=currentUserId. Shared accounts require active membership in the same household. No hidden counts are returned.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/OwnershipTypeFilter'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Visible accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Accounts]
+      operationId: createAccount
+      summary: Create personal or shared account.
+      description: "`ownershipType` is immutable after creation in MVP."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreateRequest'
+      responses:
+        '201':
+          description: Created account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /accounts/autocomplete:
+    get:
+      tags: [Accounts]
+      operationId: autocompleteAccounts
+      summary: Autocomplete visible accounts.
+      description: Minimal output only; no balances, hidden counts, or hidden match hints.
+      parameters:
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/OwnershipTypeFilter'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Account suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountAutocompleteListEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /accounts/{accountId}:
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Get visible account detail.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Account detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Accounts]
+      operationId: updateAccount
+      summary: Update account mutable fields.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdateRequest'
+      responses:
+        '200':
+          description: Updated account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Accounts]
+      operationId: deleteAccount
+      summary: Soft delete account if policy allows.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '204':
+          description: Account soft-deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /accounts/{accountId}/archive:
+    post:
+      tags: [Accounts]
+      operationId: archiveAccount
+      summary: Archive account.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Archived account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /accounts/{accountId}/restore:
+    post:
+      tags: [Accounts]
+      operationId: restoreAccount
+      summary: Restore archived account.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Restored account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /transactions:
+    get:
+      tags: [Transactions]
+      operationId: listTransactions
+      summary: List/search visible transactions.
+      description: Transaction visibility inherits from visible account scope. Search, date, amount, and category filters apply after authz filtering.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/CategoryIdFilter'
+        - $ref: '#/components/parameters/TransactionTypeFilter'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+        - $ref: '#/components/parameters/OwnershipTypeFilter'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Visible transactions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Transactions]
+      operationId: createTransaction
+      summary: Create manual transaction.
+      description: |
+        `sourceType` must be `manual`. For transfers, `accountId` and
+        `counterpartyAccountId` must form one allowed same-scope transfer:
+        `personal_same_owner` or `household_same_household`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionCreateRequest'
+      responses:
+        '201':
+          description: Created transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /transactions/autocomplete:
+    get:
+      tags: [Transactions]
+      operationId: autocompleteTransactions
+      summary: Autocomplete visible transactions.
+      description: Minimal visible transaction labels only; no hidden matches or counts.
+      parameters:
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Transaction suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionAutocompleteListEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /transactions/{transactionId}:
+    get:
+      tags: [Transactions]
+      operationId: getTransaction
+      summary: Get visible transaction detail.
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Transaction detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Transactions]
+      operationId: updateTransaction
+      summary: Update transaction mutable fields.
+      description: Transfer updates must re-run full same-scope validation and cannot be partially applied.
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionUpdateRequest'
+      responses:
+        '200':
+          description: Updated transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Transactions]
+      operationId: deleteTransaction
+      summary: Soft delete transaction.
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '204':
+          description: Transaction soft-deleted or voided.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /transactions/{transactionId}/restore:
+    post:
+      tags: [Transactions]
+      operationId: restoreTransaction
+      summary: Restore deleted transaction if allowed.
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Restored transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /categories:
+    get:
+      tags: [Categories]
+      operationId: listCategories
+      summary: List/search visible categories.
+      description: Personal categories are owner-only; household categories require active membership. Usage counts for hidden personal activity are never exposed.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/CategoryScopeFilter'
+        - $ref: '#/components/parameters/CategoryTypeFilter'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Visible categories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Categories]
+      operationId: createCategory
+      summary: Create personal or household category.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreateRequest'
+      responses:
+        '201':
+          description: Created category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /categories/autocomplete:
+    get:
+      tags: [Categories]
+      operationId: autocompleteCategories
+      summary: Autocomplete visible categories.
+      parameters:
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/CategoryScopeFilter'
+        - $ref: '#/components/parameters/CategoryTypeFilter'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Category suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryAutocompleteListEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /categories/{categoryId}:
+    get:
+      tags: [Categories]
+      operationId: getCategory
+      summary: Get visible category detail.
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Category detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Categories]
+      operationId: updateCategory
+      summary: Update category mutable fields.
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdateRequest'
+      responses:
+        '200':
+          description: Updated category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Categories]
+      operationId: deleteCategory
+      summary: Soft delete category if history remains coherent.
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '204':
+          description: Category soft-deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /categories/{categoryId}/archive:
+    post:
+      tags: [Categories]
+      operationId: archiveCategory
+      summary: Archive category.
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Archived category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /categories/{categoryId}/restore:
+    post:
+      tags: [Categories]
+      operationId: restoreCategory
+      summary: Restore category.
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Restored category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /reports/summary:
+    get:
+      tags: [Reports]
+      operationId: getReportSummary
+      summary: Get summary report for visible rows.
+      description: Computes totals only after resolving visibleAccountIds for the selected report mode.
+      parameters:
+        - $ref: '#/components/parameters/ReportMode'
+        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/AccountIds'
+        - $ref: '#/components/parameters/CategoryIds'
+        - $ref: '#/components/parameters/TransactionTypes'
+        - $ref: '#/components/parameters/Currency'
+      responses:
+        '200':
+          description: Report summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportSummaryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /reports/category-breakdown:
+    get:
+      tags: [Reports]
+      operationId: getReportCategoryBreakdown
+      summary: Get category breakdown for visible rows.
+      description: Category buckets and transactionCount use only visible filtered transactions.
+      parameters:
+        - $ref: '#/components/parameters/ReportMode'
+        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/AccountIds'
+        - $ref: '#/components/parameters/CategoryIds'
+        - $ref: '#/components/parameters/TransactionTypes'
+        - $ref: '#/components/parameters/Currency'
+      responses:
+        '200':
+          description: Category breakdown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportCategoryBreakdownEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /reports/account-balances:
+    get:
+      tags: [Reports]
+      operationId: getReportAccountBalances
+      summary: Get balances for visible accounts.
+      description: Never includes personal accounts of another household member, including sorting/min/max/cache behavior.
+      parameters:
+        - $ref: '#/components/parameters/ReportMode'
+        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/AccountIds'
+        - $ref: '#/components/parameters/Currency'
+      responses:
+        '200':
+          description: Account balances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportAccountBalancesEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /reports/cash-flow:
+    get:
+      tags: [Reports]
+      operationId: getReportCashFlow
+      summary: Get cash-flow trend for visible rows.
+      parameters:
+        - $ref: '#/components/parameters/ReportMode'
+        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/ReportBucket'
+        - $ref: '#/components/parameters/AccountIds'
+        - $ref: '#/components/parameters/CategoryIds'
+        - $ref: '#/components/parameters/TransactionTypes'
+        - $ref: '#/components/parameters/Currency'
+      responses:
+        '200':
+          description: Cash-flow report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportCashFlowEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /reports/transactions:
+    get:
+      tags: [Reports]
+      operationId: getReportTransactions
+      summary: Get report drill-down transactions.
+      description: Every returned row must pass regular transaction list/detail predicates for the same actor.
+      parameters:
+        - $ref: '#/components/parameters/ReportMode'
+        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - $ref: '#/components/parameters/Timezone'
+        - $ref: '#/components/parameters/AccountIds'
+        - $ref: '#/components/parameters/CategoryIds'
+        - $ref: '#/components/parameters/TransactionTypes'
+        - $ref: '#/components/parameters/Currency'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Report transaction drill-down.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportTransactionDrillDownEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    pwaCookieAuth:
+      type: apiKey
+      in: cookie
+      name: __Host-finance_session
+      description: HttpOnly Secure SameSite cookie used by the PWA.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Required for PWA cookie-authenticated state-changing requests; bound to the authenticated session and rotated on login/logout/reset.
+    androidBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Opaque bearer access token for Android; refresh token storage and rotation are platform secure-storage concerns.
+  responses:
+    Error:
+      description: Canonical error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    Sort:
+      name: sort
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+      description: Endpoint-specific allowlisted sort value.
+    SearchQuery:
+      name: q
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+      description: Search runs only after visible-scope filtering and is not logged as raw payload.
+    StartDate:
+      name: startDate
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/DateOnly' }
+    EndDate:
+      name: endDate
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/DateOnly' }
+    Timezone:
+      name: timezone
+      in: query
+      required: true
+      schema:
+        type: string
+        example: Europe/Moscow
+    Currency:
+      name: currency
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/CurrencyCode' }
+    HouseholdIdRequired:
+      name: householdId
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+      description: Required scope selector; it narrows access and never expands it.
+    HouseholdIdFilter:
+      name: householdId
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ResourceId' }
+      description: Optional scope narrowing only; inaccessible ids use neutral behavior.
+    AccountIdFilter:
+      name: accountId
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    CategoryIdFilter:
+      name: categoryId
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    AccountIds:
+      name: accountIds
+      in: query
+      required: false
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/ResourceId' }
+      style: form
+      explode: false
+      description: All supplied ids must be visible in the selected report mode or the request fails neutrally.
+    CategoryIds:
+      name: categoryIds
+      in: query
+      required: false
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/ResourceId' }
+      style: form
+      explode: false
+    TransactionTypes:
+      name: transactionTypes
+      in: query
+      required: false
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/TransactionType' }
+      style: form
+      explode: false
+    ReportMode:
+      name: reportMode
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/ReportMode' }
+    ReportBucket:
+      name: bucket
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ReportBucket' }
+    OwnershipTypeFilter:
+      name: ownershipType
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/OwnershipType' }
+    CategoryScopeFilter:
+      name: scope
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/CategoryScope' }
+    CategoryTypeFilter:
+      name: type
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/CategoryType' }
+    TransactionTypeFilter:
+      name: transactionType
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/TransactionType' }
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/RecordStatus' }
+  schemas:
+    ResourceId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9_:-]+$'
+      examples: [usr_123]
+    DateTime:
+      type: string
+      format: date-time
+      examples: ['2026-05-17T10:00:00Z']
+    DateOnly:
+      type: string
+      format: date
+      examples: ['2026-05-17']
+    DecimalString:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]{1,6})?$'
+      examples: ['1000.00']
+      description: Decimal-safe money string; never floating point.
+    CurrencyCode:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      examples: [RUB]
+    OwnershipType:
+      type: string
+      enum: [personal, shared]
+    AccountType:
+      type: string
+      enum: [cash, bank, deposit, brokerage]
+    CategoryScope:
+      type: string
+      enum: [personal, household]
+      description: Category scope uses `household`, not `shared`.
+    CategoryType:
+      type: string
+      enum: [income, expense]
+    TransactionType:
+      type: string
+      enum: [income, expense, transfer, brokerage]
+    ReportMode:
+      type: string
+      enum: [shared_family_report, combined_viewer_overview]
+      description: The only two report modes in MVP.
+    TransferScope:
+      type: string
+      enum: [personal_same_owner, household_same_household]
+      description: Public accepted transfer scopes are same-scope only. Unsupported cross-scope attempts are rejected with TRANSFER_SCOPE_NOT_SUPPORTED.
+    TransferStatus:
+      type: string
+      enum: [posted, voided]
+    SourceType:
+      type: string
+      enum: [manual]
+      description: MVP accepts only manual source. Reserved post-MVP values are rejected by create/update flows.
+      x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
+    RecordStatus:
+      type: string
+      enum: [active, archived, deleted]
+    ReportBucket:
+      type: string
+      enum: [day, month]
+      default: month
+    ErrorCode:
+      type: string
+      enum:
+        - UNAUTHENTICATED
+        - SESSION_EXPIRED
+        - SESSION_REVOKED
+        - RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE
+        - REFERENCED_RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE
+        - ACTION_NOT_ALLOWED
+        - MEMBERSHIP_NOT_ACTIVE
+        - VALIDATION_FAILED
+        - INVALID_ENUM_VALUE
+        - INVALID_DATE_RANGE
+        - INVALID_CURRENCY
+        - ACCOUNT_OWNERSHIP_IMMUTABLE
+        - CATEGORY_SCOPE_MISMATCH
+        - TRANSACTION_ACCOUNT_MISMATCH
+        - ARCHIVED_RECORD_NOT_MUTABLE
+        - CONFLICTING_UPDATE
+        - TRANSFER_SCOPE_NOT_SUPPORTED
+        - TRANSFER_COUNTERPARTY_REQUIRED
+        - TRANSFER_COUNTERPARTY_NOT_ACCESSIBLE
+        - RATE_LIMITED
+        - LOGIN_RATE_LIMITED
+        - RESET_RATE_LIMITED
+        - INVITE_RATE_LIMITED
+        - INVITE_NOT_FOUND_OR_NOT_ACCESSIBLE
+        - INVITE_EXPIRED
+        - INVITE_ALREADY_USED
+        - INVITE_REVOKED
+        - HOUSEHOLD_MEMBER_LIMIT_REACHED
+        - RESET_TOKEN_NOT_FOUND_OR_EXPIRED
+        - RESET_TOKEN_ALREADY_USED
+        - PASSWORD_POLICY_FAILED
+    ErrorDetail:
+      type: object
+      description: Field-level details for caller-supplied invalid fields only; never includes hidden object names, amounts, emails, tokens, SQL, stack traces, or raw payloads.
+      additionalProperties: false
+      properties:
+        field:
+          type: string
+        reason:
+          type: string
+        allowedValues:
+          type: array
+          items:
+            type: string
+    ErrorDto:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: Safe generic user-facing message.
+        requestId:
+          type: string
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDto'
+    PageInfo:
+      type: object
+      additionalProperties: false
+      required: [limit, hasMore]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        nextCursor:
+          type: [string, 'null']
+          description: Opaque cursor scoped to visible filtered rows only.
+        hasMore:
+          type: boolean
+      description: Pagination metadata never includes totalCount or hidden counts.
+    UserDto:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, email, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        displayName:
+          type: string
+          maxLength: 120
+        email:
+          type: string
+          format: email
+          description: Full email is returned only for self profile/session responses.
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        deactivatedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+    SessionCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        deviceName:
+          type: string
+          maxLength: 120
+    SessionDto:
+      type: object
+      additionalProperties: false
+      required: [user, sessionId, expiresAt]
+      properties:
+        user:
+          $ref: '#/components/schemas/UserDto'
+        sessionId:
+          $ref: '#/components/schemas/ResourceId'
+        expiresAt:
+          $ref: '#/components/schemas/DateTime'
+    AccountDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, accountType, ownershipType, currency, initialBalance, currentBalance, status, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+          maxLength: 120
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        ownershipType:
+          $ref: '#/components/schemas/OwnershipType'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Required for personal accounts; null for shared accounts.
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Required for shared accounts; null for personal accounts.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        initialBalance:
+          $ref: '#/components/schemas/DecimalString'
+        currentBalance:
+          $ref: '#/components/schemas/DecimalString'
+        status:
+          $ref: '#/components/schemas/RecordStatus'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        archivedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        deletedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    AccountCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, accountType, ownershipType, currency, initialBalance]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        ownershipType:
+          $ref: '#/components/schemas/OwnershipType'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required when ownershipType is shared; ignored/rejected for personal per backend validation.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        initialBalance:
+          $ref: '#/components/schemas/DecimalString'
+    AccountUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        status:
+          $ref: '#/components/schemas/RecordStatus'
+        version:
+          type: integer
+          minimum: 1
+      description: ownershipType, ownerUserId, and householdId are immutable in MVP.
+    AccountAutocompleteDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, accountType, ownershipType, currency]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        ownershipType:
+          $ref: '#/components/schemas/OwnershipType'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+    TransactionDto:
+      type: object
+      additionalProperties: false
+      required: [id, transactionType, accountId, amount, currency, occurredAt, sourceType, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        transactionType:
+          $ref: '#/components/schemas/TransactionType'
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        counterpartyAccountId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+        description:
+          type: [string, 'null']
+          maxLength: 500
+          description: Shared transaction descriptions are visible to everyone who can read the shared transaction.
+        sourceType:
+          $ref: '#/components/schemas/SourceType'
+        transferScope:
+          anyOf:
+            - $ref: '#/components/schemas/TransferScope'
+            - type: 'null'
+        transferStatus:
+          anyOf:
+            - $ref: '#/components/schemas/TransferStatus'
+            - type: 'null'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        lastEditedByUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        deletedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    TransactionCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [transactionType, accountId, amount, currency, occurredAt, sourceType]
+      properties:
+        transactionType:
+          $ref: '#/components/schemas/TransactionType'
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        counterpartyAccountId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for transactionType=transfer.
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Not allowed for transfer in MVP.
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+        description:
+          type: string
+          maxLength: 500
+        sourceType:
+          $ref: '#/components/schemas/SourceType'
+    TransactionUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        transactionType:
+          $ref: '#/components/schemas/TransactionType'
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        counterpartyAccountId:
+          $ref: '#/components/schemas/ResourceId'
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+        description:
+          type: string
+          maxLength: 500
+        sourceType:
+          $ref: '#/components/schemas/SourceType'
+        version:
+          type: integer
+          minimum: 1
+      description: Client cannot set transferScope, transferStatus, actor fields, or balance effects.
+    TransactionAutocompleteDto:
+      type: object
+      additionalProperties: false
+      required: [id, transactionType, accountId, occurredAt, sourceType]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        transactionType:
+          $ref: '#/components/schemas/TransactionType'
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+        sourceType:
+          $ref: '#/components/schemas/SourceType'
+    CategoryDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, type, scope, status, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+          maxLength: 120
+        type:
+          $ref: '#/components/schemas/CategoryType'
+        scope:
+          $ref: '#/components/schemas/CategoryScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        iconKey:
+          type: [string, 'null']
+          maxLength: 80
+        color:
+          type: [string, 'null']
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        status:
+          $ref: '#/components/schemas/RecordStatus'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        archivedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        deletedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    CategoryCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, type, scope]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        type:
+          $ref: '#/components/schemas/CategoryType'
+        scope:
+          $ref: '#/components/schemas/CategoryScope'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for household categories.
+        iconKey:
+          type: string
+          maxLength: 80
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+    CategoryUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        iconKey:
+          type: string
+          maxLength: 80
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        status:
+          $ref: '#/components/schemas/RecordStatus'
+        version:
+          type: integer
+          minimum: 1
+      description: scope, ownerUserId, and householdId are immutable in MVP.
+    CategoryAutocompleteDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, type, scope]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/CategoryType'
+        scope:
+          $ref: '#/components/schemas/CategoryScope'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        iconKey:
+          type: [string, 'null']
+        color:
+          type: [string, 'null']
+    ReportPeriodDto:
+      type: object
+      additionalProperties: false
+      required: [startDate, endDate, timezone]
+      properties:
+        startDate:
+          $ref: '#/components/schemas/DateOnly'
+        endDate:
+          $ref: '#/components/schemas/DateOnly'
+        timezone:
+          type: string
+    ReportScopeDto:
+      type: object
+      additionalProperties: false
+      required: [viewerUserId, householdId, reportMode, includedAccountIds, generatedAt]
+      properties:
+        viewerUserId:
+          $ref: '#/components/schemas/ResourceId'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+        reportMode:
+          $ref: '#/components/schemas/ReportMode'
+        includedAccountIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceId'
+          description: Only visible account ids after report-mode and supplied-filter resolution.
+        generatedAt:
+          $ref: '#/components/schemas/DateTime'
+    MoneyTotalDto:
+      type: object
+      additionalProperties: false
+      required: [currency, incomeTotal, expenseTotal, netTotal]
+      properties:
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        incomeTotal:
+          $ref: '#/components/schemas/DecimalString'
+        expenseTotal:
+          $ref: '#/components/schemas/DecimalString'
+        netTotal:
+          $ref: '#/components/schemas/DecimalString'
+    ReportSummaryDto:
+      type: object
+      additionalProperties: false
+      required: [scope, period, totalsByCurrency]
+      properties:
+        scope:
+          $ref: '#/components/schemas/ReportScopeDto'
+        period:
+          $ref: '#/components/schemas/ReportPeriodDto'
+        totalsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/MoneyTotalDto'
+    CategoryBreakdownItemDto:
+      type: object
+      additionalProperties: false
+      required: [currency, amount, transactionCount, shareOfVisibleTotal]
+      properties:
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryName:
+          type: [string, 'null']
+        categoryType:
+          anyOf:
+            - $ref: '#/components/schemas/CategoryType'
+            - type: 'null'
+        categoryScope:
+          anyOf:
+            - $ref: '#/components/schemas/CategoryScope'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        transactionCount:
+          type: integer
+          minimum: 0
+          description: Count of visible transactions in this bucket only.
+        shareOfVisibleTotal:
+          type: string
+          pattern: '^0(\.[0-9]+)?|1(\.0+)?$'
+    ReportCategoryBreakdownDto:
+      type: object
+      additionalProperties: false
+      required: [scope, period, items]
+      properties:
+        scope:
+          $ref: '#/components/schemas/ReportScopeDto'
+        period:
+          $ref: '#/components/schemas/ReportPeriodDto'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryBreakdownItemDto'
+    AccountBalanceDto:
+      type: object
+      additionalProperties: false
+      required: [accountId, accountName, accountType, ownershipType, currency, currentBalance, balanceAsOf]
+      properties:
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        accountName:
+          type: string
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        ownershipType:
+          $ref: '#/components/schemas/OwnershipType'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        currentBalance:
+          $ref: '#/components/schemas/DecimalString'
+        balanceAsOf:
+          $ref: '#/components/schemas/DateTime'
+    ReportAccountBalancesDto:
+      type: object
+      additionalProperties: false
+      required: [scope, asOfDate, timezone, items]
+      properties:
+        scope:
+          $ref: '#/components/schemas/ReportScopeDto'
+        asOfDate:
+          $ref: '#/components/schemas/DateOnly'
+        timezone:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceDto'
+    CashFlowPointDto:
+      type: object
+      additionalProperties: false
+      required: [periodStartDate, periodEndDate, totalsByCurrency]
+      properties:
+        periodStartDate:
+          $ref: '#/components/schemas/DateOnly'
+        periodEndDate:
+          $ref: '#/components/schemas/DateOnly'
+        totalsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/MoneyTotalDto'
+    ReportCashFlowDto:
+      type: object
+      additionalProperties: false
+      required: [scope, period, bucket, points]
+      properties:
+        scope:
+          $ref: '#/components/schemas/ReportScopeDto'
+        period:
+          $ref: '#/components/schemas/ReportPeriodDto'
+        bucket:
+          $ref: '#/components/schemas/ReportBucket'
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashFlowPointDto'
+    ReportTransactionDrillDownDto:
+      type: object
+      additionalProperties: false
+      required: [scope, period, items, page]
+      properties:
+        scope:
+          $ref: '#/components/schemas/ReportScopeDto'
+        period:
+          $ref: '#/components/schemas/ReportPeriodDto'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    SessionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/SessionDto'
+    AccountEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/AccountDto'
+    AccountPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    AccountAutocompleteListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountAutocompleteDto'
+    TransactionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/TransactionDto'
+    TransactionPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    TransactionAutocompleteListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionAutocompleteDto'
+    CategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CategoryDto'
+    CategoryPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    CategoryAutocompleteListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryAutocompleteDto'
+    ReportSummaryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReportSummaryDto'
+    ReportCategoryBreakdownEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReportCategoryBreakdownDto'
+    ReportAccountBalancesEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReportAccountBalancesDto'
+    ReportCashFlowEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReportCashFlowDto'
+    ReportTransactionDrillDownEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReportTransactionDrillDownDto'

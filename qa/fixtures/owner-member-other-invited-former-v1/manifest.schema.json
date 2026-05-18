@@ -1,0 +1,1142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/qa/fixtures/owner-member-other-invited-former-v1/manifest.schema.json",
+  "title": "Owner/Member/Other/Invited/Former Fixture Manifest v1",
+  "description": "Runner-neutral QA fixture manifest schema for the Wave 2 authorization, privacy, transfer, report and evidence matrix.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifactVersion",
+    "fixtureSet",
+    "sourceDocuments",
+    "safety",
+    "actorLabels",
+    "households",
+    "memberships",
+    "accounts",
+    "categories",
+    "transactions",
+    "transfers",
+    "reports",
+    "sessions",
+    "invites",
+    "privacy",
+    "cache",
+    "exports",
+    "loader",
+    "evidenceMapping"
+  ],
+  "properties": {
+    "artifactVersion": {
+      "const": "owner-member-other-invited-former-v1"
+    },
+    "fixtureSet": {
+      "const": "owner-member-other-invited-former-v1"
+    },
+    "sourceDocuments": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "string",
+        "pattern": "^(docs/architecture|docs/testing)/.+\\.md$"
+      }
+    },
+    "safety": {
+      "$ref": "#/$defs/safety"
+    },
+    "actorLabels": {
+      "type": "array",
+      "minItems": 5,
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "label": {
+                "const": "owner_a"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "label": {
+                "const": "member_b"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "label": {
+                "const": "other_c"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "label": {
+                "const": "invited_ab"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "label": {
+                "const": "former_ab"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          }
+        }
+      ],
+      "items": {
+        "$ref": "#/$defs/actor"
+      }
+    },
+    "households": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/household"
+      }
+    },
+    "memberships": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "$ref": "#/$defs/membership"
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "$ref": "#/$defs/account"
+      }
+    },
+    "categories": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "$ref": "#/$defs/category"
+      }
+    },
+    "transactions": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "$ref": "#/$defs/transaction"
+      }
+    },
+    "transfers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "denied"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/transfer"
+          }
+        },
+        "denied": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "$ref": "#/$defs/transfer"
+          }
+        }
+      }
+    },
+    "reports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "periods",
+        "fixtures",
+        "goldens"
+      ],
+      "properties": {
+        "periods": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/reportPeriod"
+          }
+        },
+        "fixtures": {
+          "type": "array",
+          "minItems": 7,
+          "items": {
+            "$ref": "#/$defs/reportFixture"
+          }
+        },
+        "goldens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/golden"
+          }
+        }
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "$ref": "#/$defs/session"
+      }
+    },
+    "invites": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "$ref": "#/$defs/invite"
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deleteFixtures",
+        "leaveFixtures"
+      ],
+      "properties": {
+        "deleteFixtures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/privacyFlow"
+          }
+        },
+        "leaveFixtures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/privacyFlow"
+          }
+        }
+      }
+    },
+    "cache": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "$ref": "#/$defs/cacheFixture"
+      }
+    },
+    "exports": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "$ref": "#/$defs/exportFixture"
+      }
+    },
+    "loader": {
+      "$ref": "#/$defs/loader"
+    },
+    "evidenceMapping": {
+      "$ref": "#/$defs/evidenceMapping"
+    }
+  },
+  "$defs": {
+    "label": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "actorLabel": {
+      "enum": [
+        "owner_a",
+        "member_b",
+        "other_c",
+        "invited_ab",
+        "former_ab"
+      ]
+    },
+    "scope": {
+      "enum": [
+        "personal",
+        "shared",
+        "household",
+        "virtual",
+        "auth",
+        "privacy",
+        "client"
+      ]
+    },
+    "evidenceBucket": {
+      "enum": [
+        "artifacts/evidence/api",
+        "artifacts/evidence/authz",
+        "artifacts/evidence/reports",
+        "artifacts/evidence/transfers",
+        "artifacts/evidence/privacy",
+        "artifacts/evidence/client",
+        "artifacts/evidence/security",
+        "artifacts/evidence/backups",
+        "artifacts/evidence/dependencies"
+      ]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "syntheticOnly",
+        "forbiddenValues",
+        "logRedaction",
+        "exportEvidence"
+      ],
+      "properties": {
+        "syntheticOnly": {
+          "const": true
+        },
+        "forbiddenValues": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "real_personal_data",
+              "real_emails",
+              "plaintext_passwords",
+              "tokens",
+              "token_hashes",
+              "secrets",
+              "raw_financial_payloads",
+              "amounts_in_logs",
+              "account_names_in_logs",
+              "category_names_in_logs",
+              "transaction_descriptions_in_logs",
+              "production_config"
+            ]
+          }
+        },
+        "logRedaction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mustRedact",
+            "allowedMetadata"
+          ],
+          "properties": {
+            "mustRedact": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "allowedMetadata": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "exportEvidence": {
+          "enum": [
+            "manifest_or_diff_only",
+            "no_raw_export_contents"
+          ]
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "displayName",
+        "baselineState",
+        "mustSee",
+        "mustNotSee"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "displayName": {
+          "enum": [
+            "Owner A",
+            "Member B",
+            "Other C",
+            "Invited",
+            "Former"
+          ]
+        },
+        "baselineState": {
+          "type": "string"
+        },
+        "mustSee": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "mustNotSee": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        }
+      }
+    },
+    "household": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "purpose",
+        "memberships"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "memberships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        }
+      }
+    },
+    "membership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "household",
+        "role",
+        "status"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "household": {
+          "$ref": "#/$defs/label"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "member",
+            "invitee",
+            "former"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "invited",
+            "left",
+            "revoked"
+          ]
+        }
+      }
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "scope",
+        "ownerActor",
+        "household",
+        "currency",
+        "purpose"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "scope": {
+          "enum": [
+            "personal",
+            "shared"
+          ]
+        },
+        "ownerActor": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/actorLabel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "household": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "enum": [
+            "RUB",
+            "USD"
+          ]
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "scope",
+        "ownerActor",
+        "household",
+        "categoryType",
+        "purpose"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "scope": {
+          "enum": [
+            "personal",
+            "household",
+            "virtual"
+          ]
+        },
+        "ownerActor": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/actorLabel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "household": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "categoryType": {
+          "enum": [
+            "income",
+            "expense",
+            "transfer",
+            "uncategorized"
+          ]
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "transaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "account",
+        "category",
+        "transactionType",
+        "sourceType",
+        "amountProfile",
+        "period",
+        "purpose"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "account": {
+          "$ref": "#/$defs/label"
+        },
+        "category": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transactionType": {
+          "enum": [
+            "income",
+            "expense",
+            "transfer"
+          ]
+        },
+        "sourceType": {
+          "const": "manual"
+        },
+        "amountProfile": {
+          "description": "Synthetic amount category for fixture math. Concrete values are generated by the loader and must not appear in logs.",
+          "enum": [
+            "synthetic_income_small",
+            "synthetic_expense_small",
+            "synthetic_transfer_equal",
+            "synthetic_multicurrency_control",
+            "redacted_in_logs"
+          ]
+        },
+        "period": {
+          "$ref": "#/$defs/label"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "transfer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "sourceAccount",
+        "counterpartyAccount",
+        "expectedScope",
+        "expectedPublicBehavior",
+        "releaseGates",
+        "evidenceBuckets"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "sourceAccount": {
+          "$ref": "#/$defs/label"
+        },
+        "counterpartyAccount": {
+          "$ref": "#/$defs/label"
+        },
+        "expectedScope": {
+          "enum": [
+            "personal_same_owner",
+            "household_same_household",
+            "unsupported",
+            "hidden_or_missing_counterparty",
+            "invalid_currency_after_visibility"
+          ]
+        },
+        "expectedPublicBehavior": {
+          "type": "string"
+        },
+        "releaseGates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(RG|TR-RG|PF-RG)-[0-9]{2}$"
+          }
+        },
+        "evidenceBuckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceBucket"
+          }
+        }
+      }
+    },
+    "reportPeriod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "startDate",
+        "endDate",
+        "timezone"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "startDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "endDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "timezone": {
+          "const": "Europe/Moscow"
+        }
+      }
+    },
+    "reportFixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "reportMode",
+        "household",
+        "period",
+        "expectedIncludedAccounts",
+        "mustExclude",
+        "proofs"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "reportMode": {
+          "enum": [
+            "shared_family_report",
+            "combined_viewer_overview"
+          ]
+        },
+        "household": {
+          "$ref": "#/$defs/label"
+        },
+        "period": {
+          "$ref": "#/$defs/label"
+        },
+        "expectedIncludedAccounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "mustExclude": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "proofs": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "visibleAccountIds_before_aggregate",
+              "filter_before_sum_count_group_by",
+              "drilldown_detail_equivalence",
+              "no_hidden_counts",
+              "cache_key_viewer_scoped",
+              "neutral_error_for_hidden_filters"
+            ]
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "state",
+        "purpose"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "expired",
+            "revoked",
+            "logged_out",
+            "stale_pre_leave",
+            "reset_revoked"
+          ]
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "invite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "household",
+        "actor",
+        "status",
+        "tokenPolicy",
+        "purpose"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "household": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "accepted",
+            "declined",
+            "revoked",
+            "expired",
+            "resend_pending"
+          ]
+        },
+        "tokenPolicy": {
+          "enum": [
+            "generated_by_loader_never_logged",
+            "hashed_storage_only",
+            "one_time_replay_rejected"
+          ]
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "privacyFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "event",
+        "expectedAfter",
+        "evidenceBuckets"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "event": {
+          "enum": [
+            "delete_or_deactivate_self",
+            "cross_user_delete_attempt",
+            "leave_household",
+            "membership_revoked",
+            "shared_history_marker"
+          ]
+        },
+        "expectedAfter": {
+          "type": "string"
+        },
+        "evidenceBuckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceBucket"
+          }
+        }
+      }
+    },
+    "cacheFixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "surface",
+        "cachedBefore",
+        "event",
+        "expectedAfter",
+        "requiredCacheKeyParts"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "surface": {
+          "enum": [
+            "pwa",
+            "android",
+            "service_worker",
+            "server_report_cache",
+            "offline_snapshot",
+            "deep_link"
+          ]
+        },
+        "cachedBefore": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "event": {
+          "enum": [
+            "login_switch",
+            "logout",
+            "session_expired",
+            "password_reset",
+            "leave_or_revoke",
+            "invite_accept_or_revoke"
+          ]
+        },
+        "expectedAfter": {
+          "type": "string"
+        },
+        "requiredCacheKeyParts": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "viewerUserId",
+              "sessionAccessVersion",
+              "householdId",
+              "reportMode",
+              "membershipAccessVersion",
+              "filterHash"
+            ]
+          }
+        }
+      }
+    },
+    "exportFixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "actor",
+        "scope",
+        "expectedContents",
+        "mustExclude",
+        "fileLifecycle"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorLabel"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "expectedContents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "mustExclude": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "fileLifecycle": {
+          "enum": [
+            "owner_only_protected_short_ttl",
+            "expired_or_inaccessible_after_leave",
+            "manifest_diff_only_no_raw_contents"
+          ]
+        }
+      }
+    },
+    "golden": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "group",
+        "compare",
+        "invariant"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "group": {
+          "enum": [
+            "neutral_errors",
+            "no_hidden_counts",
+            "transfer_hidden_side",
+            "report_errors",
+            "client_empty_error_states"
+          ]
+        },
+        "compare": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/label"
+          }
+        },
+        "invariant": {
+          "type": "string"
+        }
+      }
+    },
+    "loader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runnerNeutral",
+        "phases",
+        "outputs",
+        "forbiddenOutputs"
+      ],
+      "properties": {
+        "runnerNeutral": {
+          "const": true
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "validate_manifest",
+              "allocate_synthetic_ids",
+              "seed_graph",
+              "seed_security_state",
+              "seed_privacy_state",
+              "emit_loader_map",
+              "emit_evidence_manifest"
+            ]
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "forbiddenOutputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidenceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "buckets",
+        "scenarioFamilies",
+        "artifactRules"
+      ],
+      "properties": {
+        "root": {
+          "const": "artifacts/evidence"
+        },
+        "buckets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "api",
+            "authz",
+            "reports",
+            "transfers",
+            "privacy",
+            "client",
+            "security",
+            "backups",
+            "dependencies"
+          ],
+          "properties": {
+            "api": {
+              "type": "array"
+            },
+            "authz": {
+              "type": "array"
+            },
+            "reports": {
+              "type": "array"
+            },
+            "transfers": {
+              "type": "array"
+            },
+            "privacy": {
+              "type": "array"
+            },
+            "client": {
+              "type": "array"
+            },
+            "security": {
+              "type": "array"
+            },
+            "backups": {
+              "type": "array"
+            },
+            "dependencies": {
+              "type": "array"
+            }
+          }
+        },
+        "scenarioFamilies": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "AS",
+              "NEG",
+              "SEC",
+              "PRIV",
+              "RG",
+              "TR-RG",
+              "PF-RG"
+            ]
+          }
+        },
+        "artifactRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

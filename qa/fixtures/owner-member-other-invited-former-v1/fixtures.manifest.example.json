@@ -1,0 +1,1304 @@
+{
+  "artifactVersion": "owner-member-other-invited-former-v1",
+  "fixtureSet": "owner-member-other-invited-former-v1",
+  "sourceDocuments": [
+    "docs/architecture/decision-records/adr-0001-stack-repo-layout.md",
+    "docs/testing/wave-2-fixture-evidence-matrix.md",
+    "docs/testing/qa-endpoint-traceability.md"
+  ],
+  "safety": {
+    "syntheticOnly": true,
+    "forbiddenValues": [
+      "real_personal_data",
+      "real_emails",
+      "plaintext_passwords",
+      "tokens",
+      "token_hashes",
+      "secrets",
+      "raw_financial_payloads",
+      "amounts_in_logs",
+      "account_names_in_logs",
+      "category_names_in_logs",
+      "transaction_descriptions_in_logs",
+      "production_config"
+    ],
+    "logRedaction": {
+      "mustRedact": [
+        "amounts",
+        "balances",
+        "transactionDescriptions",
+        "accountNames",
+        "categoryNames",
+        "emails",
+        "tokens",
+        "tokenHashes",
+        "passwords",
+        "rawRequestBodies",
+        "rawResponseBodies",
+        "exportContents"
+      ],
+      "allowedMetadata": [
+        "requestId",
+        "actorLabel",
+        "scenarioId",
+        "releaseGateId",
+        "endpointSurface",
+        "fixtureLabels",
+        "normalizedStatus"
+      ]
+    },
+    "exportEvidence": "manifest_or_diff_only"
+  },
+  "actorLabels": [
+    {
+      "label": "owner_a",
+      "displayName": "Owner A",
+      "baselineState": "Active owner in hh_ab with personal A data and shared AB visibility.",
+      "mustSee": [
+        "acc_a_cash",
+        "acc_a_savings",
+        "acc_ab_cash",
+        "txn_a_income_may",
+        "txn_ab_expense_may",
+        "rep_a_combined_ab"
+      ],
+      "mustNotSee": [
+        "acc_b_cash",
+        "txn_b_expense_may",
+        "acc_c_shared",
+        "txn_c_shared_may"
+      ]
+    },
+    {
+      "label": "member_b",
+      "displayName": "Member B",
+      "baselineState": "Active member in hh_ab with personal B data and shared AB visibility.",
+      "mustSee": [
+        "acc_b_cash",
+        "acc_b_savings",
+        "acc_ab_cash",
+        "txn_b_income_may",
+        "txn_ab_expense_may",
+        "rep_b_combined_ab"
+      ],
+      "mustNotSee": [
+        "acc_a_cash",
+        "txn_a_expense_may",
+        "acc_c_shared",
+        "txn_c_shared_may"
+      ]
+    },
+    {
+      "label": "other_c",
+      "displayName": "Other C",
+      "baselineState": "Authenticated user outside hh_ab, active in hh_c.",
+      "mustSee": [
+        "acc_c_shared",
+        "txn_c_shared_may"
+      ],
+      "mustNotSee": [
+        "hh_ab",
+        "acc_ab_cash",
+        "acc_a_cash",
+        "acc_b_cash",
+        "rep_a_shared_family_ab"
+      ]
+    },
+    {
+      "label": "invited_ab",
+      "displayName": "Invited",
+      "baselineState": "Pending invite to hh_ab with no active shared financial access.",
+      "mustSee": [
+        "inv_ab_pending"
+      ],
+      "mustNotSee": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "rep_a_shared_family_ab",
+        "exp_a_combined_visible"
+      ]
+    },
+    {
+      "label": "former_ab",
+      "displayName": "Former",
+      "baselineState": "Previously active in hh_ab, now left or revoked.",
+      "mustSee": [
+        "sess_former_active"
+      ],
+      "mustNotSee": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "trf_ab_shared_same_household_by_a",
+        "exp_old_shared_file_after_leave"
+      ]
+    }
+  ],
+  "households": [
+    {
+      "label": "hh_ab",
+      "purpose": "Primary shared household for Owner A and Member B active-member proofs.",
+      "memberships": [
+        "mem_a_ab_active",
+        "mem_b_ab_active",
+        "mem_invited_ab_invited",
+        "mem_former_ab_left"
+      ]
+    },
+    {
+      "label": "hh_c",
+      "purpose": "Foreign shared scope for cross-household denial controls.",
+      "memberships": [
+        "mem_c_c_active"
+      ]
+    }
+  ],
+  "memberships": [
+    {
+      "label": "mem_a_ab_active",
+      "actor": "owner_a",
+      "household": "hh_ab",
+      "role": "owner",
+      "status": "active"
+    },
+    {
+      "label": "mem_b_ab_active",
+      "actor": "member_b",
+      "household": "hh_ab",
+      "role": "member",
+      "status": "active"
+    },
+    {
+      "label": "mem_invited_ab_invited",
+      "actor": "invited_ab",
+      "household": "hh_ab",
+      "role": "invitee",
+      "status": "invited"
+    },
+    {
+      "label": "mem_former_ab_left",
+      "actor": "former_ab",
+      "household": "hh_ab",
+      "role": "former",
+      "status": "left"
+    },
+    {
+      "label": "mem_c_c_active",
+      "actor": "other_c",
+      "household": "hh_c",
+      "role": "owner",
+      "status": "active"
+    }
+  ],
+  "accounts": [
+    {
+      "label": "acc_a_cash",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "RUB",
+      "purpose": "Owner A primary personal account."
+    },
+    {
+      "label": "acc_a_savings",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "RUB",
+      "purpose": "Owner A second personal account for same-owner transfers."
+    },
+    {
+      "label": "acc_b_cash",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "currency": "RUB",
+      "purpose": "Member B primary personal account."
+    },
+    {
+      "label": "acc_b_savings",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "currency": "RUB",
+      "purpose": "Member B second personal account for same-owner mirror transfers."
+    },
+    {
+      "label": "acc_ab_cash",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "RUB",
+      "purpose": "Household AB shared primary account."
+    },
+    {
+      "label": "acc_ab_savings",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "RUB",
+      "purpose": "Household AB second shared account for same-household transfers."
+    },
+    {
+      "label": "acc_c_shared",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_c",
+      "currency": "RUB",
+      "purpose": "Foreign Household C shared denial target."
+    },
+    {
+      "label": "acc_c_shared_2",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_c",
+      "currency": "RUB",
+      "purpose": "Foreign Household C transfer control."
+    },
+    {
+      "label": "acc_a_usd",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "currency": "USD",
+      "purpose": "Owner A multi-currency control."
+    },
+    {
+      "label": "acc_ab_usd",
+      "scope": "shared",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "currency": "USD",
+      "purpose": "Household AB multi-currency control."
+    }
+  ],
+  "categories": [
+    {
+      "label": "cat_a_income",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "categoryType": "income",
+      "purpose": "Owner A personal income bucket."
+    },
+    {
+      "label": "cat_a_food",
+      "scope": "personal",
+      "ownerActor": "owner_a",
+      "household": null,
+      "categoryType": "expense",
+      "purpose": "Owner A personal expense bucket."
+    },
+    {
+      "label": "cat_b_income",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "categoryType": "income",
+      "purpose": "Member B personal income bucket."
+    },
+    {
+      "label": "cat_b_food",
+      "scope": "personal",
+      "ownerActor": "member_b",
+      "household": null,
+      "categoryType": "expense",
+      "purpose": "Member B personal expense bucket."
+    },
+    {
+      "label": "cat_ab_groceries",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "categoryType": "expense",
+      "purpose": "Household AB shared expense bucket."
+    },
+    {
+      "label": "cat_ab_salary",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_ab",
+      "categoryType": "income",
+      "purpose": "Household AB shared income bucket."
+    },
+    {
+      "label": "cat_c_foreign",
+      "scope": "household",
+      "ownerActor": null,
+      "household": "hh_c",
+      "categoryType": "expense",
+      "purpose": "Foreign category denial control."
+    },
+    {
+      "label": "cat_uncategorized",
+      "scope": "virtual",
+      "ownerActor": null,
+      "household": null,
+      "categoryType": "uncategorized",
+      "purpose": "Visible uncategorized bucket without hidden category inference."
+    }
+  ],
+  "transactions": [
+    {
+      "label": "txn_a_income_may",
+      "account": "acc_a_cash",
+      "category": "cat_a_income",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_income_small",
+      "period": "period_may_2026",
+      "purpose": "Owner A personal income visible only to Owner A."
+    },
+    {
+      "label": "txn_a_expense_may",
+      "account": "acc_a_cash",
+      "category": "cat_a_food",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_expense_small",
+      "period": "period_may_2026",
+      "purpose": "Owner A personal expense hidden from Member B and Other C."
+    },
+    {
+      "label": "txn_b_income_may",
+      "account": "acc_b_cash",
+      "category": "cat_b_income",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_income_small",
+      "period": "period_may_2026",
+      "purpose": "Member B personal income visible only to Member B."
+    },
+    {
+      "label": "txn_b_expense_may",
+      "account": "acc_b_cash",
+      "category": "cat_b_food",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_expense_small",
+      "period": "period_may_2026",
+      "purpose": "Member B personal expense hidden from Owner A and Other C."
+    },
+    {
+      "label": "txn_ab_income_may",
+      "account": "acc_ab_cash",
+      "category": "cat_ab_salary",
+      "transactionType": "income",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_income_small",
+      "period": "period_may_2026",
+      "purpose": "Household AB shared income visible only to active AB members."
+    },
+    {
+      "label": "txn_ab_expense_may",
+      "account": "acc_ab_cash",
+      "category": "cat_ab_groceries",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_expense_small",
+      "period": "period_may_2026",
+      "purpose": "Household AB shared expense visible only to active AB members."
+    },
+    {
+      "label": "txn_ab_uncategorized",
+      "account": "acc_ab_cash",
+      "category": null,
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_expense_small",
+      "period": "period_may_2026",
+      "purpose": "Visible uncategorized shared transaction."
+    },
+    {
+      "label": "txn_c_shared_may",
+      "account": "acc_c_shared",
+      "category": "cat_c_foreign",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "synthetic_expense_small",
+      "period": "period_may_2026",
+      "purpose": "Foreign Household C shared denial control."
+    },
+    {
+      "label": "txn_a_archived",
+      "account": "acc_a_cash",
+      "category": "cat_a_food",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "redacted_in_logs",
+      "period": "period_may_2026",
+      "purpose": "State-specific personal archived transaction after visible access."
+    },
+    {
+      "label": "txn_ab_deleted_or_voided",
+      "account": "acc_ab_cash",
+      "category": "cat_ab_groceries",
+      "transactionType": "expense",
+      "sourceType": "manual",
+      "amountProfile": "redacted_in_logs",
+      "period": "period_may_2026",
+      "purpose": "Shared delete/void/restore boundary control."
+    }
+  ],
+  "transfers": {
+    "allowed": [
+      {
+        "label": "trf_a_personal_same_owner",
+        "actor": "owner_a",
+        "sourceAccount": "acc_a_cash",
+        "counterpartyAccount": "acc_a_savings",
+        "expectedScope": "personal_same_owner",
+        "expectedPublicBehavior": "Allowed for Owner A only; never visible to Member B or Other C.",
+        "releaseGates": [
+          "RG-04",
+          "TR-RG-01"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/authz",
+          "artifacts/evidence/reports"
+        ]
+      },
+      {
+        "label": "trf_b_personal_same_owner",
+        "actor": "member_b",
+        "sourceAccount": "acc_b_cash",
+        "counterpartyAccount": "acc_b_savings",
+        "expectedScope": "personal_same_owner",
+        "expectedPublicBehavior": "Allowed for Member B only; never visible to Owner A or Other C.",
+        "releaseGates": [
+          "RG-04",
+          "TR-RG-01"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/authz",
+          "artifacts/evidence/reports"
+        ]
+      },
+      {
+        "label": "trf_ab_shared_same_household_by_a",
+        "actor": "owner_a",
+        "sourceAccount": "acc_ab_cash",
+        "counterpartyAccount": "acc_ab_savings",
+        "expectedScope": "household_same_household",
+        "expectedPublicBehavior": "Allowed for active Owner A and visible to active Member B.",
+        "releaseGates": [
+          "RG-04",
+          "TR-RG-01",
+          "TR-RG-06"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/reports"
+        ]
+      },
+      {
+        "label": "trf_ab_shared_same_household_by_b",
+        "actor": "member_b",
+        "sourceAccount": "acc_ab_savings",
+        "counterpartyAccount": "acc_ab_cash",
+        "expectedScope": "household_same_household",
+        "expectedPublicBehavior": "Allowed for active Member B and visible to active Owner A.",
+        "releaseGates": [
+          "RG-04",
+          "TR-RG-01",
+          "TR-RG-06"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/reports"
+        ]
+      }
+    ],
+    "denied": [
+      {
+        "label": "trf_denied_personal_to_shared",
+        "actor": "owner_a",
+        "sourceAccount": "acc_a_cash",
+        "counterpartyAccount": "acc_ab_cash",
+        "expectedScope": "unsupported",
+        "expectedPublicBehavior": "TRANSFER_SCOPE_NOT_SUPPORTED or approved neutral equivalent; no partial write.",
+        "releaseGates": [
+          "RG-03",
+          "TR-RG-02",
+          "TR-RG-04"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/security"
+        ]
+      },
+      {
+        "label": "trf_denied_shared_to_personal",
+        "actor": "owner_a",
+        "sourceAccount": "acc_ab_cash",
+        "counterpartyAccount": "acc_a_cash",
+        "expectedScope": "unsupported",
+        "expectedPublicBehavior": "Same public message and details as other unsupported scopes.",
+        "releaseGates": [
+          "RG-03",
+          "TR-RG-02",
+          "TR-RG-03"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers"
+        ]
+      },
+      {
+        "label": "trf_denied_cross_user_personal",
+        "actor": "owner_a",
+        "sourceAccount": "acc_a_cash",
+        "counterpartyAccount": "acc_b_cash",
+        "expectedScope": "hidden_or_missing_counterparty",
+        "expectedPublicBehavior": "No Member B owner/name/balance/membership details in response or logs.",
+        "releaseGates": [
+          "RG-02",
+          "TR-RG-02",
+          "TR-RG-03"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/authz",
+          "artifacts/evidence/security"
+        ]
+      },
+      {
+        "label": "trf_denied_cross_household_shared",
+        "actor": "owner_a",
+        "sourceAccount": "acc_ab_cash",
+        "counterpartyAccount": "acc_c_shared",
+        "expectedScope": "hidden_or_missing_counterparty",
+        "expectedPublicBehavior": "No Household C or account details in response or logs.",
+        "releaseGates": [
+          "RG-02",
+          "TR-RG-02",
+          "TR-RG-03"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/authz",
+          "artifacts/evidence/security"
+        ]
+      },
+      {
+        "label": "trf_denied_invited_shared",
+        "actor": "invited_ab",
+        "sourceAccount": "acc_ab_cash",
+        "counterpartyAccount": "acc_ab_savings",
+        "expectedScope": "hidden_or_missing_counterparty",
+        "expectedPublicBehavior": "Neutral deny before active membership.",
+        "releaseGates": [
+          "RG-05",
+          "TR-RG-07"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/privacy"
+        ]
+      },
+      {
+        "label": "trf_denied_former_shared_restore",
+        "actor": "former_ab",
+        "sourceAccount": "acc_ab_cash",
+        "counterpartyAccount": "acc_ab_savings",
+        "expectedScope": "hidden_or_missing_counterparty",
+        "expectedPublicBehavior": "Neutral deny with stale id/session/cache.",
+        "releaseGates": [
+          "RG-05",
+          "TR-RG-07",
+          "PF-RG-06"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/client"
+        ]
+      },
+      {
+        "label": "trf_denied_cross_currency",
+        "actor": "owner_a",
+        "sourceAccount": "acc_a_cash",
+        "counterpartyAccount": "acc_a_usd",
+        "expectedScope": "invalid_currency_after_visibility",
+        "expectedPublicBehavior": "INVALID_CURRENCY only after both accounts are proven visible to Owner A.",
+        "releaseGates": [
+          "TR-RG-02",
+          "TR-RG-03"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers"
+        ]
+      },
+      {
+        "label": "trf_denied_missing_counterparty",
+        "actor": "owner_a",
+        "sourceAccount": "acc_a_cash",
+        "counterpartyAccount": "missing_counterparty_account",
+        "expectedScope": "hidden_or_missing_counterparty",
+        "expectedPublicBehavior": "Public response indistinguishable from inaccessible counterparty where policy requires.",
+        "releaseGates": [
+          "RG-10",
+          "TR-RG-03"
+        ],
+        "evidenceBuckets": [
+          "artifacts/evidence/transfers",
+          "artifacts/evidence/authz"
+        ]
+      }
+    ]
+  },
+  "reports": {
+    "periods": [
+      {
+        "label": "period_may_2026",
+        "startDate": "2026-05-01",
+        "endDate": "2026-05-31",
+        "timezone": "Europe/Moscow"
+      },
+      {
+        "label": "period_empty_visible",
+        "startDate": "2026-06-01",
+        "endDate": "2026-06-30",
+        "timezone": "Europe/Moscow"
+      },
+      {
+        "label": "period_invalid_range",
+        "startDate": "2026-06-30",
+        "endDate": "2026-06-01",
+        "timezone": "Europe/Moscow"
+      }
+    ],
+    "fixtures": [
+      {
+        "label": "rep_a_shared_family_ab",
+        "actor": "owner_a",
+        "reportMode": "shared_family_report",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [
+          "acc_ab_cash",
+          "acc_ab_savings",
+          "acc_ab_usd"
+        ],
+        "mustExclude": [
+          "acc_a_cash",
+          "acc_b_cash",
+          "acc_c_shared"
+        ],
+        "proofs": [
+          "visibleAccountIds_before_aggregate",
+          "filter_before_sum_count_group_by",
+          "no_hidden_counts",
+          "drilldown_detail_equivalence"
+        ]
+      },
+      {
+        "label": "rep_b_shared_family_ab",
+        "actor": "member_b",
+        "reportMode": "shared_family_report",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [
+          "acc_ab_cash",
+          "acc_ab_savings",
+          "acc_ab_usd"
+        ],
+        "mustExclude": [
+          "acc_a_cash",
+          "acc_b_cash",
+          "acc_c_shared"
+        ],
+        "proofs": [
+          "visibleAccountIds_before_aggregate",
+          "filter_before_sum_count_group_by",
+          "no_hidden_counts",
+          "drilldown_detail_equivalence"
+        ]
+      },
+      {
+        "label": "rep_a_combined_ab",
+        "actor": "owner_a",
+        "reportMode": "combined_viewer_overview",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [
+          "acc_a_cash",
+          "acc_a_savings",
+          "acc_a_usd",
+          "acc_ab_cash",
+          "acc_ab_savings",
+          "acc_ab_usd"
+        ],
+        "mustExclude": [
+          "acc_b_cash",
+          "acc_b_savings",
+          "acc_c_shared"
+        ],
+        "proofs": [
+          "visibleAccountIds_before_aggregate",
+          "filter_before_sum_count_group_by",
+          "cache_key_viewer_scoped",
+          "no_hidden_counts"
+        ]
+      },
+      {
+        "label": "rep_b_combined_ab",
+        "actor": "member_b",
+        "reportMode": "combined_viewer_overview",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [
+          "acc_b_cash",
+          "acc_b_savings",
+          "acc_ab_cash",
+          "acc_ab_savings",
+          "acc_ab_usd"
+        ],
+        "mustExclude": [
+          "acc_a_cash",
+          "acc_a_savings",
+          "acc_a_usd",
+          "acc_c_shared"
+        ],
+        "proofs": [
+          "visibleAccountIds_before_aggregate",
+          "filter_before_sum_count_group_by",
+          "cache_key_viewer_scoped",
+          "no_hidden_counts"
+        ]
+      },
+      {
+        "label": "rep_c_ab_denied",
+        "actor": "other_c",
+        "reportMode": "shared_family_report",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [],
+        "mustExclude": [
+          "acc_ab_cash",
+          "acc_a_cash",
+          "acc_b_cash"
+        ],
+        "proofs": [
+          "neutral_error_for_hidden_filters",
+          "no_hidden_counts"
+        ]
+      },
+      {
+        "label": "rep_invited_ab_denied",
+        "actor": "invited_ab",
+        "reportMode": "shared_family_report",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [],
+        "mustExclude": [
+          "acc_ab_cash",
+          "acc_a_cash",
+          "acc_b_cash"
+        ],
+        "proofs": [
+          "neutral_error_for_hidden_filters",
+          "no_hidden_counts"
+        ]
+      },
+      {
+        "label": "rep_former_ab_denied",
+        "actor": "former_ab",
+        "reportMode": "shared_family_report",
+        "household": "hh_ab",
+        "period": "period_may_2026",
+        "expectedIncludedAccounts": [],
+        "mustExclude": [
+          "acc_ab_cash",
+          "acc_a_cash",
+          "acc_b_cash"
+        ],
+        "proofs": [
+          "neutral_error_for_hidden_filters",
+          "no_hidden_counts"
+        ]
+      }
+    ],
+    "goldens": [
+      {
+        "label": "golden_account_missing_vs_inaccessible",
+        "group": "neutral_errors",
+        "compare": [
+          "missing_account_id",
+          "acc_a_cash_requested_by_member_b",
+          "acc_ab_cash_requested_by_other_c"
+        ],
+        "invariant": "Same public envelope and no account existence, owner, amount, balance or label details."
+      },
+      {
+        "label": "golden_transaction_missing_vs_inaccessible",
+        "group": "neutral_errors",
+        "compare": [
+          "missing_transaction_id",
+          "txn_a_expense_may_requested_by_member_b",
+          "txn_ab_expense_may_requested_by_former_ab"
+        ],
+        "invariant": "Same public shape and no amount, description, account or category details."
+      },
+      {
+        "label": "golden_report_filter_hidden",
+        "group": "report_errors",
+        "compare": [
+          "missing_household_filter",
+          "hh_ab_requested_by_other_c",
+          "stale_report_cursor_former_ab"
+        ],
+        "invariant": "Hidden filters are rejected neutrally before aggregation."
+      },
+      {
+        "label": "golden_transfer_hidden_side",
+        "group": "transfer_hidden_side",
+        "compare": [
+          "trf_denied_cross_user_personal",
+          "trf_denied_cross_household_shared",
+          "trf_denied_missing_counterparty"
+        ],
+        "invariant": "No hidden side, owner, account, balance, household or membership detail."
+      },
+      {
+        "label": "golden_no_hidden_counts",
+        "group": "no_hidden_counts",
+        "compare": [
+          "account_list",
+          "transaction_list",
+          "report_summary",
+          "autocomplete"
+        ],
+        "invariant": "No hiddenCount, filteredOutCount, hidden facets, hidden suggestions or partially hidden wording."
+      }
+    ]
+  },
+  "sessions": [
+    {
+      "label": "sess_a_active",
+      "actor": "owner_a",
+      "state": "active",
+      "purpose": "Owner A positive flows and cache key proof."
+    },
+    {
+      "label": "sess_b_active",
+      "actor": "member_b",
+      "state": "active",
+      "purpose": "Member B positive flows and session separation."
+    },
+    {
+      "label": "sess_c_active",
+      "actor": "other_c",
+      "state": "active",
+      "purpose": "Cross-household denial."
+    },
+    {
+      "label": "sess_invited_active",
+      "actor": "invited_ab",
+      "state": "active",
+      "purpose": "Pending invite with no shared financial access."
+    },
+    {
+      "label": "sess_former_active",
+      "actor": "former_ab",
+      "state": "active",
+      "purpose": "Former own-personal-only access."
+    },
+    {
+      "label": "sess_a_logged_out",
+      "actor": "owner_a",
+      "state": "logged_out",
+      "purpose": "Logout/session revocation proof."
+    },
+    {
+      "label": "sess_b_pre_leave",
+      "actor": "former_ab",
+      "state": "stale_pre_leave",
+      "purpose": "Leave/revoke invalidation proof."
+    },
+    {
+      "label": "sess_reset_old",
+      "actor": "owner_a",
+      "state": "reset_revoked",
+      "purpose": "Password reset revokes old sessions."
+    }
+  ],
+  "invites": [
+    {
+      "label": "inv_ab_pending",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "pending",
+      "tokenPolicy": "generated_by_loader_never_logged",
+      "purpose": "Invited sees minimal context and no AB financial data."
+    },
+    {
+      "label": "inv_ab_accepted",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "accepted",
+      "tokenPolicy": "one_time_replay_rejected",
+      "purpose": "Membership active only after accept commit; replay rejected."
+    },
+    {
+      "label": "inv_ab_declined",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "declined",
+      "tokenPolicy": "one_time_replay_rejected",
+      "purpose": "No membership or shared data after decline."
+    },
+    {
+      "label": "inv_ab_revoked",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "revoked",
+      "tokenPolicy": "one_time_replay_rejected",
+      "purpose": "Neutral response and no shared access."
+    },
+    {
+      "label": "inv_ab_expired",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "expired",
+      "tokenPolicy": "one_time_replay_rejected",
+      "purpose": "Expired behavior without household leakage."
+    },
+    {
+      "label": "inv_ab_resend",
+      "household": "hh_ab",
+      "actor": "invited_ab",
+      "status": "resend_pending",
+      "tokenPolicy": "generated_by_loader_never_logged",
+      "purpose": "Resend evidence contains no token in API or logs."
+    }
+  ],
+  "privacy": {
+    "deleteFixtures": [
+      {
+        "label": "del_a_self_request",
+        "actor": "owner_a",
+        "event": "delete_or_deactivate_self",
+        "expectedAfter": "Self-only deletion or deactivation flow; sessions and protected caches revoked.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/security"
+        ]
+      },
+      {
+        "label": "del_b_cross_user_attempt",
+        "actor": "member_b",
+        "event": "cross_user_delete_attempt",
+        "expectedAfter": "Member B cannot delete or deactivate Owner A.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/authz"
+        ]
+      },
+      {
+        "label": "del_a_shared_history_marker",
+        "actor": "member_b",
+        "event": "shared_history_marker",
+        "expectedAfter": "Remaining active member sees only neutral deleted-user marker in shared history.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/reports"
+        ]
+      }
+    ],
+    "leaveFixtures": [
+      {
+        "label": "leave_b_ab_success",
+        "actor": "member_b",
+        "event": "leave_household",
+        "expectedAfter": "Member B becomes Former for AB and loses future shared access.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/client",
+          "artifacts/evidence/authz"
+        ]
+      },
+      {
+        "label": "leave_b_old_ids",
+        "actor": "former_ab",
+        "event": "leave_household",
+        "expectedAfter": "Old AB account, transaction, category, report, export and cursor ids deny neutrally.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/client",
+          "artifacts/evidence/authz"
+        ]
+      },
+      {
+        "label": "leave_a_remaining_shared_history",
+        "actor": "owner_a",
+        "event": "leave_household",
+        "expectedAfter": "Owner A can still build shared family report without Member B personal data.",
+        "evidenceBuckets": [
+          "artifacts/evidence/privacy",
+          "artifacts/evidence/reports"
+        ]
+      }
+    ]
+  },
+  "cache": [
+    {
+      "label": "cache_a_combined_overview",
+      "actor": "owner_a",
+      "surface": "server_report_cache",
+      "cachedBefore": [
+        "rep_a_combined_ab"
+      ],
+      "event": "login_switch",
+      "expectedAfter": "Member B never receives Owner A personal rows; combined cache is viewer-specific.",
+      "requiredCacheKeyParts": [
+        "viewerUserId",
+        "sessionAccessVersion",
+        "householdId",
+        "reportMode",
+        "membershipAccessVersion",
+        "filterHash"
+      ]
+    },
+    {
+      "label": "cache_b_shared_family",
+      "actor": "member_b",
+      "surface": "server_report_cache",
+      "cachedBefore": [
+        "rep_b_shared_family_ab"
+      ],
+      "event": "leave_or_revoke",
+      "expectedAfter": "Shared cache and cursor inaccessible and cleared or narrowed after leave.",
+      "requiredCacheKeyParts": [
+        "viewerUserId",
+        "sessionAccessVersion",
+        "householdId",
+        "reportMode",
+        "membershipAccessVersion"
+      ]
+    },
+    {
+      "label": "offline_b_ab_pre_leave",
+      "actor": "former_ab",
+      "surface": "offline_snapshot",
+      "cachedBefore": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "rep_b_shared_family_ab"
+      ],
+      "event": "leave_or_revoke",
+      "expectedAfter": "Offline readonly cannot show AB data after membership refresh or access-version change.",
+      "requiredCacheKeyParts": [
+        "viewerUserId",
+        "sessionAccessVersion",
+        "householdId",
+        "membershipAccessVersion"
+      ]
+    },
+    {
+      "label": "sw_authenticated_api",
+      "actor": "owner_a",
+      "surface": "service_worker",
+      "cachedBefore": [
+        "rep_a_combined_ab"
+      ],
+      "event": "logout",
+      "expectedAfter": "Authenticated financial API response is not stored as a public service worker asset.",
+      "requiredCacheKeyParts": [
+        "viewerUserId",
+        "sessionAccessVersion"
+      ]
+    },
+    {
+      "label": "android_local_db_switch",
+      "actor": "owner_a",
+      "surface": "android",
+      "cachedBefore": [
+        "acc_a_cash",
+        "txn_a_income_may"
+      ],
+      "event": "login_switch",
+      "expectedAfter": "Owner A data cleared before Member B financial screens render.",
+      "requiredCacheKeyParts": [
+        "viewerUserId",
+        "sessionAccessVersion"
+      ]
+    }
+  ],
+  "exports": [
+    {
+      "label": "exp_a_combined_visible",
+      "actor": "owner_a",
+      "scope": "own personal plus active shared AB",
+      "expectedContents": [
+        "acc_a_cash",
+        "txn_a_income_may",
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "mem_a_ab_active"
+      ],
+      "mustExclude": [
+        "acc_b_cash",
+        "txn_b_expense_may",
+        "acc_c_shared",
+        "txn_c_shared_may"
+      ],
+      "fileLifecycle": "manifest_diff_only_no_raw_contents"
+    },
+    {
+      "label": "exp_b_combined_visible",
+      "actor": "member_b",
+      "scope": "own personal plus active shared AB",
+      "expectedContents": [
+        "acc_b_cash",
+        "txn_b_income_may",
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "mem_b_ab_active"
+      ],
+      "mustExclude": [
+        "acc_a_cash",
+        "txn_a_expense_may",
+        "acc_c_shared",
+        "txn_c_shared_may"
+      ],
+      "fileLifecycle": "manifest_diff_only_no_raw_contents"
+    },
+    {
+      "label": "exp_c_visible",
+      "actor": "other_c",
+      "scope": "own personal and Household C only",
+      "expectedContents": [
+        "acc_c_shared",
+        "txn_c_shared_may",
+        "mem_c_c_active"
+      ],
+      "mustExclude": [
+        "hh_ab",
+        "acc_ab_cash",
+        "txn_ab_expense_may"
+      ],
+      "fileLifecycle": "manifest_diff_only_no_raw_contents"
+    },
+    {
+      "label": "exp_invited_pre_accept",
+      "actor": "invited_ab",
+      "scope": "own minimal invite context only",
+      "expectedContents": [
+        "inv_ab_pending"
+      ],
+      "mustExclude": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "rep_a_shared_family_ab"
+      ],
+      "fileLifecycle": "manifest_diff_only_no_raw_contents"
+    },
+    {
+      "label": "exp_former_after_leave",
+      "actor": "former_ab",
+      "scope": "own personal plus minimal self membership metadata",
+      "expectedContents": [
+        "mem_former_ab_left"
+      ],
+      "mustExclude": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "trf_ab_shared_same_household_by_a",
+        "rep_b_shared_family_ab"
+      ],
+      "fileLifecycle": "manifest_diff_only_no_raw_contents"
+    },
+    {
+      "label": "exp_old_shared_file_after_leave",
+      "actor": "former_ab",
+      "scope": "pre-leave export artifact",
+      "expectedContents": [],
+      "mustExclude": [
+        "acc_ab_cash",
+        "txn_ab_expense_may",
+        "trf_ab_shared_same_household_by_a"
+      ],
+      "fileLifecycle": "expired_or_inaccessible_after_leave"
+    }
+  ],
+  "loader": {
+    "runnerNeutral": true,
+    "phases": [
+      "validate_manifest",
+      "allocate_synthetic_ids",
+      "seed_graph",
+      "seed_security_state",
+      "seed_privacy_state",
+      "emit_loader_map",
+      "emit_evidence_manifest"
+    ],
+    "outputs": [
+      "sanitizedLabelToIdMap",
+      "fixtureGraphSummary",
+      "evidenceManifest",
+      "redactionScanSummary"
+    ],
+    "forbiddenOutputs": [
+      "plaintextTokens",
+      "tokenHashes",
+      "passwords",
+      "rawFinancialRequestBodies",
+      "rawFinancialResponseBodies",
+      "amountsInLogs",
+      "realPersonalData",
+      "productionConfig"
+    ]
+  },
+  "evidenceMapping": {
+    "root": "artifacts/evidence",
+    "buckets": {
+      "api": [
+        "OpenAPI lint, route inventory, schema diff and contract evidence.",
+        "AS/NEG/SEC/PRIV endpoint surface coverage metadata."
+      ],
+      "authz": [
+        "Owner A, Member B, Other C, Invited and Former predicate matrices.",
+        "Missing vs inaccessible neutral response goldens."
+      ],
+      "reports": [
+        "visibleAccountIds before aggregation.",
+        "filter-before-aggregate, drill-down equivalence, no-hidden-counts and report cache invalidation."
+      ],
+      "transfers": [
+        "Same-scope allow, unsupported deny, hidden-side golden, atomicity, consistency and concurrency."
+      ],
+      "privacy": [
+        "Export visible-scope diff, former denial, delete self-only, leave invalidation and export lifecycle."
+      ],
+      "client": [
+        "PWA and Android cache/offline snapshots, neutral UI copy and protected state clearing."
+      ],
+      "security": [
+        "CSRF/CORS, session/token lifecycle, rate limits, logs/audit scans, secret scans and route inventory."
+      ],
+      "backups": [
+        "Encrypted backup proof, access control proof, restore drill and tenant-boundary verification."
+      ],
+      "dependencies": [
+        "SBOM and dependency vulnerability scan outputs."
+      ]
+    },
+    "scenarioFamilies": [
+      "AS",
+      "NEG",
+      "SEC",
+      "PRIV",
+      "RG",
+      "TR-RG",
+      "PF-RG"
+    ],
+    "artifactRules": [
+      "Each artifact identifies actor label, fixture label, scenario id, release gate id, endpoint or surface and expected predicate.",
+      "Statuses are pass, fail, blocked, not_run or not_applicable.",
+      "Failed or retried runs link to the final green run instead of being overwritten.",
+      "Logs and audit evidence are sanitized and include scan output proving absence of sensitive values.",
+      "Export evidence uses manifests or diffs against visible rows, not raw export contents."
+    ]
+  }
+}

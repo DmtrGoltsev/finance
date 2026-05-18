@@ -1,0 +1,414 @@
+:root {
+  color: #17202a;
+  background: #f7f8fb;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --border: #dce2ea;
+  --muted: #64748b;
+  --panel: #ffffff;
+  --accent: #2563eb;
+  --success: #087f5b;
+  --danger: #c2410c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button {
+  font: inherit;
+}
+
+.loading {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  color: var(--muted);
+}
+
+.appShell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  background: #ffffff;
+  padding: 20px 16px;
+}
+
+.sessionBlock {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.sessionIcon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent);
+}
+
+.label,
+.sessionBlock p,
+.sectionHeader p,
+.tableRow span {
+  color: var(--muted);
+}
+
+.label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.sessionBlock h1,
+.topbar h2,
+.sectionHeader h3,
+.panelHeader h3 {
+  margin: 0;
+}
+
+.sessionBlock h1 {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.sessionBlock p:last-child {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.navList {
+  display: grid;
+  gap: 6px;
+}
+
+.navList button,
+.segmentedControl button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #263241;
+  cursor: pointer;
+}
+
+.navList button {
+  gap: 10px;
+  padding: 0 10px;
+  width: 100%;
+  text-align: left;
+}
+
+.navList button:hover,
+.navList button.active {
+  border-color: #c8d7f4;
+  background: #edf4ff;
+  color: #174ea6;
+}
+
+.content {
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.topbar h2 {
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.statusPill {
+  max-width: 360px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 12px;
+  color: #475569;
+  font-size: 14px;
+}
+
+.sectionGrid {
+  display: grid;
+  gap: 18px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionHeader h3,
+.panelHeader h3 {
+  font-size: 20px;
+}
+
+.sectionHeader p {
+  margin: 0;
+}
+
+.metricGrid,
+.reportSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reportSummary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.metricCard,
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.metricCard {
+  display: grid;
+  gap: 8px;
+  min-height: 92px;
+  padding: 16px;
+}
+
+.metricCard span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.metricCard strong {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.metricCard.success strong,
+.positive {
+  color: var(--success);
+}
+
+.metricCard.danger strong,
+.negative {
+  color: var(--danger);
+}
+
+.twoColumn {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panelHeader span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tableList {
+  display: grid;
+  gap: 8px;
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 52px;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.tableRow div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tableRow strong,
+.tableRow span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tableRow b {
+  white-space: nowrap;
+}
+
+.emptyState {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 12px;
+  color: var(--muted);
+}
+
+.lifecyclePanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.lifecyclePanel > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.lifecyclePanel span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.actionRow button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 10px;
+  color: #263241;
+  cursor: pointer;
+}
+
+.actionRow button:hover:not(:disabled) {
+  border-color: #174ea6;
+  color: #174ea6;
+}
+
+.actionRow button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.segmentedControl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.segmentedControl button {
+  padding: 0 12px;
+  border-color: var(--border);
+  background: #ffffff;
+}
+
+.segmentedControl button.selected {
+  border-color: #174ea6;
+  background: #edf4ff;
+  color: #174ea6;
+}
+
+@media (max-width: 900px) {
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .navList {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metricGrid,
+  .reportSummary,
+  .twoColumn {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .content {
+    padding: 16px;
+  }
+
+  .topbar,
+  .sectionHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .navList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .navList button {
+    justify-content: center;
+  }
+
+  .tableRow {
+    grid-template-columns: 1fr;
+  }
+
+  .tableRow b {
+    justify-self: start;
+  }
+
+  .lifecyclePanel {
+    grid-template-columns: 1fr;
+  }
+
+  .actionRow {
+    justify-content: flex-start;
+  }
+}

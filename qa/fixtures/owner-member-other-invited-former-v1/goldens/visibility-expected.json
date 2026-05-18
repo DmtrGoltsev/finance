@@ -1,0 +1,65 @@
+{
+  "artifactVersion": "w3-ttr-golden-visibility-v1",
+  "fixtureSet": "owner-member-other-invited-former-v1",
+  "sourceDocuments": [
+    "docs/architecture/w3-transactions-transfers-reports-preflight.md",
+    "docs/testing/w3-ttr-privacy-safety-matrix.md"
+  ],
+  "neutralDeniedEnvelope": {
+    "status": 404,
+    "code": "RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+    "message": "Resource not found or not accessible.",
+    "details": []
+  },
+  "forbiddenResponseFields": [
+    "hiddenCount",
+    "filteredOutCount",
+    "preFilterCount",
+    "totalCount",
+    "hiddenFacets",
+    "hiddenSuggestions",
+    "includedAccountIds"
+  ],
+  "cases": [
+    {
+      "label": "vis_owner_a_transactions",
+      "actor": "owner_a",
+      "surface": "transactions.list",
+      "allow": ["txn_a_income_may", "txn_a_expense_may", "txn_ab_income_may", "txn_ab_expense_may"],
+      "deny": ["txn_b_income_may", "txn_b_expense_may", "txn_c_shared_may", "txn_invited_personal_may", "txn_former_personal_may"],
+      "proofs": ["visible_account_filter_before_search_sort_pagination", "detail_equivalence"]
+    },
+    {
+      "label": "vis_member_b_transactions",
+      "actor": "member_b",
+      "surface": "transactions.list",
+      "allow": ["txn_b_income_may", "txn_b_expense_may", "txn_ab_income_may", "txn_ab_expense_may"],
+      "deny": ["txn_a_income_may", "txn_a_expense_may", "txn_c_shared_may", "txn_invited_personal_may", "txn_former_personal_may"],
+      "proofs": ["visible_account_filter_before_search_sort_pagination", "detail_equivalence"]
+    },
+    {
+      "label": "vis_other_c_transactions",
+      "actor": "other_c",
+      "surface": "transactions.list",
+      "allow": ["txn_c_shared_may"],
+      "deny": ["txn_a_income_may", "txn_b_income_may", "txn_ab_income_may", "txn_ab_expense_may"],
+      "proofs": ["cross_household_denial", "missing_vs_inaccessible_same_shape"]
+    },
+    {
+      "label": "vis_invited_ab_transactions",
+      "actor": "invited_ab",
+      "surface": "transactions.list",
+      "allow": ["txn_invited_personal_may"],
+      "deny": ["txn_ab_income_may", "txn_ab_expense_may", "txn_a_income_may", "txn_b_income_may"],
+      "proofs": ["invite_does_not_grant_financial_access", "missing_vs_inaccessible_same_shape"]
+    },
+    {
+      "label": "vis_former_ab_transactions",
+      "actor": "former_ab",
+      "surface": "transactions.list",
+      "allow": ["txn_former_personal_may"],
+      "deny": ["txn_ab_income_may", "txn_ab_expense_may", "txn_a_income_may", "txn_b_income_may"],
+      "proofs": ["former_shared_denial", "stale_id_neutral_denial"]
+    }
+  ]
+}

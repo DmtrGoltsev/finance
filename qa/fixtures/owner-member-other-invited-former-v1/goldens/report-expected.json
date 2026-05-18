@@ -1,0 +1,73 @@
+{
+  "artifactVersion": "w3-ttr-golden-report-v1",
+  "fixtureSet": "owner-member-other-invited-former-v1",
+  "sourceDocuments": [
+    "docs/architecture/w3-transactions-transfers-reports-preflight.md",
+    "docs/testing/w3-ttr-privacy-safety-matrix.md"
+  ],
+  "endpoints": [
+    "/api/v1/reports/summary",
+    "/api/v1/reports/category-breakdown",
+    "/api/v1/reports/account-balances",
+    "/api/v1/reports/cash-flow",
+    "/api/v1/reports/transactions"
+  ],
+  "forbiddenResponseFields": [
+    "hiddenCount",
+    "filteredOutCount",
+    "preFilterCount",
+    "totalCount",
+    "hiddenOwnerContribution",
+    "hiddenMemberContribution",
+    "hiddenFacets",
+    "includedAccountIds"
+  ],
+  "cases": [
+    {
+      "label": "rep_a_shared_family_ab_expected",
+      "actor": "owner_a",
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_b_cash", "acc_c_shared"],
+      "requiredProofs": ["visibleAccountIds_before_aggregate", "filter_before_sum_count_group_by", "drilldown_detail_equivalence"]
+    },
+    {
+      "label": "rep_b_shared_family_ab_expected",
+      "actor": "member_b",
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_b_cash", "acc_c_shared"],
+      "requiredProofs": ["visibleAccountIds_before_aggregate", "filter_before_sum_count_group_by", "drilldown_detail_equivalence"]
+    },
+    {
+      "label": "rep_a_combined_ab_expected",
+      "actor": "owner_a",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_a_cash", "acc_a_savings", "acc_a_usd", "acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_b_cash", "acc_b_savings", "acc_c_shared"],
+      "requiredProofs": ["visibleAccountIds_before_aggregate", "viewer_scoped_cache_key", "no_hidden_counts"]
+    },
+    {
+      "label": "rep_b_combined_ab_expected",
+      "actor": "member_b",
+      "reportMode": "combined_viewer_overview",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": ["acc_b_cash", "acc_b_savings", "acc_ab_cash", "acc_ab_savings", "acc_ab_usd"],
+      "mustExclude": ["acc_a_cash", "acc_a_savings", "acc_a_usd", "acc_c_shared"],
+      "requiredProofs": ["visibleAccountIds_before_aggregate", "viewer_scoped_cache_key", "no_hidden_counts"]
+    },
+    {
+      "label": "rep_non_members_ab_denied_expected",
+      "actors": ["other_c", "invited_ab", "former_ab"],
+      "reportMode": "shared_family_report",
+      "household": "hh_ab",
+      "expectedIncludedAccounts": [],
+      "mustExclude": ["acc_ab_cash", "acc_a_cash", "acc_b_cash"],
+      "expectedPublicCode": "RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+      "requiredProofs": ["neutral_error_for_hidden_filters", "no_hidden_counts"]
+    }
+  ]
+}
