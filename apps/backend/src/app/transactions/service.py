@@ -673,10 +673,9 @@ class TransactionService:
             raise TransactionValidationError(DenialReason.ACTION_NOT_ALLOWED)
         if transaction_type == "transfer":
             raise TransactionValidationError(DenialReason.TRANSFER_SCOPE_NOT_SUPPORTED)
-        if transaction_type == "brokerage":
-            raise TransactionValidationError(DenialReason.ACTION_NOT_ALLOWED)
         category_required_types = {"income", "expense"}
         categoryless_types = {
+            "brokerage",
             "asset_buy",
             "asset_sell",
             "interest",

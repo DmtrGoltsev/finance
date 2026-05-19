@@ -406,7 +406,7 @@ def test_transfer_writes_are_available_for_same_scope_runtime_worker(
     assert response.json()["data"]["transferScope"] == "personal_same_owner"
 
 
-def test_asset_operations_are_categoryless_manual_transactions(
+def test_investment_operations_are_categoryless_manual_transactions(
     transaction_graph: dict[str, Any],
 ) -> None:
     owner = transaction_graph["actors"]["owner_a"]
@@ -414,18 +414,27 @@ def test_asset_operations_are_categoryless_manual_transactions(
     category_id = transaction_graph["categories"]["cat_a_food"]
 
     with _client_for_actor(owner) as client:
-        created = client.post(
-            "/api/v1/transactions",
-            json={
-                "transactionType": "asset_buy",
-                "accountId": account_id,
-                "amount": "25.0000",
-                "currency": "RUB",
-                "occurredAt": "2026-05-17T14:00:00+00:00",
-                "description": "manual asset buy",
-                "sourceType": "manual",
-            },
-        )
+        created_by_type = {}
+        for transaction_type in (
+            "brokerage",
+            "asset_buy",
+            "asset_sell",
+            "interest",
+            "dividend",
+            "adjustment",
+        ):
+            created_by_type[transaction_type] = client.post(
+                "/api/v1/transactions",
+                json={
+                    "transactionType": transaction_type,
+                    "accountId": account_id,
+                    "amount": "25.0000",
+                    "currency": "RUB",
+                    "occurredAt": "2026-05-17T14:00:00+00:00",
+                    "description": f"manual {transaction_type}",
+                    "sourceType": "manual",
+                },
+            )
         with_category = client.post(
             "/api/v1/transactions",
             json={
@@ -441,9 +450,39 @@ def test_asset_operations_are_categoryless_manual_transactions(
         )
         listed = client.get("/api/v1/transactions", params={"transactionType": "asset_buy"})
 
-    assert created.status_code == 201
-    assert created.json()["data"]["transactionType"] == "asset_buy"
-    assert created.json()["data"]["categoryId"] is None
-    assert created.json()["data"]["counterpartyAccountId"] is None
+    for transaction_type, created in created_by_type.items():
+        assert created.status_code == 201, created.text
+        assert created.json()["data"]["transactionType"] == transaction_type
+        assert created.json()["data"]["categoryId"] is None
+        assert created.json()["data"]["counterpartyAccountId"] is None
     assert with_category.status_code == 422
-    assert created.json()["data"]["id"] in {item["id"] for item in listed.json()["items"]}
+    assert created_by_type["asset_buy"].json()["data"]["id"] in {
+        item["id"] for item in listed.json()["items"]
+    }
+
+
+def test_investment_create_keeps_referenced_account_privacy(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner_account_id = transaction_graph["accounts"]["acc_a_savings"]
+    member = transaction_graph["actors"]["member_b"]
+    payload = {
+        "transactionType": "brokerage",
+        "accountId": owner_account_id,
+        "amount": "25.0000",
+        "currency": "RUB",
+        "occurredAt": "2026-05-17T14:00:00+00:00",
+        "description": "member cannot infer owner brokerage operation",
+        "sourceType": "manual",
+    }
+
+    with _client_for_actor(member) as client:
+        inaccessible_account = client.post("/api/v1/transactions", json=payload)
+        missing_account = client.post(
+            "/api/v1/transactions",
+            json={**payload, "accountId": str(uuid4())},
+        )
+
+    assert inaccessible_account.status_code == missing_account.status_code == 404
+    _assert_same_public_error(inaccessible_account, missing_account)
+    assert owner_account_id not in inaccessible_account.text
