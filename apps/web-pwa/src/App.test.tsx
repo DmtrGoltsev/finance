@@ -1,14 +1,16 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { ApiRequestError } from "./api/client";
 import type { DashboardSnapshot, ImportReportPreviewRequest } from "./api/types";
 
 const financeSnapshot: DashboardSnapshot = {
   session: {
     viewerName: "Мария",
     householdName: "Дом",
-    accessLabel: "Вход выполнен"
+    accessLabel: "Вход выполнен",
+    householdId: "household-1"
   },
   accounts: [
     {
@@ -157,6 +159,8 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     deleteAccount: vi.fn(async () => undefined),
     deleteCategory: vi.fn(async () => undefined),
     getDashboardSnapshot: vi.fn(async () => snapshot),
+    loginWithPassword: vi.fn(async () => undefined),
+    logout: vi.fn(async () => undefined),
     previewImportReport: vi.fn(async (input: ImportReportPreviewRequest) => ({
       status: "preview_placeholder" as const,
       canConfirm: false as const,
@@ -234,6 +238,47 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
 }
 
 describe("PWA finance experience", () => {
+  it("shows an interactive masked login form and refreshes session state after login", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.getDashboardSnapshot = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiRequestError("auth required", 401, "GET", "/api/v1/sessions/current"))
+      .mockResolvedValueOnce(financeSnapshot);
+
+    render(<App client={client} />);
+
+    const form = await screen.findByRole("form", { name: "Вход в финансы" });
+    const passwordInput = within(form).getByLabelText("Пароль");
+    expect(passwordInput).toHaveAttribute("type", "password");
+
+    await user.type(within(form).getByLabelText("Email"), "demo.owner@example.test");
+    await user.type(passwordInput, "not-for-logs");
+    expect(document.body).not.toHaveTextContent("not-for-logs");
+    await user.click(within(form).getByRole("button", { name: "Войти" }));
+
+    await waitFor(() => {
+      expect(client.loginWithPassword).toHaveBeenCalledWith({
+        email: "demo.owner@example.test",
+        password: "not-for-logs"
+      });
+    });
+    expect(await screen.findByRole("heading", { name: "Деньги" })).toBeInTheDocument();
+  });
+
+  it("logs out from the UI and clears the rendered finance session", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByRole("button", { name: /Выйти/i }));
+
+    await waitFor(() => expect(client.logout).toHaveBeenCalled());
+    expect(await screen.findByRole("form", { name: "Вход в финансы" })).toBeInTheDocument();
+    expect(screen.queryByText("Капитал")).not.toBeInTheDocument();
+  });
+
   it("renders the financial dashboard and hides technical wording", async () => {
     render(<App client={makeClient()} />);
 
@@ -335,11 +380,78 @@ describe("PWA finance experience", () => {
         expect.objectContaining({
           kind: "deposit",
           initialBalance: 222,
-          ownershipType: "shared"
+          ownershipType: "shared",
+          householdId: "household-1"
         })
       );
     });
     expect(client.createDemoOperation).not.toHaveBeenCalled();
+  });
+
+  it("disables shared asset creation when the current session has no household", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      ...financeSnapshot,
+      session: { ...financeSnapshot.session, householdId: null },
+      accounts: financeSnapshot.accounts.filter((account) => account.ownershipType !== "shared"),
+      categories: financeSnapshot.categories.filter((category) => category.scope !== "household")
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.click(within(sheet).getByRole("button", { name: /Актив/i }));
+    await user.click(within(sheet).getByText("Еще"));
+
+    expect(within(sheet).getByLabelText("Общее")).toBeDisabled();
+  });
+
+  it("creates and edits categories from the categories UI", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Категории/i }));
+
+    const form = screen.getByRole("form", { name: "Управление категорией" });
+    await user.type(within(form).getByLabelText("Название"), "Подработка");
+    await user.selectOptions(within(form).getByLabelText("Тип"), "income");
+    await user.selectOptions(within(form).getByLabelText("Доступ"), "household");
+    await user.selectOptions(within(form).getByLabelText("Иконка"), "income");
+    fireEvent.change(within(form).getByLabelText("Цвет"), { target: { value: "#087F5B" } });
+    await user.click(within(form).getByRole("button", { name: "Создать" }));
+
+    await waitFor(() => {
+      expect(client.createDemoCategory).toHaveBeenCalledWith({
+        name: "Подработка",
+        direction: "income",
+        scope: "household",
+        householdId: "household-1",
+        iconKey: "income",
+        color: "#087f5b"
+      });
+    });
+
+    await user.click(screen.getAllByRole("button", { name: "Изменить" })[0]);
+    const editForm = screen.getByRole("form", { name: "Управление категорией" });
+    await user.clear(within(editForm).getByLabelText("Название"));
+    await user.type(within(editForm).getByLabelText("Название"), "Еда и дом");
+    fireEvent.change(within(editForm).getByLabelText("Цвет"), { target: { value: "#0F766E" } });
+    await user.click(within(editForm).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => {
+      expect(client.updateCategory).toHaveBeenCalledWith({
+        categoryId: "category-1",
+        name: "Еда и дом",
+        iconKey: "shopping",
+        color: "#0f766e",
+        version: 1
+      });
+    });
   });
 
   it("keeps transfers out of monthly spending", async () => {

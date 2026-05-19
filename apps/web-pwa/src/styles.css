@@ -44,6 +44,33 @@ button {
   color: var(--muted);
 }
 
+.loginShell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 20px;
+}
+
+.loginPanel {
+  display: grid;
+  gap: 14px;
+  width: min(420px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 22px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
+}
+
+.loginPanel h1,
+.loginPanel p {
+  margin: 0;
+}
+
+.loginPanel p {
+  color: var(--muted);
+}
+
 .appShell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -255,6 +282,7 @@ button {
 .listRow,
 .settingRow,
 .importPanel,
+.categoryForm,
 .recognitionItem {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -338,6 +366,8 @@ button {
 .importActions span,
 .importGuardrail,
 .importError,
+.formError,
+.formHint,
 .importPreviewHead span,
 .importMeta dt,
 .recognitionItem span,
@@ -347,12 +377,19 @@ button {
 }
 
 .importGuardrail,
-.importError {
+.importError,
+.formError,
+.formHint {
   margin: 0;
 }
 
-.importError {
+.importError,
+.formError {
   color: var(--danger);
+}
+
+.formHint {
+  color: var(--success);
 }
 
 .importPreview {
@@ -498,13 +535,35 @@ button {
   gap: 12px;
 }
 
+.categoryForm {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.categoryFormGrid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) repeat(4, minmax(120px, 0.8fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.categorySubmit {
+  width: max-content;
+  min-width: 150px;
+}
+
+.colorField input {
+  padding: 4px;
+}
+
 .assetTile {
   min-height: 86px;
 }
 
 .categoryTile {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   min-height: 74px;
@@ -518,6 +577,15 @@ button {
   place-items: center;
   border-radius: 8px;
   color: #ffffff;
+}
+
+.tileAction {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #253247;
+  padding: 0 10px;
 }
 
 .barRow {
@@ -688,6 +756,7 @@ button {
   .dashboardGrid,
   .assetGrid,
   .categoryGrid,
+  .categoryFormGrid,
   .importMeta,
   .recognitionGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -733,6 +802,7 @@ button {
   .dashboardGrid,
   .assetGrid,
   .categoryGrid,
+  .categoryFormGrid,
   .importFields,
   .importMeta,
   .recognitionGrid {

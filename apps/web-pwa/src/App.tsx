@@ -12,6 +12,7 @@ import {
   Layers3,
   LineChart,
   Lock,
+  LogOut,
   Plus,
   ReceiptText,
   Settings,
@@ -29,10 +30,12 @@ import {
   type FormEvent,
   type ReactNode
 } from "react";
-import { financeApiClient, type FinanceApiClient } from "./api/client";
+import { financeApiClient, isApiRequestError, type FinanceApiClient } from "./api/client";
 import type {
   AccountKind,
   AccountSummary,
+  CategoryDirection,
+  CategoryScope,
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
@@ -68,6 +71,16 @@ type QuickAddInput = {
   date: string;
   comment: string;
   visibility: VisibilityMode;
+};
+
+type CategoryFormInput = {
+  categoryId?: string;
+  version?: number;
+  name: string;
+  direction: CategoryDirection;
+  scope: CategoryScope;
+  iconKey: string;
+  color: string;
 };
 
 const desktopSections: Array<{
@@ -176,6 +189,10 @@ function todayInputValue(): string {
 export function App({ client = financeApiClient }: { client?: FinanceApiClient }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">(
+    "checking"
+  );
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>("money");
   const [viewMode, setViewMode] = useState<ViewMode>("personal");
   const [isQuickAddOpen, setQuickAddOpen] = useState(false);
@@ -184,6 +201,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await client.getDashboardSnapshot();
     setSnapshot(nextSnapshot);
+    setAuthStatus("authenticated");
     return nextSnapshot;
   }, [client]);
 
@@ -191,9 +209,14 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     let isMounted = true;
     setError(null);
 
-    void loadSnapshot().catch(() => {
+    void loadSnapshot().catch((caughtError) => {
       if (isMounted) {
-        setError("Не удалось загрузить финансы");
+        if (isApiRequestError(caughtError, 401)) {
+          setAuthStatus("unauthenticated");
+          setSnapshot(null);
+        } else {
+          setError("Не удалось загрузить финансы");
+        }
       }
     });
 
@@ -201,6 +224,30 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       isMounted = false;
     };
   }, [loadSnapshot]);
+
+  const submitLogin = async (email: string, password: string) => {
+    setLoginError(null);
+    try {
+      await client.loginWithPassword({ email, password });
+      await loadSnapshot();
+    } catch {
+      setAuthStatus("unauthenticated");
+      setLoginError("Не удалось войти. Проверьте email и пароль.");
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await client.logout();
+    } finally {
+      setSnapshot(null);
+      setAuthStatus("unauthenticated");
+      setActiveSection("money");
+      setViewMode("personal");
+      setQuickAddOpen(false);
+      setSaveStatus("");
+    }
+  };
 
   const activeReport = useMemo(() => {
     if (!snapshot) {
@@ -218,15 +265,21 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     const sourceAccount = snapshot.accounts.find((account) => account.id === input.accountId);
     const currency = sourceAccount?.balance.currency ?? "RUB";
     const occurredAt = new Date(`${input.date || todayInputValue()}T12:00:00`).toISOString();
+    const sharedHouseholdId = input.visibility === "shared" ? snapshot.session.householdId : null;
 
     setSaveStatus("Сохраняем");
     if (input.kind === "asset") {
+      if (input.visibility === "shared" && !sharedHouseholdId) {
+        setSaveStatus("Нужен семейный доступ");
+        return;
+      }
       await client.createDemoAccount({
         name: input.comment.trim() || accountKindLabels[input.assetKind],
         kind: input.assetKind,
         currency,
         initialBalance: input.amount,
-        ownershipType: input.visibility === "shared" ? "shared" : "personal"
+        ownershipType: input.visibility === "shared" ? "shared" : "personal",
+        householdId: sharedHouseholdId
       });
     } else if (input.kind === "transfer") {
       await client.createDemoTransfer({
@@ -254,8 +307,43 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     setQuickAddOpen(false);
   };
 
+  const saveCategory = async (input: CategoryFormInput) => {
+    if (!snapshot) {
+      return;
+    }
+
+    if (input.scope === "household" && !snapshot.session.householdId) {
+      throw new Error("household access required");
+    }
+
+    if (input.categoryId) {
+      await client.updateCategory({
+        categoryId: input.categoryId,
+        name: input.name,
+        iconKey: input.iconKey || null,
+        color: input.color || null,
+        version: input.version
+      });
+    } else {
+      await client.createDemoCategory({
+        name: input.name,
+        direction: input.direction,
+        scope: input.scope,
+        householdId: input.scope === "household" ? snapshot.session.householdId : null,
+        iconKey: input.iconKey || null,
+        color: input.color || null
+      });
+    }
+
+    await loadSnapshot();
+  };
+
   if (error) {
     return <main className="loading">{error}</main>;
+  }
+
+  if (authStatus === "unauthenticated") {
+    return <LoginScreen onSubmit={submitLogin} error={loginError} />;
   }
 
   if (!snapshot || !activeReport) {
@@ -299,6 +387,10 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
               <Plus size={18} aria-hidden="true" />
               Добавить
             </button>
+            <button className="ghostButton" type="button" onClick={logout}>
+              <LogOut size={17} aria-hidden="true" />
+              Выйти
+            </button>
           </div>
         </header>
 
@@ -317,7 +409,11 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           <AssetsPage snapshot={snapshot} viewMode={viewMode} />
         )}
         {activeSection === "categories" && (
-          <CategoriesPage snapshot={snapshot} viewMode={viewMode} />
+          <CategoriesPage
+            snapshot={snapshot}
+            viewMode={viewMode}
+            onSave={saveCategory}
+          />
         )}
         {activeSection === "analytics" && (
           <AnalyticsPage
@@ -359,6 +455,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           accounts={visibleAccounts(snapshot.accounts, viewMode)}
           allAccounts={snapshot.accounts.filter((account) => account.status !== "deleted")}
           categories={visibleCategories(snapshot.categories, viewMode)}
+          canUseShared={Boolean(snapshot.session.householdId)}
           defaultVisibility={viewMode === "shared" ? "shared" : "personal"}
           onClose={() => setQuickAddOpen(false)}
           onSubmit={saveQuickAdd}
@@ -366,6 +463,74 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         />
       )}
     </div>
+  );
+}
+
+function LoginScreen({
+  error,
+  onSubmit
+}: {
+  error: string | null;
+  onSubmit: (email: string, password: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSubmitting, setSubmitting] = useState(false);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!email.trim() || !password) {
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await onSubmit(email, password);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="loginShell">
+      <form className="loginPanel" aria-label="Вход в финансы" onSubmit={submit}>
+        <div className="brandMark" aria-hidden="true">
+          <WalletCards size={22} />
+        </div>
+        <div>
+          <p>Семейные финансы</p>
+          <h1>Вход</h1>
+        </div>
+        <label className="field">
+          <span>Email</span>
+          <input
+            autoComplete="email"
+            inputMode="email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Пароль</span>
+          <input
+            autoComplete="current-password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        {error && <p className="formError">{error}</p>}
+        <button
+          className="submitButton"
+          type="submit"
+          disabled={isSubmitting || !email.trim() || !password}
+        >
+          <Check size={18} aria-hidden="true" />
+          {isSubmitting ? "Входим" : "Войти"}
+        </button>
+      </form>
+    </main>
   );
 }
 
@@ -570,12 +735,15 @@ function AssetsPage({
 
 function CategoriesPage({
   snapshot,
-  viewMode
+  viewMode,
+  onSave
 }: {
   snapshot: DashboardSnapshot;
   viewMode: ViewMode;
+  onSave: (input: CategoryFormInput) => Promise<void>;
 }) {
   const categories = visibleCategories(snapshot.categories, viewMode);
+  const [editingCategory, setEditingCategory] = useState<CategorySummary | null>(null);
 
   return (
     <section className="screenStack" aria-labelledby="categories-title">
@@ -583,13 +751,153 @@ function CategoriesPage({
         <h3 id="categories-title">Категории</h3>
         <span>{categories.length} категорий</span>
       </div>
+      <CategoryForm
+        category={editingCategory}
+        defaultScope={viewMode === "shared" ? "household" : "personal"}
+        householdId={snapshot.session.householdId}
+        onCancel={() => setEditingCategory(null)}
+        onSave={async (input) => {
+          await onSave(input);
+          setEditingCategory(null);
+        }}
+      />
       <div className="categoryGrid">
         {categories.map((category, index) => (
-          <CategoryTile key={category.id} category={category} index={index} />
+          <CategoryTile
+            key={category.id}
+            category={category}
+            index={index}
+            onEdit={() => setEditingCategory(category)}
+          />
         ))}
         {categories.length === 0 && <EmptyState text="Нет категорий в этом режиме" />}
       </div>
     </section>
+  );
+}
+
+function CategoryForm({
+  category,
+  defaultScope,
+  householdId,
+  onCancel,
+  onSave
+}: {
+  category: CategorySummary | null;
+  defaultScope: CategoryScope;
+  householdId: string | null;
+  onCancel: () => void;
+  onSave: (input: CategoryFormInput) => Promise<void>;
+}) {
+  const [name, setName] = useState(category?.name ?? "");
+  const [direction, setDirection] = useState<CategoryDirection>(category?.direction ?? "expense");
+  const [scope, setScope] = useState<CategoryScope>(category?.scope ?? defaultScope);
+  const [iconKey, setIconKey] = useState(category?.iconKey ?? "tag");
+  const [color, setColor] = useState(category?.color ?? "#2563EB");
+  const [status, setStatus] = useState<string>("");
+  const [isSaving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setName(category?.name ?? "");
+    setDirection(category?.direction ?? "expense");
+    setScope(category?.scope ?? defaultScope);
+    setIconKey(category?.iconKey ?? "tag");
+    setColor(category?.color ?? "#2563EB");
+    setStatus("");
+  }, [category, defaultScope]);
+
+  const isHouseholdBlocked = scope === "household" && !householdId;
+  const canSubmit = Boolean(name.trim()) && !isHouseholdBlocked && !isSaving;
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSubmit) {
+      return;
+    }
+
+    setSaving(true);
+    setStatus("");
+    try {
+      await onSave({
+        categoryId: category?.id,
+        version: category?.version,
+        name,
+        direction,
+        scope,
+        iconKey,
+        color
+      });
+      setName("");
+      setStatus(category ? "Категория обновлена" : "Категория создана");
+    } catch {
+      setStatus("Не удалось сохранить категорию");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="categoryForm" aria-label="Управление категорией" onSubmit={submit}>
+      <div className="sectionHead compact">
+        <h3>{category ? "Редактировать" : "Новая категория"}</h3>
+        {category && (
+          <button className="ghostButton" type="button" onClick={onCancel}>
+            <X size={17} aria-hidden="true" />
+            Отмена
+          </button>
+        )}
+      </div>
+      <div className="categoryFormGrid">
+        <label className="field">
+          <span>Название</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Тип</span>
+          <select
+            value={direction}
+            disabled={Boolean(category)}
+            onChange={(event) => setDirection(event.target.value as CategoryDirection)}
+          >
+            <option value="expense">Расход</option>
+            <option value="income">Доход</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Доступ</span>
+          <select
+            value={scope}
+            disabled={Boolean(category)}
+            onChange={(event) => setScope(event.target.value as CategoryScope)}
+          >
+            <option value="personal">Личное</option>
+            <option value="household">Общее</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Иконка</span>
+          <select value={iconKey} onChange={(event) => setIconKey(event.target.value)}>
+            <option value="tag">Метка</option>
+            <option value="shopping">Покупки</option>
+            <option value="home">Дом</option>
+            <option value="income">Доход</option>
+            <option value="wallet">Кошелек</option>
+          </select>
+        </label>
+        <label className="field colorField">
+          <span>Цвет</span>
+          <input type="color" value={color} onChange={(event) => setColor(event.target.value)} />
+        </label>
+      </div>
+      {isHouseholdBlocked && (
+        <p className="formError">Для общей категории нужен семейный доступ.</p>
+      )}
+      {status && <p className={status.startsWith("Не") ? "formError" : "formHint"}>{status}</p>}
+      <button className="submitButton categorySubmit" type="submit" disabled={!canSubmit}>
+        <Check size={18} aria-hidden="true" />
+        {isSaving ? "Сохраняем" : category ? "Сохранить" : "Создать"}
+      </button>
+    </form>
   );
 }
 
@@ -668,9 +976,7 @@ function ImportReportPanel({
   const [isLoading, setLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  const householdId =
-    snapshot.accounts.find((account) => account.ownershipType === "shared" && account.householdId)
-      ?.householdId ?? null;
+  const householdId = snapshot.session.householdId;
   const targetScope = mode === "shared" ? "shared" : "personal";
   const canPreview = Boolean(file) && (!mode || mode !== "shared" || householdId);
 
@@ -872,6 +1178,7 @@ function SettingsPage({
 function QuickAdd({
   accounts,
   allAccounts,
+  canUseShared,
   categories,
   defaultVisibility,
   onClose,
@@ -880,6 +1187,7 @@ function QuickAdd({
 }: {
   accounts: AccountSummary[];
   allAccounts: AccountSummary[];
+  canUseShared: boolean;
   categories: CategorySummary[];
   defaultVisibility: VisibilityMode;
   onClose: () => void;
@@ -936,6 +1244,7 @@ function QuickAdd({
 
   const canSubmit =
     Number(amount) > 0 &&
+    !(kind === "asset" && visibility === "shared" && !canUseShared) &&
     (kind === "asset" ||
       (kind === "transfer" ? accountId && toAccountId && accountId !== toAccountId : accountId));
 
@@ -1063,6 +1372,7 @@ function QuickAdd({
             <label>
               <input
                 checked={visibility === "shared"}
+                disabled={!canUseShared}
                 name="visibility"
                 type="radio"
                 onChange={() => setVisibility("shared")}
@@ -1070,6 +1380,9 @@ function QuickAdd({
               Общее
             </label>
           </fieldset>
+          {visibility === "shared" && !canUseShared && (
+            <p className="formError">Для общего режима нужен семейный доступ.</p>
+          )}
         </details>
 
         <button
@@ -1123,10 +1436,12 @@ function AssetTile({ account }: { account: AccountSummary }) {
 
 function CategoryTile({
   category,
-  index
+  index,
+  onEdit
 }: {
   category: CategorySummary;
   index: number;
+  onEdit: () => void;
 }) {
   const Icon = category.direction === "income" ? CircleDollarSign : ShoppingCart;
   const color = category.color || categoryPalette[index % categoryPalette.length];
@@ -1138,8 +1453,14 @@ function CategoryTile({
       </div>
       <div>
         <strong>{shortCategoryName(category.name)}</strong>
-        <span>{category.direction === "income" ? "Доход" : "Расход"}</span>
+        <span>
+          {category.direction === "income" ? "Доход" : "Расход"} ·{" "}
+          {category.scope === "household" ? "Общее" : "Личное"}
+        </span>
       </div>
+      <button className="tileAction" type="button" onClick={onEdit}>
+        Изменить
+      </button>
     </article>
   );
 }

@@ -35,6 +35,11 @@ Remove-Item Env:\VITE_API_BASE_URL
 The generated manifest uses `start_url` and `scope` from the Vite base path, and
 the service worker registers under that same scope instead of claiming `/`.
 
+Service worker registration is production-only and intentionally skipped on
+plain HTTP IP origins such as `http://192.168.x.x/finance/`. Browsers require a
+secure context for service workers, except localhost-style development origins,
+so the PWA remains usable there but install/offline behavior requires HTTPS.
+
 ## Current scope
 
 - React + TypeScript + Vite app shell.

@@ -27,6 +27,7 @@ export type AccountSummary = {
 };
 
 export type CategoryDirection = "income" | "expense";
+export type CategoryScope = "personal" | "household";
 
 export type CategorySummary = {
   id: string;
@@ -34,7 +35,7 @@ export type CategorySummary = {
   direction: CategoryDirection;
   iconKey?: string | null;
   color?: string | null;
-  scope?: "personal" | "household";
+  scope?: CategoryScope;
   householdId?: string | null;
   status?: "active" | "archived" | "deleted";
   version?: number;
@@ -84,6 +85,7 @@ export type SessionSnapshot = {
   viewerName: string;
   householdName: string;
   accessLabel: string;
+  householdId: string | null;
 };
 
 export type DashboardSnapshot = {

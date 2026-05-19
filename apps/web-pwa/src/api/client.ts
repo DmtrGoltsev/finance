@@ -1,6 +1,8 @@
 import type {
   AccountKind,
   AccountSummary,
+  CategoryDirection,
+  CategoryScope,
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
@@ -15,8 +17,6 @@ import type {
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const DEFAULT_PROD_API_BASE_URL = "/finance-api";
-const DEFAULT_EMAIL = "demo.owner@example.test";
-const DEFAULT_PASSWORD = "demo-password-only";
 const CSRF_COOKIE_NAME = "finance_csrf";
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 
@@ -129,6 +129,29 @@ type AccountCreateInput = {
   currency?: CurrencyCode;
   initialBalance?: number;
   ownershipType?: "personal" | "shared";
+  householdId?: string | null;
+};
+
+type LoginInput = {
+  email: string;
+  password: string;
+};
+
+type CategoryCreateInput = {
+  name: string;
+  direction: CategoryDirection;
+  scope: CategoryScope;
+  householdId: string | null;
+  iconKey: string | null;
+  color: string | null;
+};
+
+type CategoryUpdateInput = {
+  categoryId: string;
+  name?: string;
+  iconKey?: string | null;
+  color?: string | null;
+  version?: number;
 };
 
 type OperationCreateInput = {
@@ -150,7 +173,7 @@ type TransferCreateInput = {
   description?: string | null;
 };
 
-class ApiRequestError extends Error {
+export class ApiRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
@@ -163,6 +186,8 @@ class ApiRequestError extends Error {
 }
 
 export interface FinanceApiClient {
+  loginWithPassword(input: LoginInput): Promise<void>;
+  logout(): Promise<void>;
   getDashboardSnapshot(): Promise<DashboardSnapshot>;
   createDemoAccount(input?: AccountCreateInput): Promise<AccountSummary>;
   updateAccount(input: {
@@ -172,11 +197,8 @@ export interface FinanceApiClient {
   archiveAccount(accountId: string): Promise<AccountSummary>;
   restoreAccount(accountId: string): Promise<AccountSummary>;
   deleteAccount(accountId: string): Promise<void>;
-  createDemoCategory(input: { householdId: string | null }): Promise<CategorySummary>;
-  updateCategory(input: {
-    categoryId: string;
-    version?: number;
-  }): Promise<CategorySummary>;
+  createDemoCategory(input: CategoryCreateInput): Promise<CategorySummary>;
+  updateCategory(input: CategoryUpdateInput): Promise<CategorySummary>;
   archiveCategory(categoryId: string): Promise<CategorySummary>;
   restoreCategory(categoryId: string): Promise<CategorySummary>;
   deleteCategory(categoryId: string): Promise<void>;
@@ -200,8 +222,6 @@ export interface FinanceApiClient {
 export type LiveFinanceApiClientOptions = {
   baseUrl?: string;
   fetcher?: Fetcher;
-  demoEmail?: string;
-  demoPassword?: string;
 };
 
 export function getApiBaseUrl(): string {
@@ -214,20 +234,43 @@ export function getApiBaseUrl(): string {
 export class LiveFinanceApiClient implements FinanceApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: Fetcher;
-  private readonly demoEmail: string;
-  private readonly demoPassword: string;
   private csrfToken: string | null;
 
   constructor(options: LiveFinanceApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? getApiBaseUrl()).replace(/\/+$/, "");
     this.fetcher = options.fetcher ?? fetch.bind(globalThis);
-    this.demoEmail = options.demoEmail ?? DEFAULT_EMAIL;
-    this.demoPassword = options.demoPassword ?? DEFAULT_PASSWORD;
     this.csrfToken = readCookie(CSRF_COOKIE_NAME);
   }
 
+  async loginWithPassword(input: LoginInput): Promise<void> {
+    const loginResponse = await this.request<LoginResponseDto>(
+      "/api/v1/sessions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          email: input.email.trim(),
+          password: input.password,
+          transport: "pwa_cookie"
+        })
+      },
+      { csrf: "omit" }
+    );
+
+    this.csrfToken = loginResponse.csrfToken || readCookie(CSRF_COOKIE_NAME);
+  }
+
+  async logout(): Promise<void> {
+    await this.request<void>(
+      "/api/v1/sessions/current",
+      { method: "DELETE" },
+      { empty: true }
+    );
+    this.csrfToken = null;
+    clearCookie(CSRF_COOKIE_NAME);
+  }
+
   async getDashboardSnapshot(): Promise<DashboardSnapshot> {
-    const session = await this.ensureSession();
+    const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
     const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope] =
       await Promise.all([
         this.get<PageEnvelope<AccountDto>>("/api/v1/accounts"),
@@ -251,7 +294,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       session: {
         viewerName: "Владелец",
         householdName: householdId ? "Общие финансы" : "Личный режим",
-        accessLabel: "Вход выполнен"
+        accessLabel: "Вход выполнен",
+        householdId
       },
       accounts,
       categories,
@@ -270,6 +314,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           name: input.name?.trim() || `Новый актив ${uniqueSuffix()}`,
           accountType: accountTypeFromKind(input.kind ?? "cash"),
           ownershipType: input.ownershipType ?? "personal",
+          householdId: input.ownershipType === "shared" ? input.householdId : null,
           currency: input.currency ?? "RUB",
           initialBalance: String(input.initialBalance ?? 0)
         })
@@ -323,18 +368,18 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     );
   }
 
-  async createDemoCategory(input: { householdId: string | null }): Promise<CategorySummary> {
+  async createDemoCategory(input: CategoryCreateInput): Promise<CategorySummary> {
     const envelope = await this.request<DataEnvelope<CategoryDto>>(
       "/api/v1/categories",
       {
         method: "POST",
         body: JSON.stringify({
-          name: `Категория ${uniqueSuffix()}`,
-          type: "expense",
-          scope: input.householdId ? "household" : "personal",
-          householdId: input.householdId,
-          iconKey: "tag",
-          color: "#2563EB"
+          name: input.name.trim(),
+          type: input.direction,
+          scope: input.scope,
+          householdId: input.scope === "household" ? input.householdId : null,
+          iconKey: input.iconKey,
+          color: input.color
         })
       }
     );
@@ -342,18 +387,15 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapCategory(envelope.data);
   }
 
-  async updateCategory(input: {
-    categoryId: string;
-    version?: number;
-  }): Promise<CategorySummary> {
+  async updateCategory(input: CategoryUpdateInput): Promise<CategorySummary> {
     const envelope = await this.request<DataEnvelope<CategoryDto>>(
       `/api/v1/categories/${input.categoryId}`,
       {
         method: "PATCH",
         body: JSON.stringify({
-          name: `Обновленная категория ${uniqueSuffix()}`,
-          iconKey: "wallet",
-          color: "#087F5B",
+          ...(input.name ? { name: input.name.trim() } : {}),
+          ...(input.iconKey !== undefined ? { iconKey: input.iconKey } : {}),
+          ...(input.color !== undefined ? { color: input.color } : {}),
           ...(input.version ? { version: input.version } : {})
         })
       }
@@ -527,37 +569,6 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     }
   }
 
-  private async ensureSession(): Promise<SessionResponseDto> {
-    try {
-      const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
-      this.csrfToken = readCookie(CSRF_COOKIE_NAME);
-      return session;
-    } catch {
-      this.csrfToken = null;
-    }
-
-    const loginResponse = await this.login();
-    return { actor: loginResponse.actor };
-  }
-
-  private async login(): Promise<LoginResponseDto> {
-    const loginResponse = await this.request<LoginResponseDto>(
-      "/api/v1/sessions",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          email: this.demoEmail,
-          password: this.demoPassword,
-          transport: "pwa_cookie"
-        })
-      },
-      { csrf: "omit" }
-    );
-
-    this.csrfToken = loginResponse.csrfToken || readCookie(CSRF_COOKIE_NAME);
-    return loginResponse;
-  }
-
   private async getReports(
     householdId: string | null,
     currency: CurrencyCode
@@ -615,22 +626,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       credentials: "include",
       headers
     });
-    if (
-      response.status === 403 &&
-      options.csrf !== "omit" &&
-      isUnsafeMethod(method) &&
-      path !== "/api/v1/sessions"
-    ) {
-      await this.login();
-      const csrfToken = this.csrfToken ?? readCookie(CSRF_COOKIE_NAME);
-      if (csrfToken) {
-        headers.set(CSRF_HEADER_NAME, csrfToken);
-      }
-      response = await this.fetcher(`${this.baseUrl}${path}`, {
-        ...init,
-        credentials: "include",
-        headers
-      });
+    if (response.status === 403 && options.csrf !== "omit" && isUnsafeMethod(method)) {
+      this.csrfToken = null;
     }
     if (!response.ok) {
       throw new ApiRequestError(
@@ -673,6 +670,18 @@ function readCookie(name: string): string | null {
     .find((part) => part.startsWith(prefix));
 
   return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : null;
+}
+
+function clearCookie(name: string): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  document.cookie = `${encodeURIComponent(name)}=; Max-Age=0; path=/`;
+}
+
+export function isApiRequestError(error: unknown, status?: number): error is ApiRequestError {
+  return error instanceof ApiRequestError && (status === undefined || error.status === status);
 }
 
 function mapAccount(account: AccountDto): AccountSummary {
