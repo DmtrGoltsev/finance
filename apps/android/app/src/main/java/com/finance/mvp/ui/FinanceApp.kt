@@ -54,8 +54,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.password
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -81,9 +84,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val DemoEmail = "demo.owner@example.test"
-private const val DemoPassword = "demo-password-only"
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FinanceApp(
@@ -94,6 +94,8 @@ fun FinanceApp(
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
+    var loginEmail by rememberSaveable { mutableStateOf("") }
+    var loginPassword by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
@@ -115,14 +117,24 @@ fun FinanceApp(
         }
     }
 
-    fun login() {
+    fun login(email: String, password: String) {
+        val credentials = loginCredentialsOrNull(email, password)
+        if (credentials == null) {
+            uiState = uiState.copy(message = "Введите email и пароль")
+            return
+        }
+
         scope.launch {
             uiState = uiState.copy(isLoading = true, message = "Входим")
-            when (val login = withContext(Dispatchers.IO) { apiClient.login(DemoEmail, DemoPassword) }) {
+            val result = withContext(Dispatchers.IO) {
+                apiClient.login(credentials.email, credentials.password)
+            }
+            loginPassword = ""
+            when (result) {
                 is ApiResult.Success -> loadDashboard()
                 is ApiResult.Failure -> uiState = uiState.copy(
                     isLoading = false,
-                    message = login.userFacingMessage(),
+                    message = result.userFacingMessage(),
                 )
             }
         }
@@ -163,9 +175,18 @@ fun FinanceApp(
                         if (account == null) {
                             ApiResult.Failure("Нужен счет")
                         } else {
+                            val resolvedCategory = category ?: when (
+                                val createdCategory = apiClient.createDemoCategory(
+                                    householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
+                                    categoryType = draft.type.apiValue,
+                                )
+                            ) {
+                                is ApiResult.Success -> createdCategory.value
+                                is ApiResult.Failure -> return@withContext createdCategory
+                            }
                             apiClient.createDemoTransaction(
                                 account = account,
-                                category = category,
+                                category = resolvedCategory,
                                 transactionType = draft.type.apiValue,
                                 amount = amount,
                             )
@@ -292,7 +313,11 @@ fun FinanceApp(
                 item {
                     SignInCard(
                         state = uiState,
-                        onLogin = ::login,
+                        email = loginEmail,
+                        password = loginPassword,
+                        onEmailChange = { loginEmail = it },
+                        onPasswordChange = { loginPassword = it },
+                        onLogin = { login(loginEmail, loginPassword) },
                     )
                 }
             }
@@ -321,9 +346,24 @@ fun FinanceApp(
     }
 }
 
+internal data class LoginCredentials(
+    val email: String,
+    val password: String,
+)
+
+internal fun loginCredentialsOrNull(email: String, password: String): LoginCredentials? {
+    val normalizedEmail = email.trim()
+    return LoginCredentials(normalizedEmail, password)
+        .takeIf { it.email.isNotBlank() && it.password.isNotBlank() }
+}
+
 @Composable
 private fun SignInCard(
     state: FinanceUiState,
+    email: String,
+    password: String,
+    onEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
     onLogin: () -> Unit,
 ) {
     ElevatedCard(
@@ -334,32 +374,66 @@ private fun SignInCard(
             containerColor = MaterialTheme.colorScheme.primaryContainer,
         ),
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_wallet_24),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = state.message,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = state.session?.displayName ?: "Личный кабинет",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Button(
-                onClick = onLogin,
-                enabled = !state.isLoading,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Войти")
+                Icon(
+                    painter = painterResource(R.drawable.ic_wallet_24),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = state.message,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = state.session?.displayName ?: "Личный кабинет",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            OutlinedTextField(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("login-email-field"),
+                value = email,
+                onValueChange = onEmailChange,
+                label = { Text("Email") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                enabled = !state.isLoading,
+            )
+            OutlinedTextField(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("login-password-field")
+                    .semantics { password() },
+                value = password,
+                onValueChange = onPasswordChange,
+                label = { Text("Пароль") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                enabled = !state.isLoading,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(
+                    modifier = Modifier.testTag("login-submit-button"),
+                    onClick = onLogin,
+                    enabled = !state.isLoading,
+                ) {
+                    Text("Войти")
+                }
             }
         }
     }
@@ -1477,8 +1551,11 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         return ApiResult.Success(AccountSummary("Восстановленный счет", "cash", "personal", "USD", "0.00", id = accountId, version = 3))
     }
 
-    override suspend fun createDemoCategory(householdId: String?): ApiResult<CategorySummary> {
-        return ApiResult.Success(CategorySummary("Дом", "expense", "personal", id = "cat-created", color = "#5B6EE1", version = 1))
+    override suspend fun createDemoCategory(
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> {
+        return ApiResult.Success(CategorySummary("Дом", categoryType, "personal", id = "cat-created", color = "#5B6EE1", version = 1))
     }
 
     override suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary> {

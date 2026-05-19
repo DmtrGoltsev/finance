@@ -26,6 +26,13 @@ class ApiClientScopeTest {
     }
 
     @Test
+    fun transactionCategoryTypeIsLimitedToBackendSupportedValues() {
+        assertEquals("income", normalizeTransactionCategoryType("income"))
+        assertEquals("expense", normalizeTransactionCategoryType("expense"))
+        assertEquals("expense", normalizeTransactionCategoryType("transfer"))
+    }
+
+    @Test
     fun devSeedDisplayTextIsUserFacingWithoutChangingIds() {
         assertEquals("Дом", userFacingSeedText("Dev Home"))
         assertEquals("Проценты по вкладу", userFacingSeedText("Dev deposit interest"))

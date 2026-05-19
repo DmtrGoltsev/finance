@@ -37,7 +37,10 @@ interface FinanceApiClient {
     suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary>
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
-    suspend fun createDemoCategory(householdId: String?): ApiResult<CategorySummary>
+    suspend fun createDemoCategory(
+        householdId: String?,
+        categoryType: String = "expense",
+    ): ApiResult<CategorySummary>
     suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary>
     suspend fun archiveCategory(categoryId: String): ApiResult<CategorySummary>
     suspend fun restoreCategory(categoryId: String): ApiResult<CategorySummary>
@@ -264,14 +267,17 @@ class LiveFinanceApiClient(
             .let(::parseAccount)
     }
 
-    override suspend fun createDemoCategory(householdId: String?): ApiResult<CategorySummary> = safeCall {
+    override suspend fun createDemoCategory(
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> = safeCall {
         val stamp = System.currentTimeMillis().toString().takeLast(6)
         request(
             path = "/api/v1/categories",
             method = "POST",
             body = JSONObject()
                 .put("name", "Новая категория $stamp")
-                .put("type", "expense")
+                .put("type", normalizeTransactionCategoryType(categoryType))
                 .put("scope", categoryScopeForHousehold(householdId))
                 .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
                 .put("iconKey", "android")
@@ -559,6 +565,10 @@ internal fun normalizeAccountOwnershipType(value: String): String {
 
 internal fun categoryScopeForHousehold(householdId: String?): String {
     return if (householdId.isNullOrBlank()) "personal" else "household"
+}
+
+internal fun normalizeTransactionCategoryType(value: String): String {
+    return if (value == "income") "income" else "expense"
 }
 
 internal fun userFacingSeedText(value: String?): String {
