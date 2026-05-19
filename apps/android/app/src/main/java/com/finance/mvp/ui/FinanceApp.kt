@@ -93,6 +93,7 @@ fun FinanceApp(
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
+    var quickAddOpenKey by rememberSaveable { mutableStateOf(0) }
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
     var loginEmail by rememberSaveable { mutableStateOf("") }
     var loginPassword by rememberSaveable { mutableStateOf("") }
@@ -171,7 +172,10 @@ fun FinanceApp(
                     QuickEntryType.Income,
                     -> {
                         val account = dashboard.accounts.firstByIdOrFirst(draft.accountId)
-                        val category = dashboard.categories.firstByIdOrFirst(draft.categoryId)
+                        val category = dashboard.categories.quickAddCategoryFor(
+                            categoryId = draft.categoryId,
+                            transactionType = draft.type.apiValue,
+                        )
                         if (account == null) {
                             ApiResult.Failure("Нужен счет")
                         } else {
@@ -222,6 +226,7 @@ fun FinanceApp(
                 is ApiResult.Success -> {
                     quickAddError = null
                     showQuickAdd = false
+                    quickAddOpenKey += 1
                     loadDashboard("Сохранено")
                 }
                 is ApiResult.Failure -> {
@@ -294,6 +299,7 @@ fun FinanceApp(
                 modifier = Modifier.testTag("quick-add-fab"),
                 onClick = {
                     quickAddError = null
+                    quickAddOpenKey += 1
                     showQuickAdd = true
                 },
             ) {
@@ -326,6 +332,40 @@ fun FinanceApp(
                 AppSection.Home -> homeContent(dashboard, selectedMode) { selectedMode = it }
                 AppSection.Operations -> operationsContent(dashboard)
                 AppSection.Assets -> assetsContent(dashboard)
+                AppSection.Categories -> categoriesContent(
+                    dashboard = dashboard,
+                    onAddCategory = { type, mode ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Добавляем категорию")
+                            val result = withContext(Dispatchers.IO) {
+                                apiClient.createDemoCategory(
+                                    householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                                    categoryType = type.apiValue,
+                                )
+                            }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Категория добавлена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                    onEditCategory = { category ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Обновляем категорию")
+                            val result = withContext(Dispatchers.IO) { apiClient.updateCategory(category) }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Категория обновлена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                )
                 AppSection.Analytics -> analyticsContent(dashboard, selectedMode) { selectedMode = it }
             }
 
@@ -335,6 +375,7 @@ fun FinanceApp(
 
     if (showQuickAdd) {
         QuickAddSheet(
+            sheetKey = quickAddOpenKey,
             dashboard = uiState.dashboard,
             errorMessage = quickAddError,
             onDismiss = {
@@ -478,6 +519,21 @@ private fun LazyListScope.assetsContent(dashboard: FinanceDashboard?) {
     }
     if (dashboard?.accounts.isNullOrEmpty()) {
         item { EmptyState("Активов пока нет") }
+    }
+}
+
+private fun LazyListScope.categoriesContent(
+    dashboard: FinanceDashboard?,
+    onAddCategory: (QuickEntryType, FinanceMode) -> Unit,
+    onEditCategory: (CategorySummary) -> Unit,
+) {
+    item {
+        CategoryManagementCard(
+            categories = dashboard?.categories.orEmpty(),
+            isAuthenticated = dashboard?.session?.isAuthenticated == true,
+            onAddCategory = onAddCategory,
+            onEditCategory = onEditCategory,
+        )
     }
 }
 
@@ -861,6 +917,92 @@ private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
 }
 
 @Composable
+private fun CategoryManagementCard(
+    categories: List<CategorySummary>,
+    isAuthenticated: Boolean,
+    onAddCategory: (QuickEntryType, FinanceMode) -> Unit,
+    onEditCategory: (CategorySummary) -> Unit,
+) {
+    var type by rememberSaveable { mutableStateOf(QuickEntryType.Expense) }
+    var mode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    val categoryTypes = listOf(QuickEntryType.Expense, QuickEntryType.Income)
+    val visibleCategories = categories
+        .filter { it.status == "active" }
+        .sortedWith(compareBy<CategorySummary> { it.type }.thenBy { it.displayName() })
+
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("category-management-card"),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(R.drawable.ic_category_24, Color(0xFF6D5BD0), size = 36)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Категории", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Добавление, список и быстрые правки", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            Text("Тип", style = MaterialTheme.typography.labelLarge)
+            ChipRow(categoryTypes, type, { type = it }, { it.title }, { it.icon() })
+            Text("Режим", style = MaterialTheme.typography.labelLarge)
+            ChipRow(listOf(FinanceMode.Personal, FinanceMode.Shared), mode, { mode = it }, { it.title }, { it.icon() })
+
+            Button(
+                onClick = { onAddCategory(type, mode) },
+                enabled = isAuthenticated,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Добавить категорию")
+            }
+
+            if (visibleCategories.isEmpty()) {
+                Text("Категорий пока нет", style = MaterialTheme.typography.bodySmall)
+            } else {
+                visibleCategories.forEach { category ->
+                    CategoryManagementRow(category, onEditCategory)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryManagementRow(
+    category: CategorySummary,
+    onEditCategory: (CategorySummary) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBubble(category.icon(), category.colorOrFallback(), size = 34)
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = category.displayName(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${category.localizedType()} • ${category.localizedScope()}",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        TextButton(onClick = { onEditCategory(category) }) {
+            Text("Изменить")
+        }
+    }
+}
+
+@Composable
 private fun CapitalBreakdownCard(summaries: List<AssetSummary>) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -947,18 +1089,19 @@ private fun EmptyState(text: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuickAddSheet(
+    sheetKey: Int,
     dashboard: FinanceDashboard?,
     errorMessage: String?,
     onDismiss: () -> Unit,
     onSubmit: (QuickAddDraft) -> Unit,
 ) {
-    var amount by rememberSaveable { mutableStateOf("") }
-    var type by rememberSaveable { mutableStateOf(QuickEntryType.Expense) }
-    var accountId by rememberSaveable { mutableStateOf("") }
-    var destinationAccountId by rememberSaveable { mutableStateOf("") }
-    var categoryId by rememberSaveable { mutableStateOf("") }
-    var assetKind by rememberSaveable { mutableStateOf(AssetKind.Bank) }
-    var visibility by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    var amount by rememberSaveable(sheetKey) { mutableStateOf("") }
+    var type by rememberSaveable(sheetKey) { mutableStateOf(QuickEntryType.Expense) }
+    var accountId by rememberSaveable(sheetKey) { mutableStateOf("") }
+    var destinationAccountId by rememberSaveable(sheetKey) { mutableStateOf("") }
+    var categoryId by rememberSaveable(sheetKey) { mutableStateOf("") }
+    var assetKind by rememberSaveable(sheetKey) { mutableStateOf(AssetKind.Bank) }
+    var visibility by rememberSaveable(sheetKey) { mutableStateOf(FinanceMode.Personal) }
     val accounts = dashboard?.accounts.orEmpty()
     val categories = dashboard?.categories.orEmpty().filter { it.type == type.apiValue }
     val firstAccountId = accounts.firstOrNull()?.id.orEmpty()
@@ -1226,6 +1369,11 @@ fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<Sectio
         AppSection.Assets -> view.assetSummaries.map {
             SectionCard(it.kind.title, it.balance.formatMoney(it.currency), "${it.count} шт.")
         }
+        AppSection.Categories -> dashboard?.categories.orEmpty().map {
+            SectionCard(it.displayName(), it.localizedType(), it.localizedScope())
+        }.ifEmpty {
+            listOf(SectionCard("Категории", "Нет категорий", "пусто"))
+        }
         AppSection.Analytics -> view.topCategories.map {
             SectionCard(it.name, it.amount.formatMoney(it.currency), "категория")
         }.ifEmpty {
@@ -1445,6 +1593,7 @@ private fun AppSection.icon(): Int = when (this) {
     AppSection.Home -> R.drawable.ic_home_24
     AppSection.Operations -> R.drawable.ic_receipt_24
     AppSection.Assets -> R.drawable.ic_wallet_24
+    AppSection.Categories -> R.drawable.ic_category_24
     AppSection.Analytics -> R.drawable.ic_analytics_24
 }
 
@@ -1486,9 +1635,21 @@ private fun List<CategorySummary>.firstByIdOrFirst(id: String): CategorySummary?
     return firstOrNull { it.id.isNotBlank() && it.id == id } ?: firstOrNull()
 }
 
+internal fun List<CategorySummary>.quickAddCategoryFor(
+    categoryId: String,
+    transactionType: String,
+): CategorySummary? {
+    val matching = filter { it.type == transactionType && it.status == "active" }
+    return matching.firstOrNull { it.id.isNotBlank() && it.id == categoryId } ?: matching.firstOrNull()
+}
+
 private fun AccountSummary.displayName(): String = userFacingSeedText(name)
 
 private fun CategorySummary.displayName(): String = userFacingSeedText(name)
+
+private fun CategorySummary.localizedType(): String = if (type == "income") "Доход" else "Расход"
+
+private fun CategorySummary.localizedScope(): String = if (scope == "household") "Общее" else "Личное"
 
 private fun TransactionSummary.displayDescription(): String {
     return userFacingSeedText(description).ifBlank { localizedType() }

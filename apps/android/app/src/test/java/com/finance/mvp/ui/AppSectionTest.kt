@@ -14,10 +14,10 @@ import org.junit.Test
 
 class AppSectionTest {
     @Test
-    fun exposesFourMobileFinanceSections() {
+    fun exposesMobileFinanceSectionsWithCategoryManagement() {
         val titles = financeSections().map { it.title }
 
-        assertEquals(listOf("Главная", "Операции", "Активы", "Аналитика"), titles)
+        assertEquals(listOf("Главная", "Операции", "Активы", "Категории", "Аналитика"), titles)
     }
 
     @Test
@@ -202,6 +202,27 @@ class AppSectionTest {
     fun assetKindsUseBackendAccountTypeValues() {
         assertEquals("card", AssetKind.Card.apiValue)
         assertEquals("metal", AssetKind.Metal.apiValue)
+    }
+
+    @Test
+    fun quickAddIncomeDoesNotFallbackToExpenseCategory() {
+        val categories = listOf(
+            CategorySummary("Продукты", "expense", "personal", id = "cat-food", iconKey = "food", color = "#E35D4F"),
+            CategorySummary("Зарплата", "income", "personal", id = "cat-salary", iconKey = "income", color = "#2E7D62"),
+        )
+
+        assertEquals("cat-salary", categories.quickAddCategoryFor("", "income")?.id)
+        assertEquals("cat-salary", categories.quickAddCategoryFor("cat-salary", "income")?.id)
+        assertEquals("cat-food", categories.quickAddCategoryFor("cat-salary", "expense")?.id)
+    }
+
+    @Test
+    fun quickAddIncomeCreatesFallbackWhenOnlyExpenseCategoriesExist() {
+        val categories = listOf(
+            CategorySummary("Продукты", "expense", "personal", id = "cat-food", iconKey = "food", color = "#E35D4F"),
+        )
+
+        assertEquals(null, categories.quickAddCategoryFor("cat-food", "income"))
     }
 
     private fun dashboardFixture(): FinanceDashboard {

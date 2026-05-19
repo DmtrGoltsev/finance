@@ -272,16 +272,17 @@ class LiveFinanceApiClient(
         categoryType: String,
     ): ApiResult<CategorySummary> = safeCall {
         val stamp = System.currentTimeMillis().toString().takeLast(6)
+        val type = normalizeTransactionCategoryType(categoryType)
         request(
             path = "/api/v1/categories",
             method = "POST",
             body = JSONObject()
                 .put("name", "Новая категория $stamp")
-                .put("type", normalizeTransactionCategoryType(categoryType))
+                .put("type", type)
                 .put("scope", categoryScopeForHousehold(householdId))
                 .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
-                .put("iconKey", "android")
-                .put("color", "#2E7D32")
+                .put("iconKey", if (type == "income") "income" else "android")
+                .put("color", if (type == "income") "#2E7D62" else "#2E7D32")
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         ).dataObject().let(::parseCategory)
