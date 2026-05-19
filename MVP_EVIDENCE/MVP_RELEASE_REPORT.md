@@ -1,95 +1,84 @@
 # MVP Release Report
 
-Дата отчета: `2026-05-18`
-Сборка / commit / tag: `PENDING: current folder is not a git repo; release-git-worker approved`
-Окружение: `local Windows workspace, dev seeded backend, PWA dev/build evidence, Android emulator evidence`
-Ответственный QA/evidence: `FINAL-MVP-GATE-REVIEWER-2`
+Дата отчета: `2026-05-19`
+Production deployed commit evidence: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`
+Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`
+Окружение: `production deployment, iPhone/browser QA, Android QA`
+Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
 
-Итоговый статус MVP completion: `GO / FUNCTIONAL MVP COMPLETE WITH DOCUMENTED LIMITATIONS`
-Итоговый статус GitHub publication worker: `GO TO START release-git-worker`
-Итоговый статус GitHub public publication/tag: `PENDING release-git-worker safety gates`
-Итоговый статус evidence folder: `READY FOR FUNCTIONAL MVP GO`
+Итоговый статус: `Production MVP functional GO with documented limitations`
+Safe release wording: `Production MVP functional GO on 2026-05-19 for iPhone/browser and Android on deployed commit evidence 808f7278..., with documented limitations; docs/evidence package GO excludes tag mutation, and tag alignment remains open pending explicit owner approval.`
+Security/ops статус: `NOT FULL SECURITY GO; CVE/HTTPS/backup/restore proofs or explicit waivers are still required`
 
-## Краткий вывод
+## Current authoritative status
 
-Пакет можно считать функционально завершенным MVP для текущего manual-first scope: backend, PWA/iOS-like browser и Android имеют подтвержденные lifecycle flows, а прежние P0 blockers по Android native CRUD и PWA account/category/transfer lifecycle закрыты.
+Authoritative verdict теперь находится в `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 
-Публичная публикация/tag еще не выполнены: рабочая папка не является git repo. Security GO остается `PASS WITH LIMITATIONS`: PWA audit чистый, redaction/stale-session checks pass, но backend/Android CVE scanners недоступны в текущей среде.
+Финальный production MVP принят как functional GO для iPhone/browser и Android на production deployed commit evidence `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a` с documented limitations. Этот документ синхронизирован с финальным отчетом и не должен читаться как отдельный full security GO.
 
-## Проверенные области
+## Traceability Note
+
+Production deployed commit evidence is `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`. Observed local tag state is `v0.1.0-mvp` -> `94d2484a74131f53badf0cd83610b925770fb710`. Therefore tag alignment remains open in this docs package, and any retag/push/tag mutation requires explicit owner approval. The GO language in this report applies only to the docs/evidence package and functional production evidence, excluding tag mutation.
+
+## Superseded historical context
+
+Отчеты и checklist от `2026-05-18` остаются историческим evidence context для pre-production и pre-release проверок. Они не удаляются, но прежние ожидания traceability, прежние описания pre-production окружения и earlier HOLD statements считаются superseded финальным production report от `2026-05-19`.
+
+Earlier HOLD reports также остаются в evidence folder как история remediation. Current release status определяется только финальным production report и двумя final GO reports:
+
+- PWA/iPhone final GO: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
+- Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+
+## Production QA summary
 
 | Область | Статус | Доказательства | Комментарий |
 |---|---|---|---|
-| Backend full pytest | PASS | Fresh reviewer run `2026-05-18`; `MVP_EVIDENCE/reports/2026-05-18_final-mvp-gate-review-2.md` | `149 passed, 3 warnings in 15.02s`. |
-| PostgreSQL/Alembic live proof | PASS WITH LIMITATION | `MVP_EVIDENCE/reports/2026-05-18_postgres-alembic-live-proof-worker.md` | Disposable local PostgreSQL + Alembic head passed; route-level DB sync smoke limited by missing `psycopg/psycopg2`. |
-| PWA tests/build | PASS | Fresh reviewer `npm.cmd test`; fresh reviewer `npm.cmd run build`; `MVP_EVIDENCE/reports/2026-05-18_pwa-accounts-categories-transfer-crud-recovery-worker.md` | `2` test files / `7` tests passed; Vite build succeeded. |
-| PWA full CRUD/transfer/reports | PASS | `MVP_EVIDENCE/reports/2026-05-18_pwa-accounts-categories-transfer-crud-recovery-worker.md`; `MVP_EVIDENCE/test-runs/2026-05-18_pwa-accounts-categories-transfer-crud-e2e.txt` | Accounts/categories CRUD/archive/restore/delete, operation lifecycle, transfer lifecycle, reports, no localStorage bearer. |
-| iOS-like PWA viewport | PASS WITH LIMITATION | `MVP_EVIDENCE/screenshots/ios-pwa/2026-05-18_pwa-account-crud-ios.png`; `2026-05-18_pwa-category-crud-ios.png`; `2026-05-18_pwa-transfer-lifecycle-ios.png`; `2026-05-18_pwa-reports-modes-ios.png` | Browser viewport evidence, not physical iPhone evidence. |
-| Android native CRUD/transfer/reports | PASS WITH LIMITATION | `MVP_EVIDENCE/reports/2026-05-18_android-native-crud-ux-worker.md`; `MVP_EVIDENCE/test-runs/2026-05-18_android-native-crud-live-api-proof.json` | Native lifecycle controls PASS; deterministic MVP controls rather than arbitrary edit forms. |
-| Android unit/build/connected | PASS | Fresh reviewer Gradle runs; Android worker logs | `testDebugUnitTest`, `assembleDebug`, `connectedDebugAndroidTest` succeeded; connected run finished `2` tests on `1_Pixel_6_Pro(AVD) - 17`. |
-| PWA cookie/CSRF | PASS | `MVP_EVIDENCE/reports/2026-05-18_pwa-cookie-csrf-integration-worker.md`; PWA recovery localStorage proof | Cookie/CSRF flow, `accessToken` absent from localStorage. |
-| Android secure storage | PASS | `MVP_EVIDENCE/reports/2026-05-18_android-secure-storage-worker.md` | Encrypted token storage evidence exists; in-memory release path not restored. |
-| Screenshots PNG validity | PASS | Reviewer PNG signature check; `MVP_EVIDENCE/test-runs/2026-05-18_android-native-crud-png-validation.txt` | New PWA/iOS-like and Android native CRUD screenshots have valid PNG signatures. |
-| Security hardening | PASS WITH LIMITATIONS | `MVP_EVIDENCE/reports/2026-05-18_release-hardening-evidence-worker.md` | PWA audit `0`, stale-session/redaction pass; backend/Android CVE scanners unavailable. |
-| Release traceability | PENDING | `git rev-parse --is-inside-work-tree` -> not a git repo | `release-git-worker` is approved to create commit/tag traceability. |
+| Final production verdict | GO | `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md` | Authoritative source of truth for release status. |
+| PWA/iPhone browser | GO | `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md` | Browser/iPhone production QA passed; service worker limitation on plain HTTP IP is environmental. |
+| Android | GO | `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md` | Android production QA passed after remediation. |
+| Backend/DB production status | PASS | `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md` | Final report records Backend/DB status and health summary. |
+| Release traceability | OPEN | deployed commit evidence `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`; observed local tag `v0.1.0-mvp` -> `94d2484a74131f53badf0cd83610b925770fb710` | Tag alignment requires explicit owner approval before any retag/push/tag mutation. |
+| Security/ops | OPEN FOLLOW-UP | This report and final report limitations | Not a full security GO without CVE/HTTPS/backup/restore proofs or explicit waivers. |
 
-## Reviewer verification snapshot
+## Confirmed functional scope
 
-```text
-apps/backend: .\.venv\Scripts\python.exe -m pytest -q
-=> 149 passed, 3 warnings in 15.02s
-```
+- Login/logout.
+- Accounts/assets flows within documented platform limitations.
+- Personal/shared privacy smoke.
+- Categories add/edit.
+- Income, expense and transfer flows.
+- Reports modes: personal, shared/common and overview.
+- Brokerage/investment API smoke.
+- Import metadata-only placeholder, documented as non-blocking MVP limitation.
 
-```text
-apps/web-pwa: npm.cmd test
-=> 2 test files passed, 7 tests passed
+## Documented limitations
 
-apps/web-pwa: npm.cmd run build
-=> tsc -b && vite build; built in 2.01s
-```
+- No HTTPS/domain yet; PWA service worker and full PWA install are unavailable on plain HTTP IP.
+- Android account CRUD is covered through quick-add asset flow rather than a dedicated full account CRUD screen.
+- Import remains a metadata-only placeholder.
+- Investment detailed UI is limited; production evidence covers brokerage/investment API smoke.
+- Earlier HOLD reports are superseded by final production GO reports, not deleted.
 
-```text
-apps/android: .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
-=> BUILD SUCCESSFUL
+## Security and ops follow-ups
 
-apps/android: .\gradlew.bat :app:connectedDebugAndroidTest
-=> Finished 2 tests on 1_Pixel_6_Pro(AVD) - 17; BUILD SUCCESSFUL
-```
+The release docs must not claim full security GO until one of the following is available for each area: proof or explicit waiver.
 
-Latest accepted live counts:
-
-- Android native CRUD proof: accounts `4`, categories `4`, transactions `7`, transfers `3`, report transfer count `3`.
-- PWA recovery E2E: transfer row/count visible `count=6`, account/category/operation/transfer lifecycle PASS.
-
-## Release blockers
-
-| ID | Severity | Область | Статус | Комментарий |
-|---|---|---|---|---|
-| RB-001 | P0 | PostgreSQL/Alembic live runtime | CLOSED | PASS evidence exists. |
-| RB-002 | P0 | PWA session security | CLOSED | Cookie/CSRF and no localStorage bearer evidence exists. |
-| RB-003 | P0 | Android token storage | CLOSED | Secure storage evidence exists. |
-| RB-004 | P0 | Client full CRUD/archive/restore UX | CLOSED WITH LIMITATION | PWA and Android lifecycle controls proven; Android uses deterministic MVP values. |
-| RB-005 | P0 | Transfer live UX lifecycle | CLOSED | PWA manual transfer lifecycle and Android transfer lifecycle proof exist via transaction semantics. |
-| RB-006 | P0 | Device screenshot validity | CLOSED | New Android/PWA/iOS-like PNG evidence is valid. |
-| RB-007 | P1 | Release traceability | PENDING | Current folder is not a git repo; next worker approved. |
-| RB-008 | P1 | Release hardening | ACCEPTED LIMITATION | PWA audit clean; backend/Android CVE scanner tooling unavailable. |
-
-## Known MVP scope limitations
-
-- Bank import.
-- Bank API integrations.
-- SMS import/parsing.
-- Push notifications.
-- Broker/investment integrations.
-- Physical iPhone validation beyond iOS-like PWA viewport.
-- Production-grade arbitrary Android edit forms beyond deterministic MVP lifecycle controls.
-- Formal backend/Android CVE scanner reports until approved tooling is available.
+- HTTPS/domain proof for production PWA install and service worker.
+- Backend dependency CVE proof or waiver.
+- Android dependency CVE proof or waiver.
+- Production backup proof or waiver.
+- Production restore proof or waiver.
 
 ## Release decision
 
-MVP completion: `GO / FUNCTIONAL MVP COMPLETE WITH DOCUMENTED LIMITATIONS`
+Production MVP functional GO: `GO on 2026-05-19 for iPhone/browser and Android`
 
-GitHub publication worker: `GO TO START release-git-worker`
+Production deployed commit evidence: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`
 
-Actual GitHub publication/tag: `PENDING release-git-worker safety gates`
+Observed local tag state: `v0.1.0-mvp` -> `94d2484a74131f53badf0cd83610b925770fb710`
 
+Tag alignment: `OPEN; requires explicit owner approval before retag/push`
+
+Authoritative verdict: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
+
+Security/ops: `open follow-ups; do not claim full security GO`

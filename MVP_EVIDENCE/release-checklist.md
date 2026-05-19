@@ -1,95 +1,74 @@
 # Release Checklist MVP
 
-Дата релизной проверки: `2026-05-18`
-Сборка / commit / tag: `PENDING: current folder is not a git repo; release-git-worker approved`
-Окружение: `local Windows workspace, dev seeded backend, PWA dev/build evidence, Android emulator evidence`
-Ответственный QA/evidence: `FINAL-MVP-GATE-REVIEWER-2`
+Дата релизной проверки: `2026-05-19`
+Production deployed commit evidence: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`
+Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`
+Окружение: `production deployment, iPhone/browser QA, Android QA`
+Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
 
-Итоговый статус MVP completion: `GO / FUNCTIONAL MVP COMPLETE WITH DOCUMENTED LIMITATIONS`
-Итоговый статус GitHub publication worker: `GO TO START release-git-worker`
-Итоговый статус GitHub public publication/tag: `PENDING release-git-worker safety gates`
+Итоговый статус: `Production MVP functional GO with documented limitations`
+Safe release wording: `Production MVP functional GO on 2026-05-19 for iPhone/browser and Android on deployed commit evidence 808f7278..., with documented limitations; tag alignment remains open and requires explicit owner approval before any tag mutation.`
+Security/ops статус: `NOT FULL SECURITY GO; open follow-ups remain without CVE/HTTPS/backup/restore proofs or explicit waivers`
 
 ## Базовая готовность
 
-- [ ] Подтвержден актуальный commit/tag сборки MVP. Статус: pending `release-git-worker`.
-- [x] Backend/API доступны в локальном dev/demo окружении: `http://127.0.0.1:8000`.
-- [x] Backend/API подтверждены в production-like DB migration proof на real PostgreSQL: `MVP_EVIDENCE/reports/2026-05-18_postgres-alembic-live-proof-worker.md`.
-- [x] PWA открывается на desktop viewport с live backend flow и CRUD evidence.
-- [x] iOS-like PWA viewport screenshots получены как browser evidence.
-- [x] Android собран, unit tests и connected tests проходят.
-- [x] Android native CRUD screenshots валидны как PNG.
-- [x] Нет открытых P0 functional MVP blockers.
-- [x] Final MVP gate review 2 создан: `MVP_EVIDENCE/reports/2026-05-18_final-mvp-gate-review-2.md`.
+- [x] Подтвержден актуальный production commit: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`.
+- [ ] Tag alignment remains open: observed local tag `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`, not the production deployed commit evidence `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`; retag/push requires explicit owner approval.
+- [x] Backend/API доступен в production deployment: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
+- [x] PWA/iPhone browser final QA завершен со статусом GO: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
+- [x] Android final QA завершен со статусом GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+- [x] Final production report фиксирует deployed version, Backend/DB status, QA coverage summary и known non-blocking gaps.
+- [x] Ранние HOLD reports сохранены как исторический контекст и считаются superseded финальными GO reports.
+- [x] Нет открытых P0 functional MVP blockers по финальному production evidence.
 
-## Подтвержденные automated checks
+## Подтвержденные functional production flows
 
-- [x] Backend full pytest fresh reviewer run: `149 passed, 3 warnings`.
-- [x] Backend W3 API contract/runtime evidence exists.
-- [x] Backend transactions runtime evidence exists.
-- [x] Backend transfer safety evidence exists.
-- [x] Backend report runtime evidence exists.
-- [x] PWA tests fresh reviewer run: `2 test files passed`, `7 tests passed`.
-- [x] PWA build fresh reviewer run: `vite build` succeeded.
-- [x] PWA live CRUD/transfer/reports E2E worker pass exists.
-- [x] Android `:app:testDebugUnitTest`: `BUILD SUCCESSFUL`.
-- [x] Android `:app:assembleDebug`: `BUILD SUCCESSFUL`.
-- [x] Android `:app:connectedDebugAndroidTest`: `BUILD SUCCESSFUL`, `2` tests on emulator.
+- [x] Login/logout подтвержден на iPhone/browser и Android.
+- [x] Accounts/assets flows подтверждены в рамках documented platform limitations.
+- [x] Personal/shared privacy smoke подтвержден для production MVP scope.
+- [x] Categories add/edit подтверждены.
+- [x] Income, expense и transfer flows подтверждены.
+- [x] Reports modes подтверждены: personal, shared/common и overview.
+- [x] Brokerage/investment API smoke подтвержден на уровне final production report.
+- [x] Import остается metadata-only placeholder и явно задокументирован как limitation.
+- [x] PWA service worker limitation на plain HTTP IP отделен от code HOLD и не блокирует online browser use.
 
-## Обязательные release flows
+## Evidence gates
 
-- [x] Demo login/session через dev seeded backend.
-- [x] Release-grade PWA cookie/CSRF session flow: `MVP_EVIDENCE/reports/2026-05-18_pwa-cookie-csrf-integration-worker.md`.
-- [x] Release-grade Android secure token persistence: `MVP_EVIDENCE/reports/2026-05-18_android-secure-storage-worker.md`.
-- [x] Accounts CRUD/archive/restore/delete на PWA с live backend evidence.
-- [x] Accounts lifecycle controls на Android с live backend evidence.
-- [x] Categories CRUD/archive/restore/delete на PWA с live backend evidence.
-- [x] Categories lifecycle controls на Android с live backend evidence.
-- [x] Transactions create/edit/list/delete/restore на PWA/Android с live backend evidence.
-- [x] Same-scope transfer lifecycle на PWA/Android с live backend evidence via transaction semantics.
-- [x] Backend same-scope transfer safety tests.
-- [x] Backend shared family / combined viewer report tests.
-- [x] Report UX screenshots/evidence на PWA/iOS-like и Android.
-- [x] Backend negative privacy cases for financial runtime.
-- [ ] Expanded client/device negative privacy smoke. Статус: release-hardening follow-up, not functional P0.
-- [x] Real PostgreSQL + Alembic startup/migration evidence.
-- [x] Final Android screenshots are valid PNG.
-- [x] Final iOS/PWA browser screenshots are valid PNG.
+- [x] Authoritative verdict указан: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
+- [x] Final PWA/iPhone GO report указан: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
+- [x] Final Android GO report указан: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+- [ ] Release tag alignment is open and documented in checklist and release report; production deployed commit evidence remains `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`.
+- [x] Historical local/dev evidence не представлено как текущий production verdict.
+- [x] Документ не содержит raw screenshots, XML, credential metadata, runner scripts, UUID/account/amount values.
 
-## Evidence Gates
+## Known documented limitations
 
-- [x] Для каждого текущего `PASS` есть ссылка на screenshot, log, report или run note.
-- [x] Для каждого limitation указана причина и следующий evidence target.
-- [x] Android screenshots являются валидными изображениями.
-- [ ] Итоговый `MVP_RELEASE_REPORT.md` отражает release candidate commit/tag. Статус: pending `release-git-worker`.
-- [x] Нет TODO placeholders, противоречащих актуальным functional MVP evidence.
+- [x] Нет HTTPS/domain; полноценный PWA install и штатная service worker работа на plain HTTP IP недоступны.
+- [x] Android account CRUD покрыт через quick-add asset flow, а не отдельный полный CRUD screen.
+- [x] Import остается metadata-only placeholder.
+- [x] Investment detailed UI ограничен; final report фиксирует brokerage/investment API smoke.
+- [x] Ранние HOLD findings superseded финальными production GO reports, но не удалены.
 
-## Release Blockers
+## Security and ops follow-ups
 
-- [x] RB-001 закрыт: real PostgreSQL + Alembic live runtime доказан.
-- [x] RB-002 закрыт: PWA cookie/CSRF доказан.
-- [x] RB-003 закрыт: Android secure token storage доказан.
-- [x] RB-004 закрыт с limitation: frontend/mobile full CRUD/transaction lifecycle evidence доказан; Android controls deterministic MVP values.
-- [x] RB-005 закрыт: transfer lifecycle evidence на PWA/Android доказан через transaction semantics.
-- [x] RB-006 закрыт: final screenshots, включая валидные Android/PWA/iOS-like PNG.
-- [ ] RB-007 pending: commit/tag/release candidate traceability. Next worker: `release-git-worker`.
-- [ ] RB-008 accepted limitation: backend/Android CVE tooling unavailable; PWA audit clean.
-
-## Известные ограничения MVP
-
-- [x] Bank import не входит в MVP.
-- [x] Bank API integrations не входят в MVP.
-- [x] SMS import/parsing не входит в MVP.
-- [x] Push notifications не входят в MVP.
-- [x] Broker/investment integrations не входят в MVP.
-- [x] Physical iPhone validation заменена iOS-like PWA viewport evidence.
-- [x] Android arbitrary edit forms остаются post-MVP UX improvement; MVP lifecycle controls proven.
-- [x] Backend/Android CVE scanner reports pending approved tooling or explicit waiver.
+- [ ] HTTPS/domain для production PWA install и service worker.
+- [ ] Backend dependency CVE proof или explicit waiver.
+- [ ] Android dependency CVE proof или explicit waiver.
+- [ ] Production backup proof.
+- [ ] Production restore proof.
+- [ ] Formal security release decision после CVE/HTTPS/backup/restore proofs или explicit waivers.
 
 ## Решение
 
-MVP completion: `GO / FUNCTIONAL MVP COMPLETE WITH DOCUMENTED LIMITATIONS`
+Production MVP functional GO: `GO on 2026-05-19 for iPhone/browser and Android`
 
-GitHub publication worker: `GO TO START release-git-worker`
+Production deployed commit evidence: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`
 
-Actual GitHub publication/tag: `PENDING release-git-worker safety gates`
+Observed local tag state: `v0.1.0-mvp` -> `94d2484a74131f53badf0cd83610b925770fb710`
 
+Tag alignment: `OPEN; requires explicit owner approval before retag/push`
+
+Authoritative verdict: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
+
+Security/ops: `open follow-ups; do not claim full security GO`

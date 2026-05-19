@@ -1,44 +1,35 @@
-# Current Status: Wave 0
+# Current Status: Production MVP
 
 ## Статус
 
-Wave 0 для продуктовой постановки MVP завершена.
+Production MVP получил **functional GO** на 2026-05-19 для iPhone/browser и Android.
 
-Создан короткий источник правды по границам MVP: что входит в первую поставку, что остается post-MVP, какие сценарии должны быть закрыты и какие вопросы требуют архитектурного внимания на следующих этапах.
+Это не является full security GO и не является безусловным public production GO. Статус фиксирует, что восстановленная production-сборка проходит финальные функциональные проверки MVP в заявленных средах с явно описанными ограничениями и остаточными решениями владельцев.
 
-## Сделано этим агентом
+## Production
 
-- Зафиксирована продуктовая цель MVP.
-- Описаны целевые пользователи.
-- Выделены 8 главных пользовательских сценариев.
-- Разделены MVP и post-MVP.
-- Зафиксированы допущения для следующих агентов.
-- Сняты предыдущие блокеры по источникам импорта и наличию личных счетов в семейной модели.
-- Закрыт P1-01: personal-only видимость подтверждена как продуктовый инвариант MVP.
-- Закрыт P1-02: report modes зафиксированы как `shared family report` и `combined viewer overview`.
-- Сведены критичные вопросы к минимальному списку.
-- Добавлены acceptance criteria MVP.
+- Commit: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a` / short `808f727`.
+- Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`.
+- Tag alignment: open; aligning `v0.1.0-mvp` to production deployed commit evidence requires explicit owner approval before any retag/push/tag mutation.
+- Frontend: `http://<production-host>/finance/`.
+- Backend API: `http://<production-host>/finance-api`.
+- Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 
-## Статус блокеров и следующий фокус
+## Финальные доказательства
 
-- Предыдущий блокер по выбору 1-2 обязательных источников импорта снят: импорт из файлов перенесен в post-MVP, MVP строится на ручном вводе.
-- Предыдущий блокер по наличию личных счетов снят: в семейной модели MVP будут общие и личные счета.
-- P1-01 закрыт: personal-счета, personal-операции, personal-категории и personal-агрегаты другого участника семьи не раскрываются в MVP.
-- P1-02 закрыт: `shared family report` включает только shared household данные, а `combined viewer overview` включает shared household данные и personal данные текущего пользователя.
-- Следующий фокус: API/client contracts для canonical vocabulary, endpoint modes, authz predicates, report DTOs, client states и release-gate traceability.
+- Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+- PWA/iPhone final GO: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
+- Финальное покрытие включает login/logout, accounts/assets, shared/personal privacy, categories add/edit, income/expense/transfer, brokerage/investment API smoke, report modes и metadata-only import placeholder.
 
-## Неблокирующие риски
+## Ограничения
 
-- Решение SaaS/self-hosted может повлиять на архитектуру, безопасность и эксплуатацию, но не должно расширять MVP-скоуп прямо сейчас.
-- Юрисдикция и комплаенс могут стать критичными перед публичным запуском.
-- Одновременная поставка Android и PWA может увеличить объем первой технической волны.
-- Будущий импорт Excel/CSV/файлов потребует отдельного выбора источников, форматов и сценария проверки данных после MVP.
+- PWA service worker на plain HTTP IP ограничен средой: приложение работает online, но штатный service worker/PWA install требует HTTPS/domain.
+- CVE scans, backup/restore, physical iPhone/Safari требуют отдельного proof или waiver.
+- Import остается metadata-only; файл не парсится и не создает операции, категории или переводы.
+- Investment detailed UI ограничен; подтвержден smoke-уровень brokerage/investment API.
+- Production QA data cleanup/retention остается отдельным xhigh owner decision.
+- Безопасность, комплаенс, домен/HTTPS и публичный запуск остаются отдельными gate, а не частью этого functional GO.
 
 ## Измененные файлы
 
-- `docs/product-mvp.md`
-- `docs/current-status.md`
-- `docs/architecture/domain-model.md`
-- `docs/architecture/access-model.md`
-- `docs/testing/access-security-scenarios.md`
-- `docs/architecture/architecture-wave-0-review.md`
+- Changed files are tracked in git diff/status; this document is not an authoritative complete list.
