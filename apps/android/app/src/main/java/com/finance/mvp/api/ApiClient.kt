@@ -143,7 +143,11 @@ data class ImportReportPreviewResponse(
 
 sealed interface ApiResult<out T> {
     data class Success<T>(val value: T) : ApiResult<T>
-    data class Failure(val message: String, val cause: Throwable? = null) : ApiResult<Nothing>
+    data class Failure(
+        val message: String,
+        val cause: Throwable? = null,
+        val statusCode: Int? = null,
+    ) : ApiResult<Nothing>
 }
 
 class LiveFinanceApiClient(
@@ -417,7 +421,7 @@ class LiveFinanceApiClient(
         return try {
             ApiResult.Success(block())
         } catch (error: ApiException) {
-            ApiResult.Failure(error.message ?: "Ошибка API", error)
+            ApiResult.Failure(error.message ?: "Ошибка API", error, error.statusCode)
         } catch (error: Exception) {
             ApiResult.Failure("Не удалось подключиться к API: ${error.message ?: error::class.java.simpleName}", error)
         }
@@ -453,7 +457,10 @@ class LiveFinanceApiClient(
         val code = connection.responseCode
         val text = connection.readText(code)
         if (code !in expectedCodes) {
-            throw ApiException(parseError(text, code))
+            if (authorize && code.isAuthenticationFailureStatus()) {
+                tokenStore.clear()
+            }
+            throw ApiException(parseError(text, code), code)
         }
         return if (text.isBlank()) JSONObject() else JSONObject(text)
     }
@@ -474,7 +481,14 @@ class LiveFinanceApiClient(
     }
 }
 
-class ApiException(message: String) : Exception(message)
+class ApiException(
+    message: String,
+    val statusCode: Int? = null,
+) : Exception(message)
+
+private fun Int.isAuthenticationFailureStatus(): Boolean {
+    return this == HttpURLConnection.HTTP_UNAUTHORIZED || this == HttpURLConnection.HTTP_FORBIDDEN
+}
 
 private fun parseSession(json: JSONObject): SessionStatus {
     val actor = json.optJSONObject("actor")

@@ -110,10 +110,16 @@ fun FinanceApp(
                     dashboard = result.value,
                     message = successMessage,
                 )
-                is ApiResult.Failure -> uiState.copy(
-                    isLoading = false,
-                    message = result.userFacingMessage(),
-                )
+                is ApiResult.Failure -> {
+                    if (result.isAuthenticationFailure()) {
+                        FinanceUiState(message = "Войдите, чтобы увидеть финансы")
+                    } else {
+                        uiState.copy(
+                            isLoading = false,
+                            message = result.userFacingMessage(),
+                        )
+                    }
+                }
             }
         }
     }
@@ -242,13 +248,7 @@ fun FinanceApp(
     }
 
     LaunchedEffect(apiClient) {
-        when (val result = withContext(Dispatchers.IO) { apiClient.sessionStatus() }) {
-            is ApiResult.Success -> uiState = uiState.copy(
-                session = result.value,
-                message = "Можно обновить данные",
-            )
-            is ApiResult.Failure -> uiState = uiState.copy(message = "Войдите, чтобы увидеть финансы")
-        }
+        uiState = withContext(Dispatchers.IO) { restoredFinanceUiState(apiClient) }
     }
 
     Scaffold(
@@ -1282,6 +1282,38 @@ data class FinanceUiState(
     val message: String = "Готово",
 )
 
+internal suspend fun restoredFinanceUiState(apiClient: FinanceApiClient): FinanceUiState {
+    return when (val sessionResult = apiClient.sessionStatus()) {
+        is ApiResult.Success -> {
+            if (!sessionResult.value.isAuthenticated) {
+                FinanceUiState(
+                    session = sessionResult.value,
+                    message = "Войдите, чтобы увидеть финансы",
+                )
+            } else {
+                when (val dashboardResult = apiClient.dashboard()) {
+                    is ApiResult.Success -> FinanceUiState(
+                        session = dashboardResult.value.session,
+                        dashboard = dashboardResult.value,
+                        message = "Данные обновлены",
+                    )
+                    is ApiResult.Failure -> {
+                        if (dashboardResult.isAuthenticationFailure()) {
+                            FinanceUiState(message = "Войдите, чтобы увидеть финансы")
+                        } else {
+                            FinanceUiState(
+                                session = sessionResult.value,
+                                message = dashboardResult.userFacingMessage(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        is ApiResult.Failure -> FinanceUiState(message = "Войдите, чтобы увидеть финансы")
+    }
+}
+
 data class SectionCard(
     val title: String,
     val body: String,
@@ -1664,6 +1696,19 @@ private fun ApiResult.Failure.userFacingMessage(): String {
         message.contains("режим", ignoreCase = true) -> message
         else -> "Не удалось выполнить действие"
     }
+}
+
+private fun ApiResult.Failure.isAuthenticationFailure(): Boolean {
+    if (statusCode == 401 || statusCode == 403) {
+        return true
+    }
+    if (statusCode != null) {
+        return false
+    }
+    return listOf(
+        "HTTP 401",
+        "HTTP 403",
+    ).any { message.contains(it, ignoreCase = true) }
 }
 
 @Preview(showBackground = true, widthDp = 390)
