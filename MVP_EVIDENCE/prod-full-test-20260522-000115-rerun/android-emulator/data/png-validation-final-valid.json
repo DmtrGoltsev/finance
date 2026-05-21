@@ -1,0 +1,170 @@
+﻿[
+    {
+        "file":  "01-app-start-login-screen.png",
+        "bytes":  190601,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "02-login-auth-masked-credentials.png",
+        "bytes":  184088,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "03b-finance-resumed-dashboard.png",
+        "bytes":  292203,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "03-successful-login-dashboard-home.png",
+        "bytes":  291544,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "04-accounts-assets.png",
+        "bytes":  201341,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "05-categories-account-verification.png",
+        "bytes":  296620,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "06-operations-before-new.png",
+        "bytes":  340808,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "07-quickadd-sheet-initial.png",
+        "bytes":  276996,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "08-expense-entry-ready.png",
+        "bytes":  258294,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "09-expense-submit-visible.png",
+        "bytes":  241503,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "10-expense-operation-created.png",
+        "bytes":  340865,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "11-income-entry-ready.png",
+        "bytes":  250058,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "12-income-operation-created.png",
+        "bytes":  343387,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "13-transfer-entry-ready.png",
+        "bytes":  251833,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "14-transfer-operation-created.png",
+        "bytes":  341535,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "15-reports-analytics-summary.png",
+        "bytes":  236714,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "16-validation-error-empty-amount.png",
+        "bytes":  223659,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "17-force-stop-relaunch-session-persistence.png",
+        "bytes":  291207,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "18-after-logout-login-state.png",
+        "bytes":  195290,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "19-validation-error-empty-login-after-logout.png",
+        "bytes":  195493,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    },
+    {
+        "file":  "20-relaunch-after-logout-login-no-stale-data.png",
+        "bytes":  198566,
+        "width":  1440,
+        "height":  3120,
+        "ok":  true,
+        "error":  null
+    }
+]

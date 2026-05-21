@@ -1,0 +1,6 @@
+{
+    "url":  "http://<production-host>/finance-api/health",
+    "status":  200,
+    "body":  "{\"status\":\"ok\"}",
+    "capturedAt":  "2026-05-22T00:03:02.6830055+03:00"
+}

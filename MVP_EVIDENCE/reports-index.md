@@ -1,9 +1,9 @@
 # Curated Evidence Index
 
-Дата: `2026-05-19`
+Дата: `2026-05-22`
 Статус: curated index для release/evidence review. Это не является full security GO.
 
-Traceability caveat: production deployed commit evidence is `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`, while observed local tag `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`. Tag alignment remains open and requires explicit owner approval before any retag/push/tag mutation.
+Traceability caveat: production backend/PWA runtime remains release path `808f7278` (`808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`), while Android client session-restore fix commit `d9ffc75` (`d9ffc75454c57007b465f51b7782c12c52935823`) passed the 2026-05-22 production emulator rerun. Docs commit `2c15b5a` was already pushed. Observed local tag `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`. Tag alignment remains open and requires explicit owner approval before any retag/push/tag mutation.
 
 Этот индекс разделяет артефакты по пригодности к публикации и ревью. Authoritative/safe означает, что файл можно использовать как основной evidence artifact без дополнительной санитизации в рамках текущего review scope. Любые новые или не перечисленные ниже production QA данные должны проходить отдельную проверку перед коммитом, публикацией или передачей наружу.
 
@@ -27,6 +27,20 @@ Traceability caveat: production deployed commit evidence is `808f7278a7cc29aaf6f
 - `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/data/iphone-layout-scan.json`
 - `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/data/manifest-summary.json`
 - `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/data/qa-import-placeholder-fixture.csv`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/SMOKE_EVIDENCE.md`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/api-health.json`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/pwa-health.json`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/png-validation-final-valid.json`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/evidence-validation-summary.json`
+- `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/secret-scan-password-exact.json`
+
+## Latest Rerun Reference Paths
+
+Эти пути можно использовать для внутренней трассировки latest Android production emulator rerun, но перед публичным sharing или расширением release evidence bundle требуется отдельная privacy/sanitization review:
+
+- Evidence root: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/`
+- QA report: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/QA_REPORT.md`
+- Smoke evidence: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/SMOKE_EVIDENCE.md`
 
 ## Sanitization Needed Before Commit Or Sharing
 
@@ -49,10 +63,12 @@ Traceability caveat: production deployed commit evidence is `808f7278a7cc29aaf6f
 - Authenticated UI XML.
 - Raw screenshots.
 - JSON inventories с ID, именами пользовательских объектов или финансовыми значениями.
+- Latest rerun raw screenshots under `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/screenshots/` unless later privacy-approved.
+- Latest rerun UI XML under `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/xml/` unless separately reviewed and sanitized.
 
 ## Owner Decision Required
 
-Для production QA data cleanup/retention нужен явный owner decision: что удалить, что оставить локально, что санитизировать и что можно перенести в release evidence. До такого решения excluded/keep-local материалы остаются локальными и не используются как публичное доказательство готовности.
+Для production QA data cleanup/retention нужен явный owner decision: что удалить, что оставить локально, что санитизировать и что можно перенести в release evidence. Latest Android rerun created QA data through the production app UI and no cleanup was performed. До owner decision excluded/keep-local материалы остаются локальными и не используются как публичное доказательство готовности.
 
 ## Review Notes
 

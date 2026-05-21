@@ -1,22 +1,29 @@
 # Release Checklist MVP
 
-Дата релизной проверки: `2026-05-19`
+Дата релизной проверки: `2026-05-22`
 Production deployed commit evidence: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`
+Current production backend/PWA runtime: `808f7278` release path
+Android client fix commit: `d9ffc75454c57007b465f51b7782c12c52935823` (`d9ffc75`)
+Docs commit already pushed: `2c15b5a`
 Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`
-Окружение: `production deployment, iPhone/browser QA, Android QA`
+Окружение: `production deployment, iPhone/browser QA, Android QA, Android production emulator rerun`
 Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
+Latest Android production emulator rerun: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/QA_REPORT.md`
 
 Итоговый статус: `Production MVP functional GO with documented limitations`
-Safe release wording: `Production MVP functional GO on 2026-05-19 for iPhone/browser and Android on deployed commit evidence 808f7278..., with documented limitations; tag alignment remains open and requires explicit owner approval before any tag mutation.`
+Safe release wording: `Production MVP functional GO on 2026-05-19 for iPhone/browser and Android on deployed backend/PWA runtime evidence 808f7278..., with documented limitations; Android client session-restore fix d9ffc75 passed production emulator rerun on 2026-05-22; tag alignment remains open and requires explicit owner approval before any tag mutation.`
 Security/ops статус: `NOT FULL SECURITY GO; open follow-ups remain without CVE/HTTPS/backup/restore proofs or explicit waivers`
 
 ## Базовая готовность
 
 - [x] Подтвержден актуальный production commit: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`.
+- [x] Зафиксировано разделение runtime/client: production backend/PWA остается на release path `808f7278`, Android client fix tested from `d9ffc75`.
+- [x] Docs commit `2c15b5a` уже pushed; этот checklist update не выполняет commit/push/tag/deploy.
 - [ ] Tag alignment remains open: observed local tag `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`, not the production deployed commit evidence `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`; retag/push requires explicit owner approval.
 - [x] Backend/API доступен в production deployment: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 - [x] PWA/iPhone browser final QA завершен со статусом GO: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
 - [x] Android final QA завершен со статусом GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+- [x] Android production emulator rerun после session-restore fix завершен PASS: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/QA_REPORT.md`.
 - [x] Final production report фиксирует deployed version, Backend/DB status, QA coverage summary и known non-blocking gaps.
 - [x] Ранние HOLD reports сохранены как исторический контекст и считаются superseded финальными GO reports.
 - [x] Нет открытых P0 functional MVP blockers по финальному production evidence.
@@ -29,6 +36,7 @@ Security/ops статус: `NOT FULL SECURITY GO; open follow-ups remain without
 - [x] Categories add/edit подтверждены.
 - [x] Income, expense и transfer flows подтверждены.
 - [x] Reports modes подтверждены: personal, shared/common и overview.
+- [x] Android session persistence после force-stop/cold relaunch подтвержден в production emulator rerun.
 - [x] Brokerage/investment API smoke подтвержден на уровне final production report.
 - [x] Import остается metadata-only placeholder и явно задокументирован как limitation.
 - [x] PWA service worker limitation на plain HTTP IP отделен от code HOLD и не блокирует online browser use.
@@ -38,9 +46,13 @@ Security/ops статус: `NOT FULL SECURITY GO; open follow-ups remain without
 - [x] Authoritative verdict указан: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 - [x] Final PWA/iPhone GO report указан: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
 - [x] Final Android GO report указан: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
+- [x] Latest Android rerun evidence root указан: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/`.
+- [x] Latest Android rerun reports указаны: `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/QA_REPORT.md`, `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/SMOKE_EVIDENCE.md`.
+- [x] Latest Android rerun hygiene summary documented: 21/21 valid screenshots, exact password hits 0, email hits in XML 0, PWA/API health 200.
 - [ ] Release tag alignment is open and documented in checklist and release report; production deployed commit evidence remains `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a`.
 - [x] Historical local/dev evidence не представлено как текущий production verdict.
 - [x] Документ не содержит raw screenshots, XML, credential metadata, runner scripts, UUID/account/amount values.
+- [x] Raw screenshots remain uncommitted unless later privacy-approved.
 
 ## Known documented limitations
 
@@ -49,6 +61,7 @@ Security/ops статус: `NOT FULL SECURITY GO; open follow-ups remain without
 - [x] Import остается metadata-only placeholder.
 - [x] Investment detailed UI ограничен; final report фиксирует brokerage/investment API smoke.
 - [x] Ранние HOLD findings superseded финальными production GO reports, но не удалены.
+- [x] Latest Android rerun production QA data cleanup/retention remains owner-decision; no cleanup performed.
 
 ## Security and ops follow-ups
 
@@ -72,3 +85,5 @@ Tag alignment: `OPEN; requires explicit owner approval before retag/push`
 Authoritative verdict: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`
 
 Security/ops: `open follow-ups; do not claim full security GO`
+
+Production QA data cleanup/retention: `owner decision required; no cleanup performed in latest Android rerun`
