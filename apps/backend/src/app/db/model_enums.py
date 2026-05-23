@@ -37,6 +37,8 @@ TRANSFER_SCOPES = (
     TransferScope.HOUSEHOLD_SAME_HOUSEHOLD.value,
 )
 TRANSFER_STATUSES = ("posted", "voided")
+CAPTURE_DRAFT_STATUSES = ("pending", "confirmed", "discarded")
+CAPTURE_SOURCES = ("sms", "notification")
 SESSION_TRANSPORTS = ("cookie", "android_bearer")
 SESSION_STATUSES = ("active", "revoked", "expired")
 RESET_TOKEN_STATUSES = ("pending", "used", "expired", "revoked")

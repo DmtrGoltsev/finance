@@ -26,6 +26,7 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - PWA service worker на plain HTTP IP ограничен средой: приложение работает online, но штатный service worker/PWA install требует HTTPS/domain.
 - CVE scans, backup/restore, physical iPhone/Safari требуют отдельного proof или waiver.
 - Import остается metadata-only; файл не парсится и не создает операции, категории или переводы.
+- Post-MVP safe auto-capture documented as Android opt-in pending drafts: SMS uses `RECEIVE_SMS`, notification capture uses system notification listener settings, raw SMS/notification body is not stored server-side, and transactions are created only after user confirm/edit.
 - Investment detailed UI ограничен; подтвержден smoke-уровень brokerage/investment API.
 - Production QA data cleanup/retention остается отдельным xhigh owner decision.
 - Безопасность, комплаенс, домен/HTTPS и публичный запуск остаются отдельными gate, а не частью этого functional GO.

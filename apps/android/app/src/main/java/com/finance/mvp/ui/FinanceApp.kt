@@ -1,5 +1,11 @@
 package com.finance.mvp.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +43,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -52,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.password
@@ -66,6 +74,8 @@ import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiConfig
 import com.finance.mvp.api.ApiResult
+import com.finance.mvp.api.CaptureDraft
+import com.finance.mvp.api.CaptureDraftUpdateRequest
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
@@ -75,6 +85,8 @@ import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
+import com.finance.mvp.capture.CaptureOptInStore
+import com.finance.mvp.capture.CaptureParser
 import com.finance.mvp.ui.theme.FinanceTheme
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -90,6 +102,8 @@ fun FinanceApp(
     apiClient: FinanceApiClient,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val captureOptInStore = remember(context) { CaptureOptInStore(context) }
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
@@ -98,8 +112,78 @@ fun FinanceApp(
     var loginEmail by rememberSaveable { mutableStateOf("") }
     var loginPassword by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
+    var smsCaptureEnabled by rememberSaveable { mutableStateOf(false) }
+    var notificationCaptureEnabled by rememberSaveable { mutableStateOf(false) }
+    var captureDrafts by remember { mutableStateOf<List<CaptureDraft>>(emptyList()) }
+    var captureIsLoading by rememberSaveable { mutableStateOf(false) }
+    var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        smsCaptureEnabled = granted
+        with(captureOptInStore) { setSmsCaptureEnabled(granted) }
+        captureMessage = if (granted) {
+            "SMS capture enabled"
+        } else {
+            "SMS permission was not granted"
+        }
+    }
+
+    fun hasSmsPermission(): Boolean {
+        return context.checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun loadCaptureDrafts(successMessage: String? = null) {
+        scope.launch {
+            captureIsLoading = true
+            val result = withContext(Dispatchers.IO) { apiClient.listCaptureDrafts(status = "pending") }
+            when (result) {
+                is ApiResult.Success -> {
+                    captureDrafts = result.value
+                    captureMessage = successMessage ?: "Capture drafts refreshed"
+                }
+                is ApiResult.Failure -> {
+                    captureMessage = result.userFacingMessage()
+                }
+            }
+            captureIsLoading = false
+        }
+    }
+
+    fun setSmsCaptureOptIn(enabled: Boolean) {
+        if (!enabled) {
+            captureOptInStore.setSmsCaptureEnabled(false)
+            smsCaptureEnabled = false
+            captureMessage = "SMS capture disabled"
+            return
+        }
+        if (hasSmsPermission()) {
+            captureOptInStore.setSmsCaptureEnabled(true)
+            smsCaptureEnabled = true
+            captureMessage = "SMS capture enabled"
+        } else {
+            smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
+        }
+    }
+
+    fun setNotificationCaptureOptIn(enabled: Boolean) {
+        captureOptInStore.setNotificationCaptureEnabled(enabled)
+        notificationCaptureEnabled = enabled
+        captureMessage = if (enabled) {
+            "Notification capture enabled"
+        } else {
+            "Notification capture disabled"
+        }
+        if (enabled) {
+            runCatching {
+                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }.onFailure {
+                captureMessage = "Open Android notification access settings manually"
+            }
+        }
+    }
 
     fun loadDashboard(successMessage: String = "Данные обновлены") {
         scope.launch {
@@ -119,6 +203,78 @@ fun FinanceApp(
                             message = result.userFacingMessage(),
                         )
                     }
+                }
+            }
+        }
+    }
+
+    fun submitSyntheticCapture() {
+        scope.launch {
+            captureIsLoading = true
+            val candidate = CaptureParser.syntheticCandidate()
+            val result = withContext(Dispatchers.IO) {
+                apiClient.createCaptureDraft(candidate.toCreateRequest())
+            }
+            when (result) {
+                is ApiResult.Success -> loadCaptureDrafts("Synthetic draft created")
+                is ApiResult.Failure -> {
+                    captureMessage = result.userFacingMessage()
+                    captureIsLoading = false
+                }
+            }
+        }
+    }
+
+    fun confirmCaptureDraft(draft: CaptureDraft, accountId: String, categoryId: String) {
+        val selectedAccountId = accountId.takeIf { it.isNotBlank() }
+        val selectedCategoryId = categoryId.takeIf { it.isNotBlank() }
+        if (selectedAccountId == null || selectedCategoryId == null) {
+            captureMessage = "Choose an account and category before confirming"
+            return
+        }
+        scope.launch {
+            captureIsLoading = true
+            val result = withContext(Dispatchers.IO) {
+                val draftToConfirm = if (draft.accountId != selectedAccountId || draft.categoryId != selectedCategoryId) {
+                    when (
+                        val updateResult = apiClient.updateCaptureDraft(
+                            draft.id,
+                            CaptureDraftUpdateRequest(
+                                accountId = selectedAccountId,
+                                categoryId = selectedCategoryId,
+                            ),
+                        )
+                    ) {
+                        is ApiResult.Success -> updateResult.value
+                        is ApiResult.Failure -> return@withContext updateResult
+                    }
+                } else {
+                    draft
+                }
+                apiClient.confirmCaptureDraft(draftToConfirm.id)
+            }
+            when (result) {
+                is ApiResult.Success -> {
+                    captureMessage = "Draft confirmed"
+                    loadDashboard("Capture draft confirmed")
+                    loadCaptureDrafts()
+                }
+                is ApiResult.Failure -> {
+                    captureMessage = result.userFacingMessage()
+                    captureIsLoading = false
+                }
+            }
+        }
+    }
+
+    fun discardCaptureDraft(draft: CaptureDraft) {
+        scope.launch {
+            captureIsLoading = true
+            when (val result = withContext(Dispatchers.IO) { apiClient.discardCaptureDraft(draft.id) }) {
+                is ApiResult.Success -> loadCaptureDrafts("Draft discarded")
+                is ApiResult.Failure -> {
+                    captureMessage = result.userFacingMessage()
+                    captureIsLoading = false
                 }
             }
         }
@@ -251,6 +407,33 @@ fun FinanceApp(
         uiState = withContext(Dispatchers.IO) { restoredFinanceUiState(apiClient) }
     }
 
+    LaunchedEffect(captureOptInStore) {
+        val settings = withContext(Dispatchers.IO) {
+            captureOptInStore.isSmsCaptureEnabled() to captureOptInStore.isNotificationCaptureEnabled()
+        }
+        smsCaptureEnabled = settings.first && hasSmsPermission()
+        if (settings.first && !hasSmsPermission()) {
+            withContext(Dispatchers.IO) { captureOptInStore.setSmsCaptureEnabled(false) }
+        }
+        notificationCaptureEnabled = settings.second
+    }
+
+    LaunchedEffect(apiClient, uiState.session?.isAuthenticated) {
+        if (uiState.session?.isAuthenticated == true) {
+            captureIsLoading = true
+            when (val result = withContext(Dispatchers.IO) { apiClient.listCaptureDrafts(status = "pending") }) {
+                is ApiResult.Success -> {
+                    captureDrafts = result.value
+                    captureMessage = "Capture drafts refreshed"
+                }
+                is ApiResult.Failure -> {
+                    captureMessage = result.userFacingMessage()
+                }
+            }
+            captureIsLoading = false
+        }
+    }
+
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -330,7 +513,21 @@ fun FinanceApp(
 
             when (selectedSection) {
                 AppSection.Home -> homeContent(dashboard, selectedMode) { selectedMode = it }
-                AppSection.Operations -> operationsContent(dashboard)
+                AppSection.Operations -> operationsContent(
+                    dashboard = dashboard,
+                    smsCaptureEnabled = smsCaptureEnabled,
+                    notificationCaptureEnabled = notificationCaptureEnabled,
+                    hasSmsPermission = hasSmsPermission(),
+                    captureDrafts = captureDrafts,
+                    captureIsLoading = captureIsLoading,
+                    captureMessage = captureMessage,
+                    onSmsCaptureChange = ::setSmsCaptureOptIn,
+                    onNotificationCaptureChange = ::setNotificationCaptureOptIn,
+                    onRefreshCaptureDrafts = { loadCaptureDrafts() },
+                    onSubmitSyntheticCapture = ::submitSyntheticCapture,
+                    onConfirmCaptureDraft = ::confirmCaptureDraft,
+                    onDiscardCaptureDraft = ::discardCaptureDraft,
+                )
                 AppSection.Assets -> assetsContent(dashboard)
                 AppSection.Categories -> categoriesContent(
                     dashboard = dashboard,
@@ -499,8 +696,41 @@ private fun LazyListScope.homeContent(
     item { RecentOperationsCard(view.recentTransactions) }
 }
 
-private fun LazyListScope.operationsContent(dashboard: FinanceDashboard?) {
+private fun LazyListScope.operationsContent(
+    dashboard: FinanceDashboard?,
+    smsCaptureEnabled: Boolean,
+    notificationCaptureEnabled: Boolean,
+    hasSmsPermission: Boolean,
+    captureDrafts: List<CaptureDraft>,
+    captureIsLoading: Boolean,
+    captureMessage: String?,
+    onSmsCaptureChange: (Boolean) -> Unit,
+    onNotificationCaptureChange: (Boolean) -> Unit,
+    onRefreshCaptureDrafts: () -> Unit,
+    onSubmitSyntheticCapture: () -> Unit,
+    onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
+    onDiscardCaptureDraft: (CaptureDraft) -> Unit,
+) {
     val items = dashboard?.transactions.orEmpty()
+    item {
+        CaptureDraftReviewCard(
+            isAuthenticated = dashboard?.session?.isAuthenticated == true,
+            smsCaptureEnabled = smsCaptureEnabled,
+            notificationCaptureEnabled = notificationCaptureEnabled,
+            hasSmsPermission = hasSmsPermission,
+            drafts = captureDrafts,
+            accounts = dashboard?.accounts.orEmpty(),
+            categories = dashboard?.categories.orEmpty(),
+            isLoading = captureIsLoading,
+            message = captureMessage,
+            onSmsCaptureChange = onSmsCaptureChange,
+            onNotificationCaptureChange = onNotificationCaptureChange,
+            onRefresh = onRefreshCaptureDrafts,
+            onSubmitSynthetic = onSubmitSyntheticCapture,
+            onConfirm = onConfirmCaptureDraft,
+            onDiscard = onDiscardCaptureDraft,
+        )
+    }
     if (items.isEmpty()) {
         item { EmptyState("Операций пока нет") }
         return
@@ -508,6 +738,232 @@ private fun LazyListScope.operationsContent(dashboard: FinanceDashboard?) {
     item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
     items(items.sortedByDescending { it.occurredAt }) { transaction ->
         TransactionRow(transaction, dashboard?.categories.orEmpty())
+    }
+}
+
+@Composable
+private fun CaptureDraftReviewCard(
+    isAuthenticated: Boolean,
+    smsCaptureEnabled: Boolean,
+    notificationCaptureEnabled: Boolean,
+    hasSmsPermission: Boolean,
+    drafts: List<CaptureDraft>,
+    accounts: List<AccountSummary>,
+    categories: List<CategorySummary>,
+    isLoading: Boolean,
+    message: String?,
+    onSmsCaptureChange: (Boolean) -> Unit,
+    onNotificationCaptureChange: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+    onSubmitSynthetic: () -> Unit,
+    onConfirm: (CaptureDraft, String, String) -> Unit,
+    onDiscard: (CaptureDraft) -> Unit,
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("capture-draft-review"),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(R.drawable.ic_receipt_24, Color(0xFF227C9D), size = 36)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Capture drafts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Opt-in local capture and review before sending", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            CaptureSwitchRow(
+                title = "SMS",
+                subtitle = if (hasSmsPermission) "RECEIVE_SMS granted" else "Runtime permission required",
+                checked = smsCaptureEnabled,
+                enabled = true,
+                onCheckedChange = onSmsCaptureChange,
+            )
+            CaptureSwitchRow(
+                title = "Notifications",
+                subtitle = "Opens Android notification access settings",
+                checked = notificationCaptureEnabled,
+                enabled = true,
+                onCheckedChange = onNotificationCaptureChange,
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = isAuthenticated && !isLoading,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Refresh")
+                }
+                Button(
+                    onClick = onSubmitSynthetic,
+                    enabled = isAuthenticated && !isLoading,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Test draft")
+                }
+            }
+
+            message?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+
+            if (!isAuthenticated) {
+                Text("Sign in to sync capture drafts.", style = MaterialTheme.typography.bodySmall)
+            } else if (drafts.isEmpty()) {
+                Text("No pending capture drafts.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                drafts.forEach { draft ->
+                    CaptureDraftRow(
+                        draft = draft,
+                        accounts = accounts,
+                        categories = categories,
+                        isLoading = isLoading,
+                        onConfirm = onConfirm,
+                        onDiscard = onDiscard,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CaptureSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
+    }
+}
+
+@Composable
+private fun CaptureDraftRow(
+    draft: CaptureDraft,
+    accounts: List<AccountSummary>,
+    categories: List<CategorySummary>,
+    isLoading: Boolean,
+    onConfirm: (CaptureDraft, String, String) -> Unit,
+    onDiscard: (CaptureDraft) -> Unit,
+) {
+    var selectedAccountId by rememberSaveable(draft.id, draft.accountId) { mutableStateOf(draft.accountId.orEmpty()) }
+    var selectedCategoryId by rememberSaveable(draft.id, draft.categoryId) { mutableStateOf(draft.categoryId.orEmpty()) }
+    val activeAccounts = accounts
+        .filter { it.status == "active" && it.id.isNotBlank() }
+        .sortedBy { it.displayName() }
+    val expenseCategories = categories
+        .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
+        .sortedBy { it.displayName() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = draft.merchantName ?: draft.description ?: "Captured payment",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${draft.captureSource} ${draft.occurredAt.take(10)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Text(
+                text = "-${draft.amount} ${draft.currency}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFE35D4F),
+            )
+        }
+        Text(
+            text = "Confidence ${(draft.confidence * 100).toInt()}% | Evidence ${draft.evidenceHash.take(12)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text("Account", style = MaterialTheme.typography.labelLarge)
+        if (activeAccounts.isEmpty()) {
+            Text("No active accounts available", style = MaterialTheme.typography.bodySmall)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(activeAccounts) { account ->
+                    FilterChip(
+                        selected = selectedAccountId == account.id,
+                        onClick = { selectedAccountId = account.id },
+                        label = {
+                            Text(
+                                account.displayName(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        Text("Category", style = MaterialTheme.typography.labelLarge)
+        if (expenseCategories.isEmpty()) {
+            Text("No active expense categories available", style = MaterialTheme.typography.bodySmall)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(expenseCategories) { category ->
+                    FilterChip(
+                        selected = selectedCategoryId == category.id,
+                        onClick = { selectedCategoryId = category.id },
+                        label = {
+                            Text(
+                                category.displayName(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { onDiscard(draft) },
+                enabled = !isLoading && draft.id.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Discard")
+            }
+            Button(
+                onClick = { onConfirm(draft, selectedAccountId, selectedCategoryId) },
+                enabled = !isLoading && draft.id.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Confirm")
+            }
+        }
     }
 }
 

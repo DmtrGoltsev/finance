@@ -17,7 +17,7 @@ The MVP is a closed manual-entry personal and household finance application with
 - future Android client;
 - contract-first API discipline;
 - strict deny-by-default authz tests;
-- no imports, bank APIs, SMS/push integrations, bank credentials, broker credentials, card data, IBAN/account requisites, or raw bank statements.
+- no file imports, bank APIs, full SMS/push integrations, bank credentials, broker credentials, card data, IBAN/account requisites, raw SMS/notification body server-side storage, or raw bank statements. Post-MVP safe auto-capture is limited to opt-in Android pending drafts and user-confirmed transactions.
 
 Wave 1 contracts establish these non-negotiable invariants:
 
@@ -215,7 +215,7 @@ DB defaults:
 - Foreign keys and check constraints enforce shape-level invariants.
 - Application authz predicates enforce visibility; DB constraints support but do not replace predicate tests.
 - Financial money values use decimal-safe storage, never floating point.
-- `sourceType = manual` is the only accepted MVP transaction source.
+- `sourceType = manual` is the only accepted direct MVP transaction source; post-MVP safe capture must go through a pending draft and user confirmation before transaction creation.
 - Seed fixtures model Owner A, Member B, Other C, Invited, Former, personal A/B rows, shared AB rows, foreign household C rows, and allowed/denied transfer cases.
 
 Migration rules:

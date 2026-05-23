@@ -28,7 +28,7 @@
 - [ ] Production/staging с реальными данными доступны без HTTPS.
 - [ ] Production database или backups не имеют encryption at rest.
 - [ ] Restore не проходил успешно минимум один раз на отдельном окружении до релиза.
-- [ ] В MVP появились endpoints, поля, настройки или хранилища для imports, bank API, broker API, SMS/push credentials или raw bank statements.
+- [ ] В MVP появились endpoints, поля, настройки или хранилища для imports, bank API, broker API, SMS/push credentials, raw SMS/notification body или raw bank statements. Post-MVP safe auto-capture допускает только structured pending drafts без raw body server-side.
 
 ## P1 блокеры релиза
 
@@ -187,14 +187,16 @@
 - [ ] Risky migrations touching financial tables require fresh backup and rollback/restore plan.
 - [ ] Backups do not go to local development, public buckets, issue trackers, chat attachments or unprotected file shares.
 
-### Контроль out-of-scope
+### Контроль out-of-scope и safe capture
 
 - [ ] MVP contains no `/api/v1/imports`, `/api/v1/import-jobs`, `/api/v1/files/imports`.
 - [ ] MVP contains no `/api/v1/bank-connections`, `/api/v1/bank-accounts`, `/api/v1/bank-api/*`.
-- [ ] MVP contains no `/api/v1/sms-imports`, `/api/v1/push-imports`, `/api/v1/notifications/push-tokens`.
+- [ ] MVP contains no full import endpoints such as `/api/v1/sms-imports`, `/api/v1/push-imports`, `/api/v1/notifications/push-tokens`; post-MVP capture endpoints, if present, are limited to draft lifecycle.
 - [ ] MVP contains no `/api/v1/broker-connections`, `/api/v1/external-credentials`.
-- [ ] MVP accepts `sourceType = manual` only; post-MVP values such as `file_import`, `bank_api`, `sms`, `push` are rejected by create/update flows.
-- [ ] MVP has no fields, tables, settings, secrets, logs or backups intended to store bank passwords, bank/API/broker tokens, SMS codes, push secrets, card numbers, IBAN/account requisites or raw bank statements.
+- [ ] Transaction create/update flows create financial transactions only after manual entry or user-confirmed capture draft; raw `sms`/`push` source values cannot create transactions directly.
+- [ ] Safe capture stores only structured capture draft, `idempotencyKey`/`evidenceHash`, confidence/metadata and status `pending`/`confirmed`/`discarded`.
+- [ ] MVP has no fields, tables, settings, secrets, logs or backups intended to store bank passwords, bank/API/broker tokens, SMS codes, push secrets, raw SMS/notification body, card numbers, IBAN/account requisites or raw bank statements.
+- [ ] Android capture is opt-in; SMS capture uses `RECEIVE_SMS`, not `READ_SMS`; notification capture is enabled via Android system notification listener settings.
 
 ## Обязательные доказательства перед MVP release
 
@@ -211,7 +213,7 @@
 - [ ] Secret evidence: repo/bundle/image scan output, deployment secret-source review and rotation/runbook evidence.
 - [ ] Backup/restore evidence: encrypted backup job proof, access control proof, restore test report on separate environment, RPO/RTO measurement and tenant-boundary verification.
 - [ ] Dependency evidence: dependency scan/SBOM with no unaccepted critical/high CVEs in auth, crypto, session, parser, ORM or web framework components.
-- [ ] Out-of-scope evidence: API route inventory, schema/config scan and sourceType tests proving imports/bank API/SMS/push/broker credentials are absent/rejected.
+- [ ] Out-of-scope evidence: API route inventory, schema/config scan and sourceType tests proving imports/bank API/broker credentials and raw SMS/push storage are absent/rejected; safe capture draft lifecycle and dedup evidence are covered if enabled.
 - [ ] Security sign-off note listing all P2 follow-ups, accepted residual risks and explicit owner/date for each.
 
 ## Триггеры эскалации
@@ -229,7 +231,7 @@ Escalate to Security Architect/Product/Legal/Operations before release if any tr
 - Report/export/debug cache cannot be scoped and invalidated by viewer, household, membership and access versions.
 - Restore fails, backup is incomplete, backup access is too broad or there is any risk of financial data loss.
 - Critical authz/privacy defect, financial data leak, secret leak or repeated failure of security acceptance checks is found.
-- Imports, bank API, broker API, SMS/push integrations, external credentials or raw bank statements enter scope.
+- Imports, bank API, broker API, full SMS/push integrations, external credentials, raw SMS/notification body storage or raw bank statements enter scope.
 
 ## Explicit out-of-scope для MVP
 
@@ -238,7 +240,7 @@ The following are out of scope and must not ship in MVP:
 - File imports, import jobs, uploaded bank statements, CSV/Excel import parsing and import preview flows.
 - Bank API, broker API, bank connections, broker connections, external payment integrations and automatic synchronization.
 - Storage or processing of bank tokens, bank passwords, broker credentials, bank/API keys, SMS codes, push secrets, card numbers, IBAN/account requisites or raw bank statements.
-- SMS import, push import, push token storage and notification credential storage.
+- Full SMS import, push import, push token storage and notification credential storage. The only allowed post-MVP exception is opt-in Android safe auto-capture into pending drafts without raw body server-side storage.
 - Any endpoint, table, config field, environment secret, mobile/frontend bundle value, audit field, backup content or hidden feature flag created for the above.
 
 If any out-of-scope item appears in implementation, schema, API inventory, config, logs or backup, classify as P0 and escalate before further release work.
@@ -250,5 +252,5 @@ If any out-of-scope item appears in implementation, schema, API inventory, confi
 - [ ] API surface mapping has evidence for each covered route group.
 - [ ] QA/backend evidence is attached for RG-01..RG-12 and TR-RG-01..10 where transfer API is present.
 - [ ] Logs, secrets, backups and restore gates have concrete scan/test/runbook evidence.
-- [ ] Out-of-scope imports/bank API/SMS/push credentials are absent and verified.
+- [ ] Out-of-scope imports/bank API/SMS/push credentials and raw SMS/notification server-side storage are absent and verified; safe capture, if enabled, is draft-only and user-confirmed.
 - [ ] Any remaining P2 risks are documented with owner and post-MVP target.

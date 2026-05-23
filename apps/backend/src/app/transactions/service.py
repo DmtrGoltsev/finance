@@ -228,6 +228,43 @@ class TransactionService:
             created_by_user_id=actor.user_id,
         )
 
+    def validate_capture_draft_references(
+        self,
+        *,
+        actor: Actor,
+        account_id: str | None,
+        category_id: str | None,
+        currency: str | None,
+    ) -> None:
+        account = (
+            self._require_visible_account(actor, account_id)
+            if account_id is not None
+            else None
+        )
+        category = (
+            self._require_visible_category(actor, category_id)
+            if category_id is not None
+            else None
+        )
+
+        if account is not None and currency is not None:
+            self._validate_currency(account, currency)
+
+        if account is None or category is None:
+            return
+
+        decision = canCreateTransaction(
+            actor,
+            TransactionDraft(
+                transaction_type=AuthzTransactionType.EXPENSE,
+                account=_authz_account(account),
+                category=_authz_category(category),
+                source_type=AuthzSourceType.MANUAL,
+            ),
+        )
+        if not decision.allowed:
+            raise _service_error_for_decision(decision.reason)
+
     def get_transaction(self, *, actor: Actor, transaction_id: str) -> TransactionRecord:
         record = self._transactions.get(transaction_id)
         if record is None or not self._can_read_record(actor, record):

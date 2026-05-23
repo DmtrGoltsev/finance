@@ -12,9 +12,13 @@ info:
 
     MVP boundaries are intentionally narrow: financial data is manual-entry only,
     `sourceType` accepts only `manual`, transfers are same-scope only, and the
-    only import surface is a metadata-only report-preview placeholder. There is
-    no real import, parser, file storage, bank API, SMS, push, broker credential,
-    external credential, card, IBAN, raw statement, or notification-token endpoint.
+    only import surface is a metadata-only report-preview placeholder. Safe
+    auto-capture may create pending drafts from sanitized structured SMS or
+    notification candidates, but raw message/notification bodies are rejected
+    and confirmed transactions remain `sourceType=manual`. There is no real
+    import, parser, file storage, bank API, SMS import, push import, broker
+    credential, external credential, card, IBAN, raw statement, or
+    notification-token endpoint.
 
     Privacy invariants:
     - personal data is owner-only;
@@ -34,6 +38,8 @@ tags:
     description: Manual personal and shared financial accounts visible to the caller.
   - name: Transactions
     description: Manual transaction entry, search, autocomplete, and lifecycle operations.
+  - name: CaptureDrafts
+    description: Pending safe auto-capture candidates. Raw SMS and notification body text is never accepted.
   - name: Categories
     description: Personal and household category management for manual finance records.
   - name: Reports
@@ -403,6 +409,120 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /capture-drafts:
+    get:
+      tags: [CaptureDrafts]
+      operationId: listCaptureDrafts
+      summary: List current actor capture drafts.
+      description: Returns only drafts owned by the authenticated actor. No hidden counts are returned.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CaptureDraftStatus'
+      responses:
+        '200':
+          description: Current actor capture drafts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [CaptureDrafts]
+      operationId: createCaptureDraft
+      summary: Create pending capture draft.
+      description: |
+        Accepts only sanitized structured candidates. `rawMessage`,
+        `rawNotification`, `body`, `text`, and other raw payload/body fields
+        are not part of this schema and must be rejected. Reusing the same
+        owner/idempotencyKey returns the existing draft without creating a
+        duplicate row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureDraftCreateRequest'
+      responses:
+        '201':
+          description: Created or existing idempotent capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}:
+    patch:
+      tags: [CaptureDrafts]
+      operationId: updateCaptureDraft
+      summary: Update pending capture draft candidate fields.
+      description: Only pending drafts owned by the current actor can be changed.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureDraftUpdateRequest'
+      responses:
+        '200':
+          description: Updated capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}/confirm:
+    post:
+      tags: [CaptureDrafts]
+      operationId: confirmCaptureDraft
+      summary: Confirm capture draft as a manual transaction.
+      description: Requires accountId, categoryId, amount, and description on the draft. Creates an expense transaction with `sourceType=manual`, then marks the draft confirmed with transactionId.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Confirmed capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}/discard:
+    post:
+      tags: [CaptureDrafts]
+      operationId: discardCaptureDraft
+      summary: Discard pending capture draft.
+      description: Only pending drafts owned by the current actor can be discarded.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Discarded capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /categories:
     get:
       tags: [Categories]
@@ -765,6 +885,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/ResourceId' }
+    DraftId:
+      name: draftId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
     Limit:
       name: limit
       in: query
@@ -961,6 +1086,13 @@ components:
       enum: [manual]
       description: MVP accepts only manual source. Reserved post-MVP values are rejected by create/update flows.
       x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
+    CaptureDraftStatus:
+      type: string
+      enum: [pending, confirmed, discarded]
+    CaptureSource:
+      type: string
+      enum: [sms, notification]
+      description: Sanitized structured capture source only; it is not a transaction sourceType.
     ImportReportType:
       type: string
       enum: [generic_finance_report, bank_statement, brokerage_report, deposit_report, metals_report]
@@ -1343,6 +1475,145 @@ components:
           $ref: '#/components/schemas/DateTime'
         sourceType:
           $ref: '#/components/schemas/SourceType'
+    CaptureDraftDto:
+      type: object
+      additionalProperties: false
+      required: [id, status, idempotencyKey, captureSource, capturedAt, amount, currency, description, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        status:
+          $ref: '#/components/schemas/CaptureDraftStatus'
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        occurredAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          maxLength: 500
+        merchantName:
+          type: [string, 'null']
+          maxLength: 255
+        accountId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        transactionId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        confidence:
+          type: [string, 'null']
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: [string, 'null']
+          maxLength: 255
+        sourceAppLabel:
+          type: [string, 'null']
+          maxLength: 255
+        evidenceHash:
+          type: [string, 'null']
+          maxLength: 128
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+      description: Contains sanitized structured fields only. Raw SMS or notification bodies are never stored or returned.
+    CaptureDraftCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, captureSource, capturedAt, amount, currency, description]
+      properties:
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        merchantName:
+          type: string
+          maxLength: 255
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        confidence:
+          type: string
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: string
+          maxLength: 255
+        sourceAppLabel:
+          type: string
+          maxLength: 255
+        evidenceHash:
+          type: string
+          maxLength: 128
+      description: Must not include rawMessage, rawNotification, body, text, messageText, notificationText, or any raw payload/body field.
+    CaptureDraftUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        occurredAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        merchantName:
+          type: [string, 'null']
+          maxLength: 255
+        accountId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        confidence:
+          type: [string, 'null']
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: [string, 'null']
+          maxLength: 255
+        sourceAppLabel:
+          type: [string, 'null']
+          maxLength: 255
+        evidenceHash:
+          type: [string, 'null']
+          maxLength: 128
+      description: Only pending draft candidate fields are editable. Raw message or notification body fields are not accepted.
     CategoryDto:
       type: object
       additionalProperties: false
@@ -1537,7 +1808,7 @@ components:
           description: Count of visible transactions in this bucket only.
         shareOfVisibleTotal:
           type: string
-          pattern: '^0(\.[0-9]+)?|1(\.0+)?$'
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
     ReportCategoryBreakdownDto:
       type: object
       additionalProperties: false
@@ -1819,6 +2090,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TransactionAutocompleteDto'
+    CaptureDraftEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CaptureDraftDto'
+    CaptureDraftPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaptureDraftDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
     CategoryEnvelope:
       type: object
       additionalProperties: false

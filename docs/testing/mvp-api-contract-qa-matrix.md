@@ -27,10 +27,10 @@ OpenAPI `api/openapi/openapi.yaml` синхронизирован с факти�
 | Households/invites/memberships | `/api/v1/households*`, `/api/v1/invites*`, `/api/v1/memberships*` |
 | Transfers standalone/void | `/api/v1/transfers*`, `/api/v1/transactions/{transactionId}/void` |
 | Exports | `/api/v1/exports*` |
-| Imports/files/bank/SMS/push/broker | `/api/v1/imports*`, `/api/v1/import-jobs*`, `/api/v1/files/imports*`, `/api/v1/bank-*`, `/api/v1/sms-imports*`, `/api/v1/push-imports*`, `/api/v1/broker-connections*`, `/api/v1/external-credentials*`, `/api/v1/notifications/push-tokens*` |
+| Imports/files/bank/full SMS/push/broker | `/api/v1/imports*`, `/api/v1/import-jobs*`, `/api/v1/files/imports*`, `/api/v1/bank-*`, `/api/v1/sms-imports*`, `/api/v1/push-imports*`, `/api/v1/broker-connections*`, `/api/v1/external-credentials*`, `/api/v1/notifications/push-tokens*` |
 | Debug/support bypass | User-facing debug/support routes that bypass visible-scope predicates and redaction |
 
-Reserved post-MVP `sourceType` vocabulary such as `file_import`, `bank_api`, `sms` and `push` remains rejected by MVP create/update flows.
+Reserved post-MVP `sourceType` vocabulary such as `file_import`, `bank_api`, `sms` and `push` remains rejected by direct transaction create/update flows. Safe auto-capture, when enabled post-MVP, must use a separate draft lifecycle: Android opt-in, no raw SMS/notification body server-side, structured draft with `idempotencyKey`/`evidenceHash`, and transaction creation only after user confirm/edit.
 
 ## Contract guards
 

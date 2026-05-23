@@ -42,6 +42,16 @@ EXPECTED_MOUNTED_REPORT_OPERATIONS = frozenset(
     }
 )
 
+EXPECTED_MOUNTED_CAPTURE_DRAFT_OPERATIONS = frozenset(
+    {
+        ("GET", "/api/v1/capture-drafts"),
+        ("POST", "/api/v1/capture-drafts"),
+        ("PATCH", "/api/v1/capture-drafts/{draftId}"),
+        ("POST", "/api/v1/capture-drafts/{draftId}/confirm"),
+        ("POST", "/api/v1/capture-drafts/{draftId}/discard"),
+    }
+)
+
 EXPECTED_UNMOUNTED_W3_OPERATIONS = frozenset(
     {
         ("POST", "/api/v1/transactions/{transactionId}/void"),
@@ -128,6 +138,7 @@ def test_w3_transactions_and_reports_mounted_transfers_remain_gated() -> None:
     mounted_operations = _route_operations()
 
     assert EXPECTED_MOUNTED_TRANSACTION_OPERATIONS <= mounted_operations
+    assert EXPECTED_MOUNTED_CAPTURE_DRAFT_OPERATIONS <= mounted_operations
     assert EXPECTED_MOUNTED_REPORT_OPERATIONS <= mounted_operations
     assert mounted_operations.isdisjoint(EXPECTED_UNMOUNTED_W3_OPERATIONS)
     assert {
@@ -147,6 +158,10 @@ def test_runtime_openapi_exposes_transactions_and_reports_for_w3_runtime_workers
     assert "/api/v1/transactions/autocomplete" in runtime_paths
     assert "/api/v1/transactions/{transactionId}/restore" in runtime_paths
     assert "/api/v1/transactions/{transactionId}/void" not in runtime_paths
+    assert "/api/v1/capture-drafts" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}/confirm" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}/discard" in runtime_paths
     assert "/api/v1/reports/summary" in runtime_paths
     assert "/api/v1/reports/category-breakdown" in runtime_paths
     assert "/api/v1/reports/account-balances" in runtime_paths

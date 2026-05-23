@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.auth_context import fixed_actor_provider_for_tests, provide_actor
 from app.authz import Actor, Membership, MembershipStatus
 from app.db.base import Base
-from app.db.models import Account, Category, Household, Transaction, User
+from app.db.models import Account, CaptureDraft, Category, Household, Transaction, User
 from app.db.models import Membership as DbMembership
 from app.db.session import sync_engine_for_url
 from app.main import create_app
@@ -38,6 +38,7 @@ TABLES = [
     Account.__table__,
     Category.__table__,
     Transaction.__table__,
+    CaptureDraft.__table__,
 ]
 
 

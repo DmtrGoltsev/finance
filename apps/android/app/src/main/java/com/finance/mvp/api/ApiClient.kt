@@ -3,6 +3,8 @@ package com.finance.mvp.api
 import com.finance.mvp.session.SecureTokenStore
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -59,6 +61,16 @@ interface FinanceApiClient {
         amount: String = "1.00",
     ): ApiResult<TransactionSummary>
     suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse>
+    suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> =
+        ApiResult.Failure("Capture drafts are not supported by this client")
+    suspend fun listCaptureDrafts(status: String = "pending"): ApiResult<List<CaptureDraft>> =
+        ApiResult.Failure("Capture drafts are not supported by this client")
+    suspend fun updateCaptureDraft(draftId: String, request: CaptureDraftUpdateRequest): ApiResult<CaptureDraft> =
+        ApiResult.Failure("Capture drafts are not supported by this client")
+    suspend fun confirmCaptureDraft(draftId: String): ApiResult<CaptureDraft> =
+        ApiResult.Failure("Capture drafts are not supported by this client")
+    suspend fun discardCaptureDraft(draftId: String): ApiResult<Unit> =
+        ApiResult.Failure("Capture drafts are not supported by this client")
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -139,6 +151,52 @@ data class ImportReportPreviewResponse(
     val canConfirm: Boolean,
     val willChangeData: Boolean,
     val message: String,
+)
+
+data class CaptureDraftCreateRequest(
+    val amount: String,
+    val currency: String,
+    val description: String?,
+    val merchantName: String?,
+    val capturedAt: String,
+    val occurredAt: String,
+    val captureSource: String,
+    val idempotencyKey: String,
+    val confidence: Double,
+    val sourceAppPackage: String?,
+    val sourceAppLabel: String?,
+    val evidenceHash: String,
+)
+
+data class CaptureDraftUpdateRequest(
+    val amount: String? = null,
+    val currency: String? = null,
+    val description: String? = null,
+    val merchantName: String? = null,
+    val occurredAt: String? = null,
+    val confidence: Double? = null,
+    val accountId: String? = null,
+    val categoryId: String? = null,
+)
+
+data class CaptureDraft(
+    val id: String,
+    val status: String,
+    val amount: String,
+    val currency: String,
+    val description: String?,
+    val merchantName: String?,
+    val capturedAt: String?,
+    val occurredAt: String,
+    val captureSource: String,
+    val confidence: Double,
+    val sourceAppPackage: String?,
+    val sourceAppLabel: String?,
+    val evidenceHash: String,
+    val idempotencyKey: String,
+    val accountId: String? = null,
+    val categoryId: String? = null,
+    val version: Int? = null,
 )
 
 sealed interface ApiResult<out T> {
@@ -408,6 +466,51 @@ class LiveFinanceApiClient(
         ).let(::parseImportReportPreview)
     }
 
+    override suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> = safeCall {
+        request(
+            path = "/api/v1/capture-drafts",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).captureDraftObject().let(::parseCaptureDraft)
+    }
+
+    override suspend fun listCaptureDrafts(status: String): ApiResult<List<CaptureDraft>> = safeCall {
+        request(
+            path = "/api/v1/capture-drafts",
+            method = "GET",
+            query = status.takeIf { it.isNotBlank() }?.let { mapOf("status" to it) } ?: emptyMap(),
+        ).captureDraftItems().map(::parseCaptureDraft)
+    }
+
+    override suspend fun updateCaptureDraft(
+        draftId: String,
+        request: CaptureDraftUpdateRequest,
+    ): ApiResult<CaptureDraft> = safeCall {
+        request(
+            path = "/api/v1/capture-drafts/${draftId.urlEncodePath()}",
+            method = "PATCH",
+            body = request.toJsonForApi().toString(),
+        ).captureDraftObject().let(::parseCaptureDraft)
+    }
+
+    override suspend fun confirmCaptureDraft(draftId: String): ApiResult<CaptureDraft> = safeCall {
+        request(
+            path = "/api/v1/capture-drafts/${draftId.urlEncodePath()}/confirm",
+            method = "POST",
+            expectedCodes = setOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_CREATED),
+        ).captureDraftObject().let(::parseCaptureDraft)
+    }
+
+    override suspend fun discardCaptureDraft(draftId: String): ApiResult<Unit> = safeCall {
+        request(
+            path = "/api/v1/capture-drafts/${draftId.urlEncodePath()}/discard",
+            method = "POST",
+            expectedCodes = setOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
     override suspend fun logout(): ApiResult<Unit> = safeCall {
         request(
             path = "/api/v1/sessions/current",
@@ -574,6 +677,63 @@ private fun parseImportReportPreview(json: JSONObject): ImportReportPreviewRespo
     )
 }
 
+private fun parseCaptureDraft(json: JSONObject): CaptureDraft {
+    return CaptureDraft(
+        id = json.optString("id").ifBlank { json.optString("draftId") },
+        status = json.optString("status", "pending"),
+        amount = json.optString("amount"),
+        currency = json.optString("currency"),
+        description = json.optString("description").takeIf { it.isNotBlank() && it != "null" },
+        merchantName = json.optString("merchantName").takeIf { it.isNotBlank() && it != "null" },
+        capturedAt = json.optString("capturedAt").takeIf { it.isNotBlank() && it != "null" },
+        occurredAt = json.optString("occurredAt"),
+        captureSource = json.optString("captureSource"),
+        confidence = json.optDouble("confidence", 0.0),
+        sourceAppPackage = json.optString("sourceAppPackage").takeIf { it.isNotBlank() && it != "null" },
+        sourceAppLabel = json.optString("sourceAppLabel").takeIf { it.isNotBlank() && it != "null" },
+        evidenceHash = json.optString("evidenceHash"),
+        idempotencyKey = json.optString("idempotencyKey"),
+        accountId = json.optString("accountId").takeIf { it.isNotBlank() && it != "null" },
+        categoryId = json.optString("categoryId").takeIf { it.isNotBlank() && it != "null" },
+        version = json.optIntOrNull("version"),
+    )
+}
+
+private fun CaptureDraftCreateRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("amount", amount)
+        .put("currency", currency)
+        .put("description", description)
+        .put("merchantName", merchantName)
+        .put("capturedAt", capturedAt)
+        .put("occurredAt", occurredAt)
+        .put("captureSource", captureSource)
+        .put("idempotencyKey", idempotencyKey)
+        .put("confidence", confidence.toConfidenceString())
+        .put("sourceAppPackage", sourceAppPackage)
+        .put("sourceAppLabel", sourceAppLabel)
+        .put("evidenceHash", evidenceHash)
+}
+
+internal fun CaptureDraftUpdateRequest.toJsonForApi(): JSONObject {
+    return JSONObject().apply {
+        amount?.let { put("amount", it) }
+        currency?.let { put("currency", it) }
+        description?.let { put("description", it) }
+        merchantName?.let { put("merchantName", it) }
+        occurredAt?.let { put("occurredAt", it) }
+        confidence?.let { put("confidence", it.toConfidenceString()) }
+        accountId?.let { put("accountId", it) }
+        categoryId?.let { put("categoryId", it) }
+    }
+}
+
+private fun Double.toConfidenceString(): String {
+    return BigDecimal.valueOf(coerceIn(0.0, 1.0))
+        .setScale(4, RoundingMode.HALF_UP)
+        .toPlainString()
+}
+
 internal fun normalizeAccountOwnershipType(value: String): String {
     return if (value == "shared") "shared" else "personal"
 }
@@ -614,7 +774,20 @@ internal fun accountHouseholdIdForOwnership(householdId: String?, ownershipType:
 
 private fun JSONObject.items(): List<JSONObject> = optJSONArray("items")?.toObjectList() ?: emptyList()
 
+private fun JSONObject.captureDraftItems(): List<JSONObject> {
+    return optJSONArray("items")?.toObjectList()
+        ?: optJSONObject("data")?.optJSONArray("items")?.toObjectList()
+        ?: optJSONArray("data")?.toObjectList()
+        ?: emptyList()
+}
+
 private fun JSONObject.dataObject(): JSONObject = optJSONObject("data") ?: this
+
+private fun JSONObject.captureDraftObject(): JSONObject {
+    return optJSONObject("captureDraft")
+        ?: optJSONObject("data")?.optJSONObject("captureDraft")
+        ?: dataObject()
+}
 
 private fun JSONObject.optIntOrNull(name: String): Int? = if (has(name) && !isNull(name)) optInt(name) else null
 

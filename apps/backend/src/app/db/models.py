@@ -7,16 +7,15 @@ services, triggers, and migration revisions are separate implementation work.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-import uuid
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
-    ForeignKey,
     Index,
     Integer,
     String,
@@ -34,6 +33,8 @@ from app.db.model_enums import (
     AUDIT_RESULTS,
     AUDIT_SCOPE_TYPES,
     AUTH_STATUSES,
+    CAPTURE_DRAFT_STATUSES,
+    CAPTURE_SOURCES,
     CATEGORY_SCOPES,
     CATEGORY_TYPES,
     DELETION_REQUEST_STATUSES,
@@ -201,7 +202,10 @@ class Account(TimestampMixin, VersionedMixin, Base):
             name="exactly_one_scope",
         ),
         CheckConstraint(enum_check("record_status", RECORD_STATUSES), name="record_status_valid"),
-        CheckConstraint("currency = upper(currency) AND length(currency) = 3", name="currency_iso_shape"),
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
         Index("ix_accounts_owner_user_status", "owner_user_id", "record_status"),
         Index("ix_accounts_household_status", "household_id", "record_status"),
         Index("ix_accounts_ownership_owner_status", "ownership_type", "owner_user_id", "record_status"),
@@ -265,7 +269,10 @@ class Transaction(TimestampMixin, VersionedMixin, Base):
         CheckConstraint(enum_check("source_type", SOURCE_TYPES), name="source_type_valid"),
         CheckConstraint("source_type = 'manual'", name="source_type_manual_only"),
         CheckConstraint("amount > 0", name="positive_amount"),
-        CheckConstraint("currency = upper(currency) AND length(currency) = 3", name="currency_iso_shape"),
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
         CheckConstraint(
             "(transaction_type = 'transfer' "
             "AND counterparty_account_id IS NOT NULL "
@@ -317,6 +324,60 @@ class Transaction(TimestampMixin, VersionedMixin, Base):
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     last_edited_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaptureDraft(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "capture_drafts"
+    __table_args__ = (
+        CheckConstraint(enum_check("status", CAPTURE_DRAFT_STATUSES), name="status_valid"),
+        CheckConstraint(enum_check("capture_source", CAPTURE_SOURCES), name="capture_source_valid"),
+        CheckConstraint("amount > 0", name="positive_amount"),
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="confidence_range",
+        ),
+        CheckConstraint(
+            "(status = 'confirmed' AND transaction_id IS NOT NULL) OR "
+            "(status <> 'confirmed' AND transaction_id IS NULL)",
+            name="confirmed_transaction_shape",
+        ),
+        Index(
+            "uq_capture_drafts_owner_idempotency_key",
+            "owner_user_id",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "ix_capture_drafts_owner_status_created",
+            "owner_user_id",
+            "status",
+            text("created_at DESC"),
+        ),
+        Index("ix_capture_drafts_transaction_id", "transaction_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    capture_source: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    amount: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    merchant_name: Mapped[str | None] = mapped_column(Text)
+    account_id: Mapped[uuid.UUID | None] = uuid_fk("accounts.id", nullable=True)
+    category_id: Mapped[uuid.UUID | None] = uuid_fk("categories.id", nullable=True)
+    transaction_id: Mapped[uuid.UUID | None] = uuid_fk("transactions.id", nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(MONEY_NUMERIC)
+    source_app_package: Mapped[str | None] = mapped_column(Text)
+    source_app_label: Mapped[str | None] = mapped_column(Text)
+    evidence_hash: Mapped[str | None] = mapped_column(Text)
 
 
 class Session(TimestampMixin, VersionedMixin, Base):

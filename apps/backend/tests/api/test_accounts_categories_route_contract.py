@@ -44,6 +44,13 @@ EXPECTED_APPROVED_TRANSACTION_OPERATIONS = {
     ("DELETE", "/api/v1/transactions/{transactionId}"): "deleteTransaction",
     ("POST", "/api/v1/transactions/{transactionId}/restore"): "restoreTransaction",
 }
+EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS = {
+    ("GET", "/api/v1/capture-drafts"): "listCaptureDrafts",
+    ("POST", "/api/v1/capture-drafts"): "createCaptureDraft",
+    ("PATCH", "/api/v1/capture-drafts/{draftId}"): "updateCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/{draftId}/confirm"): "confirmCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/{draftId}/discard"): "discardCaptureDraft",
+}
 EXPECTED_APPROVED_REPORT_OPERATIONS = {
     ("GET", "/api/v1/reports/summary"): "getReportSummary",
     ("GET", "/api/v1/reports/category-breakdown"): "getReportCategoryBreakdown",
@@ -65,6 +72,7 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
     }
@@ -75,6 +83,7 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SESSION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
     }
@@ -227,6 +236,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
         for operation in {
             **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+            **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
             **EXPECTED_APPROVED_IMPORT_OPERATIONS,
         }
@@ -235,6 +245,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
     assert approved_runtime_operation_ids == {
         **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+        **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
         **EXPECTED_APPROVED_IMPORT_OPERATIONS,
     }
@@ -247,6 +258,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
         for operation in {
             **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+            **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
             **EXPECTED_APPROVED_IMPORT_OPERATIONS,
         }
@@ -255,6 +267,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
     assert approved_canonical_operation_ids == {
         **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+        **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
         **EXPECTED_APPROVED_IMPORT_OPERATIONS,
     }

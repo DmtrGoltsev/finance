@@ -128,6 +128,10 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/transactions/{transactionId}",
         "/transactions/{transactionId}/restore",
         "/transactions/autocomplete",
+        "/capture-drafts",
+        "/capture-drafts/{draftId}",
+        "/capture-drafts/{draftId}/confirm",
+        "/capture-drafts/{draftId}/discard",
         "/reports/summary",
         "/reports/category-breakdown",
         "/reports/account-balances",
@@ -235,3 +239,10 @@ def test_openapi_canonical_error_envelope_shape() -> None:
     assert "Field-level details for caller-supplied invalid fields only" in error_detail
     assert "hidden object names" in error_detail
     assert "raw payloads" in error_detail
+
+
+def test_openapi_confidence_regex_is_fully_grouped() -> None:
+    contract = _contract_text()
+
+    assert "pattern: '^0(\\.[0-9]+)?|1(\\.0+)?$'" not in contract
+    assert contract.count("pattern: '^(0(\\.[0-9]+)?|1(\\.0+)?)$'") >= 3

@@ -27,6 +27,7 @@ EXPECTED_TABLES = {
     "accounts",
     "categories",
     "transactions",
+    "capture_drafts",
     "sessions",
     "password_reset_tokens",
     "export_jobs",
@@ -46,6 +47,7 @@ class ModelMetadataTests(unittest.TestCase):
             ("accounts", "initial_balance_amount"),
             ("accounts", "current_balance_amount"),
             ("transactions", "amount"),
+            ("capture_drafts", "amount"),
         ):
             column_type = Base.metadata.tables[table_name].c[column_name].type
             self.assertIsInstance(column_type, Numeric)
@@ -69,6 +71,11 @@ class ModelMetadataTests(unittest.TestCase):
             "source_type_manual_only",
             ["source_type", "manual"],
         )
+        self.assertCheckContains(
+            "capture_drafts",
+            "capture_source_valid",
+            ["capture_source", "sms", "notification"],
+        )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:
         self.assertCheckContains(
@@ -91,6 +98,7 @@ class ModelMetadataTests(unittest.TestCase):
             ("sessions", "ix_sessions_user_active_expires"),
             ("sessions", "ix_sessions_session_version"),
             ("transactions", "ix_transactions_account_occurred_status"),
+            ("capture_drafts", "ix_capture_drafts_owner_status_created"),
             ("export_jobs", "ix_export_jobs_requested_status_created"),
             ("outbox_events", "ix_outbox_events_status_available_created"),
         ):
