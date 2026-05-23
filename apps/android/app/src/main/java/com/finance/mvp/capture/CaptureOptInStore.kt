@@ -43,4 +43,3 @@ class CaptureOptInStore(context: Context) {
         private const val KEY_NOTIFICATION_CAPTURE = "notification_capture_enabled"
     }
 }
-

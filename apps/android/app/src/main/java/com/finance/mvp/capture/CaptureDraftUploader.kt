@@ -16,4 +16,3 @@ internal object CaptureDraftUploader {
         return apiClient.createCaptureDraft(candidate.toCreateRequest()) is ApiResult.Success
     }
 }
-

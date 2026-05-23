@@ -44,4 +44,3 @@ class FinanceNotificationListenerService : NotificationListenerService() {
         super.onDestroy()
     }
 }
-
