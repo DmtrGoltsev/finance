@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
-import sys
 
-AUTH_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "app"
-if str(AUTH_PACKAGE_ROOT) not in sys.path:
-    sys.path.insert(0, str(AUTH_PACKAGE_ROOT))
-
-from auth.schemas import NeutralFlow
-from auth.service import (
+from app.auth.schemas import NeutralFlow
+from app.auth.service import (
     neutral_invite_request_response,
     neutral_login_failure_response,
     neutral_password_reset_request_response,

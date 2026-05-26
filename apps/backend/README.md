@@ -50,6 +50,11 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
 The standard `app.main:app` runtime remains default-deny for auth unless real runtime secrets and stores are wired.
+When a database URL and `FINANCE_BACKEND_AUTH_TOKEN_HASH_SECRET` are configured,
+`POST /api/v1/users` creates an active user and returns the same session response
+shape as login. Android bearer registration returns `accessToken`, `tokenType`,
+`expiresAt`, and `actor`; PWA cookie registration returns `transport`,
+`csrfToken`, `expiresAt`, and `actor`.
 
 ## Production QA Bootstrap
 
@@ -103,6 +108,19 @@ $headers = @{ Authorization = "Bearer $($login.accessToken)" }
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/sessions/current -Headers $headers
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/accounts -Headers $headers
 Invoke-RestMethod "http://127.0.0.1:8000/api/v1/reports/summary?reportMode=combined_viewer_overview&householdId=22222222-2222-4222-8222-222222222222&currency=USD" -Headers $headers
+```
+
+Minimal registration smoke for DB-backed local runtime:
+
+```powershell
+$registration = Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/v1/users `
+  -ContentType 'application/json' `
+  -Body '{"email":"new.owner@example.test","password":"correct horse battery staple","displayName":"New Owner","transport":"android_bearer"}'
+
+$headers = @{ Authorization = "Bearer $($registration.accessToken)" }
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/sessions/current -Headers $headers
 ```
 
 Local Vite PWA origins `http://127.0.0.1:5174` and `http://127.0.0.1:5173` are allowed by CORS only outside production-like environments. Production-like environments use only explicit `FINANCE_BACKEND_CORS_ALLOWED_ORIGINS`.

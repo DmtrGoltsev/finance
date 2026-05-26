@@ -51,6 +51,40 @@ security:
     csrfHeader: []
   - androidBearerAuth: []
 paths:
+  /users:
+    post:
+      tags: [Auth]
+      operationId: createUser
+      summary: Register user and create current session.
+      description: Public registration endpoint. New users are created without financial bootstrap data and receive the same session runtime shape as login for the selected transport. Non-actionable or repeated registration requests return a neutral accepted response without token material and without confirming whether the email exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistrationRequest'
+      responses:
+        '201':
+          description: Current session for the newly registered user.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/BearerSessionResponse'
+                  - $ref: '#/components/schemas/PwaCookieSessionResponse'
+        '202':
+          description: Neutral accepted registration response. No session or token material is issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationAcceptedResponse'
+        '429':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /sessions:
     post:
       tags: [Auth]
@@ -70,7 +104,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionEnvelope'
+                oneOf:
+                  - $ref: '#/components/schemas/BearerSessionResponse'
+                  - $ref: '#/components/schemas/PwaCookieSessionResponse'
+        '429':
+          $ref: '#/components/responses/Error'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -86,7 +124,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionEnvelope'
+                $ref: '#/components/schemas/CurrentSessionResponse'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -1218,6 +1256,48 @@ components:
           anyOf:
             - $ref: '#/components/schemas/DateTime'
             - type: 'null'
+    AuthTransport:
+      type: string
+      enum: [pwa_cookie, android_bearer]
+    UserRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 1024
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        transport:
+          $ref: '#/components/schemas/AuthTransport'
+          default: android_bearer
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 120
+    RegistrationAcceptedResponse:
+      type: object
+      additionalProperties: false
+      required: [registrationAccepted, message, requestId]
+      properties:
+        registrationAccepted:
+          type: boolean
+          const: true
+        message:
+          type: string
+          description: Generic registration acceptance message; never confirms whether the email exists.
+        requestId:
+          type: string
     SessionCreateRequest:
       type: object
       additionalProperties: false
@@ -1226,12 +1306,81 @@ components:
         email:
           type: string
           format: email
+          minLength: 3
+          maxLength: 320
         password:
           type: string
           format: password
+          minLength: 1
+          maxLength: 1024
+        transport:
+          $ref: '#/components/schemas/AuthTransport'
+          default: android_bearer
         deviceName:
           type: string
+          minLength: 1
           maxLength: 120
+    ActorMembershipDto:
+      type: object
+      additionalProperties: false
+      required: [householdId, status]
+      properties:
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+        status:
+          type: string
+    ActorContextDto:
+      type: object
+      additionalProperties: false
+      required: [userId, memberships]
+      properties:
+        userId:
+          $ref: '#/components/schemas/ResourceId'
+        sessionId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        memberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActorMembershipDto'
+    BearerSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [tokenType, accessToken, expiresAt, actor]
+      properties:
+        tokenType:
+          type: string
+          const: Bearer
+        accessToken:
+          type: string
+          minLength: 1
+        expiresAt:
+          $ref: '#/components/schemas/DateTime'
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
+    PwaCookieSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [transport, csrfToken, expiresAt, actor]
+      properties:
+        transport:
+          type: string
+          const: pwa_cookie
+        csrfToken:
+          type: string
+          minLength: 1
+        expiresAt:
+          $ref: '#/components/schemas/DateTime'
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
+    CurrentSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
     SessionDto:
       type: object
       additionalProperties: false

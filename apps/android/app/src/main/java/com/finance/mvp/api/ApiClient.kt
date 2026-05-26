@@ -27,6 +27,8 @@ interface FinanceApiClient {
     val config: ApiConfig
 
     suspend fun login(email: String, password: String): ApiResult<SessionStatus>
+    suspend fun register(email: String, password: String, displayName: String? = null): ApiResult<RegistrationResult> =
+        ApiResult.Failure("Registration is not supported by this client")
     suspend fun sessionStatus(): ApiResult<SessionStatus>
     suspend fun dashboard(): ApiResult<FinanceDashboard>
     suspend fun createDemoAccount(
@@ -79,6 +81,11 @@ data class SessionStatus(
     val displayName: String?,
     val householdId: String?,
 )
+
+sealed interface RegistrationResult {
+    data class Authenticated(val session: SessionStatus?) : RegistrationResult
+    data class Accepted(val message: String) : RegistrationResult
+}
 
 data class FinanceDashboard(
     val session: SessionStatus,
@@ -228,6 +235,36 @@ class LiveFinanceApiClient(
             tokenStore.saveAccessToken(it)
         }
         parseSession(response)
+    }
+
+    override suspend fun register(
+        email: String,
+        password: String,
+        displayName: String?,
+    ): ApiResult<RegistrationResult> = safeCall {
+        val body = JSONObject()
+            .put("email", email)
+            .put("password", password)
+            .put("transport", "android_bearer")
+        displayName?.takeIf { it.isNotBlank() }?.let { body.put("displayName", it) }
+        val response = request(
+            path = "/api/v1/users",
+            method = "POST",
+            body = body.toString(),
+            authorize = false,
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_ACCEPTED),
+        )
+        if (response.optBoolean("registrationAccepted", false)) {
+            tokenStore.clear()
+            return@safeCall RegistrationResult.Accepted(
+                response.optString("message").takeIf { it.isNotBlank() }
+                    ?: "Registration accepted",
+            )
+        }
+        response.optString("accessToken").takeIf { it.isNotBlank() }?.let {
+            tokenStore.saveAccessToken(it)
+        }
+        RegistrationResult.Authenticated(parseSession(response))
     }
 
     override suspend fun sessionStatus(): ApiResult<SessionStatus> = safeCall {

@@ -31,6 +31,7 @@ EXPECTED_APPROVED_SCHEMA_OPERATIONS = {
 }
 
 EXPECTED_APPROVED_SESSION_OPERATIONS = {
+    ("POST", "/api/v1/users"): "createUser",
     ("POST", "/api/v1/sessions"): "createSession",
     ("GET", "/api/v1/sessions/current"): "getCurrentSession",
     ("DELETE", "/api/v1/sessions/current"): "deleteCurrentSession",
@@ -91,7 +92,6 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
 
 EXCLUDED_CONCRETE_OPERATIONS = frozenset(
     {
-        ("POST", "/api/v1/users"),
         ("DELETE", "/api/v1/sessions"),
         ("POST", "/api/v1/password-resets"),
         ("POST", "/api/v1/password-resets/confirmations"),

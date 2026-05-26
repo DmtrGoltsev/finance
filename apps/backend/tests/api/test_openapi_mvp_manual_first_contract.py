@@ -112,6 +112,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
     paths = _contract_paths()
 
     required_paths = {
+        "/users",
         "/sessions",
         "/sessions/current",
         "/accounts",
@@ -144,6 +145,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
 
 
 def test_openapi_sessions_surface_matches_mounted_mvp_subset() -> None:
+    assert _contract_methods("/users") == {"POST"}
     assert _contract_methods("/sessions") == {"POST"}
     assert _contract_methods("/sessions/current") == {"GET", "DELETE"}
 
@@ -151,7 +153,7 @@ def test_openapi_sessions_surface_matches_mounted_mvp_subset() -> None:
 def test_openapi_excludes_post_mvp_import_bank_sms_push_broker_routes() -> None:
     paths = _contract_paths()
     excluded_prefixes = (
-        "/users",
+        "/users/me",
         "/password-resets",
         "/households",
         "/invites",

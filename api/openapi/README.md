@@ -21,9 +21,16 @@ MVP boundaries are hard-coded in the contract:
 - reports, search, autocomplete, pagination, and cache materialization must filter visible rows before aggregation;
 - no response may expose hidden counts, filtered-out counts, hidden facets, or inaccessible-resource diagnostics.
 
+MVP auth surface:
+
+- `POST /users` exposes public registration and returns the same runtime session
+  shape as `POST /sessions`;
+- user profile, memberships, password reset, household, invite, and broader
+  account lifecycle APIs remain outside the mounted MVP contract.
+
 Reserved post-MVP exclusions:
 
-- no user registration/profile, household, invite, membership, export, deletion-request, logout-all, standalone transfer, or explicit transaction void routes are exposed in the mounted MVP contract;
+- no user profile, household, invite, membership, export, deletion-request, logout-all, standalone transfer, or explicit transaction void routes are exposed in the mounted MVP contract;
 - no import endpoints;
 - no bank API, bank connection, bank account sync, SMS import, push import, broker connection, external credential, card, IBAN/account-requisite, raw bank statement, or push-token endpoints;
 - reserved source values such as `file_import`, `bank_api`, `sms`, and `push` are not accepted by MVP create/update flows.

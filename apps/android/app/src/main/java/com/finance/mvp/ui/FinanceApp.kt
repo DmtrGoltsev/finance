@@ -82,6 +82,7 @@ import com.finance.mvp.api.FinanceDashboard
 import com.finance.mvp.api.ImportReportPreviewRequest
 import com.finance.mvp.api.ImportReportPreviewResponse
 import com.finance.mvp.api.MoneyTotal
+import com.finance.mvp.api.RegistrationResult
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
@@ -109,8 +110,11 @@ fun FinanceApp(
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
     var quickAddOpenKey by rememberSaveable { mutableStateOf(0) }
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
+    var authMode by rememberSaveable { mutableStateOf(AuthMode.Login) }
     var loginEmail by rememberSaveable { mutableStateOf("") }
     var loginPassword by rememberSaveable { mutableStateOf("") }
+    var registerConfirmPassword by rememberSaveable { mutableStateOf("") }
+    var registerDisplayName by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
     var smsCaptureEnabled by rememberSaveable { mutableStateOf(false) }
     var notificationCaptureEnabled by rememberSaveable { mutableStateOf(false) }
@@ -299,6 +303,42 @@ fun FinanceApp(
                     isLoading = false,
                     message = result.userFacingMessage(),
                 )
+            }
+        }
+    }
+
+    fun register(email: String, password: String, confirmPassword: String, displayName: String) {
+        when (val validation = registrationCredentialsOrError(email, password, confirmPassword, displayName)) {
+            is RegistrationValidationResult.Invalid -> {
+                uiState = uiState.copy(message = validation.message)
+            }
+            is RegistrationValidationResult.Valid -> {
+                scope.launch {
+                    uiState = uiState.copy(isLoading = true, message = "Регистрируем аккаунт")
+                    val result = withContext(Dispatchers.IO) {
+                        apiClient.register(
+                            validation.credentials.email,
+                            validation.credentials.password,
+                            validation.credentials.displayName,
+                        )
+                    }
+                    loginPassword = ""
+                    registerConfirmPassword = ""
+                    when (result) {
+                        is ApiResult.Success -> when (result.value) {
+                            is RegistrationResult.Authenticated -> loadDashboard()
+                            is RegistrationResult.Accepted -> {
+                                val update = registrationAcceptedUiUpdate()
+                                authMode = update.mode
+                                uiState = update.state
+                            }
+                        }
+                        is ApiResult.Failure -> uiState = uiState.copy(
+                            isLoading = false,
+                            message = result.userFacingMessage(),
+                        )
+                    }
+                }
             }
         }
     }
@@ -502,11 +542,28 @@ fun FinanceApp(
                 item {
                     SignInCard(
                         state = uiState,
+                        mode = authMode,
                         email = loginEmail,
                         password = loginPassword,
+                        confirmPassword = registerConfirmPassword,
+                        displayName = registerDisplayName,
+                        onModeChange = {
+                            authMode = it
+                            uiState = uiState.copy(message = if (it == AuthMode.Login) "Войдите, чтобы увидеть финансы" else "Создайте новый аккаунт")
+                        },
                         onEmailChange = { loginEmail = it },
                         onPasswordChange = { loginPassword = it },
+                        onConfirmPasswordChange = { registerConfirmPassword = it },
+                        onDisplayNameChange = { registerDisplayName = it },
                         onLogin = { login(loginEmail, loginPassword) },
+                        onRegister = {
+                            register(
+                                loginEmail,
+                                loginPassword,
+                                registerConfirmPassword,
+                                registerDisplayName,
+                            )
+                        },
                     )
                 }
             }
@@ -589,20 +646,82 @@ internal data class LoginCredentials(
     val password: String,
 )
 
+internal data class RegistrationCredentials(
+    val email: String,
+    val password: String,
+    val displayName: String?,
+)
+
+internal enum class AuthMode {
+    Login,
+    Register,
+}
+
+internal data class RegistrationUiUpdate(
+    val mode: AuthMode,
+    val state: FinanceUiState,
+)
+
+internal sealed interface RegistrationValidationResult {
+    data class Valid(val credentials: RegistrationCredentials) : RegistrationValidationResult
+    data class Invalid(val message: String) : RegistrationValidationResult
+}
+
+private const val MIN_REGISTRATION_PASSWORD_LENGTH = 12
+internal const val REGISTRATION_ACCEPTED_MESSAGE = "Заявка принята. Если аккаунт доступен, войдите по email и паролю."
+
+internal fun registrationAcceptedUiUpdate(): RegistrationUiUpdate {
+    return RegistrationUiUpdate(
+        mode = AuthMode.Login,
+        state = FinanceUiState(message = REGISTRATION_ACCEPTED_MESSAGE),
+    )
+}
+
 internal fun loginCredentialsOrNull(email: String, password: String): LoginCredentials? {
     val normalizedEmail = email.trim()
     return LoginCredentials(normalizedEmail, password)
         .takeIf { it.email.isNotBlank() && it.password.isNotBlank() }
 }
 
+internal fun registrationCredentialsOrError(
+    email: String,
+    password: String,
+    confirmPassword: String,
+    displayName: String,
+): RegistrationValidationResult {
+    val normalizedEmail = email.trim()
+    val normalizedDisplayName = displayName.trim().takeIf { it.isNotBlank() }
+    return when {
+        normalizedEmail.isBlank() -> RegistrationValidationResult.Invalid("Введите email")
+        password.isBlank() -> RegistrationValidationResult.Invalid("Введите пароль")
+        confirmPassword.isBlank() -> RegistrationValidationResult.Invalid("Повторите пароль")
+        password.length < MIN_REGISTRATION_PASSWORD_LENGTH -> RegistrationValidationResult.Invalid("Пароль должен быть не короче 12 символов")
+        password != confirmPassword -> RegistrationValidationResult.Invalid("Пароли не совпадают")
+        else -> RegistrationValidationResult.Valid(
+            RegistrationCredentials(
+                email = normalizedEmail,
+                password = password,
+                displayName = normalizedDisplayName,
+            ),
+        )
+    }
+}
+
 @Composable
 private fun SignInCard(
     state: FinanceUiState,
+    mode: AuthMode,
     email: String,
     password: String,
+    confirmPassword: String,
+    displayName: String,
+    onModeChange: (AuthMode) -> Unit,
     onEmailChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
+    onDisplayNameChange: (String) -> Unit,
     onLogin: () -> Unit,
+    onRegister: () -> Unit,
 ) {
     ElevatedCard(
         modifier = Modifier
@@ -637,6 +756,22 @@ private fun SignInCard(
                     )
                 }
             }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = mode == AuthMode.Login,
+                    onClick = { onModeChange(AuthMode.Login) },
+                    label = { Text("Вход") },
+                    enabled = !state.isLoading,
+                )
+                FilterChip(
+                    selected = mode == AuthMode.Register,
+                    onClick = { onModeChange(AuthMode.Register) },
+                    label = { Text("Регистрация") },
+                    enabled = !state.isLoading,
+                )
+            }
             OutlinedTextField(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -661,16 +796,41 @@ private fun SignInCard(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 enabled = !state.isLoading,
             )
+            if (mode == AuthMode.Register) {
+                OutlinedTextField(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("register-confirm-password-field")
+                        .semantics { password() },
+                    value = confirmPassword,
+                    onValueChange = onConfirmPasswordChange,
+                    label = { Text("Повторите пароль") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    enabled = !state.isLoading,
+                )
+                OutlinedTextField(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("register-display-name-field"),
+                    value = displayName,
+                    onValueChange = onDisplayNameChange,
+                    label = { Text("Имя (необязательно)") },
+                    singleLine = true,
+                    enabled = !state.isLoading,
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
                 Button(
                     modifier = Modifier.testTag("login-submit-button"),
-                    onClick = onLogin,
+                    onClick = if (mode == AuthMode.Login) onLogin else onRegister,
                     enabled = !state.isLoading,
                 ) {
-                    Text("Войти")
+                    Text(if (mode == AuthMode.Login) "Войти" else "Создать аккаунт")
                 }
             }
         }

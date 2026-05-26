@@ -56,7 +56,12 @@ class PasswordResetService:
 
         return neutral_password_reset_request_response(request_id=request_id)
 
-    def issue_reset_token(self, *, user_id: str, requested_email: str) -> PasswordResetTokenStorageRecord:
+    def issue_reset_token(
+        self,
+        *,
+        user_id: str,
+        requested_email: str,
+    ) -> PasswordResetTokenStorageRecord:
         """Issue and store a password reset token hash.
 
         TODO(W2-04 release blocker): generate a random plaintext token at the

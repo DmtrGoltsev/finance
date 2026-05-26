@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
@@ -33,11 +34,55 @@ CLIENT_KIND_BY_SESSION_TRANSPORT = {
 }
 
 
+class DuplicateUserEmailError(ValueError):
+    """Raised when an active/non-deleted user already owns the registration email."""
+
+
 @dataclass(slots=True)
 class SqlAlchemyCredentialStore:
     """Credential store backed by ``users`` and ``memberships`` tables."""
 
     session_factory: sessionmaker[OrmSession]
+
+    def create_user(
+        self,
+        *,
+        email_normalized: str,
+        password_hash: str,
+        display_name: str | None,
+        created_at: datetime,
+    ) -> AuthUserRecord:
+        normalized_email = normalize_email(email_normalized)
+        current_time = _aware_utc(created_at)
+
+        try:
+            with self.session_factory.begin() as session:
+                existing = session.execute(
+                    select(UserModel).where(
+                        UserModel.email_normalized == normalized_email,
+                        UserModel.record_status != "deleted",
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    raise DuplicateUserEmailError("registration email is already in use")
+
+                user = UserModel(
+                    id=uuid4(),
+                    email_normalized=normalized_email,
+                    password_hash=password_hash,
+                    display_name=display_name,
+                    auth_status="active",
+                    record_status="active",
+                    session_version=1,
+                    created_at=current_time,
+                    updated_at=current_time,
+                    version=1,
+                )
+                session.add(user)
+                session.flush()
+                return _user_record_from_model(session, user)
+        except IntegrityError as exc:
+            raise DuplicateUserEmailError("registration email is already in use") from exc
 
     def get_user_by_email_normalized(self, email_normalized: str) -> AuthUserRecord | None:
         normalized_email = normalize_email(email_normalized)
