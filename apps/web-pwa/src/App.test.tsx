@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiRequestError } from "./api/client";
-import type { DashboardSnapshot, ImportReportPreviewRequest } from "./api/types";
+import type { DashboardSnapshot } from "./api/types";
 
 const financeSnapshot: DashboardSnapshot = {
   session: {
@@ -161,71 +161,6 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     getDashboardSnapshot: vi.fn(async () => snapshot),
     loginWithPassword: vi.fn(async () => undefined),
     logout: vi.fn(async () => undefined),
-    previewImportReport: vi.fn(async (input: ImportReportPreviewRequest) => ({
-      status: "preview_placeholder" as const,
-      canConfirm: false as const,
-      willChangeData: false as const,
-      message: "Файл не импортирован. Сейчас показана только предварительная сводка.",
-      scope: {
-        targetScope: input.targetScope,
-        householdId: input.householdId
-      },
-      file: {
-        fileName: input.fileName,
-        fileSizeBytes: input.fileSizeBytes,
-        mimeType: input.mimeType
-      },
-      summary: {
-        title: "Предварительный просмотр импорта",
-        statusText: "Импорт пока не выполняется",
-        sections: [
-          {
-            key: "accounts_assets" as const,
-            title: "Счета и активы",
-            status: "not_recognized_yet" as const,
-            text: "Будущий импорт сможет показать найденные счета и активы."
-          },
-          {
-            key: "transactions" as const,
-            title: "Операции",
-            status: "not_recognized_yet" as const,
-            text: "Операции не распознаны и не добавлены."
-          },
-          {
-            key: "categories" as const,
-            title: "Категории",
-            status: "not_recognized_yet" as const,
-            text: "Категории не распознаны и не созданы."
-          },
-          {
-            key: "transfers" as const,
-            title: "Переводы",
-            status: "not_recognized_yet" as const,
-            text: "Переводы не распознаны и не созданы."
-          },
-          {
-            key: "brokerage_deposits_metals" as const,
-            title: "Брокеры, вклады и металлы",
-            status: "not_recognized_yet" as const,
-            text: "Специальные активы пока не обрабатываются."
-          }
-        ]
-      },
-      warnings: [
-        {
-          code: "NO_DATA_CHANGES_WITHOUT_CONFIRMATION" as const,
-          text: "Данные не изменятся без подтверждения."
-        },
-        {
-          code: "NO_FILE_STORAGE_OR_PARSING" as const,
-          text: "Содержимое файла не сохраняется и не разбирается."
-        },
-        {
-          code: "PLACEHOLDER_ONLY" as const,
-          text: "Импорт пока не выполняется."
-        }
-      ]
-    })),
     restoreAccount: vi.fn(async () => snapshot.accounts[0]),
     restoreCategory: vi.fn(async () => snapshot.categories[0]),
     restoreOperation: vi.fn(async () => snapshot.operations[0]),
@@ -302,6 +237,9 @@ describe("PWA finance experience", () => {
     expect(document.body).not.toHaveTextContent(
       /MVP|CRUD|PATCH|Live API|session id|demo|E2E/i
     );
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByLabelText(/Файл отч[её]та/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Импорт отчета" })).not.toBeInTheDocument();
   });
 
   it("adds an expense from quick add", async () => {
@@ -482,6 +420,9 @@ describe("PWA finance experience", () => {
     await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
     expect(screen.getByRole("heading", { level: 2, name: "Аналитика" })).toBeInTheDocument();
     expect(screen.getByText("Итог")).toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByLabelText(/Файл отч[её]та/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Импорт отчета" })).not.toBeInTheDocument();
   });
 
   it("opens operations, assets and categories from the mobile bottom navigation", async () => {
@@ -502,7 +443,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByText("Продукты")).toBeInTheDocument();
   });
 
-  it("keeps mobile quick add controls and import controls clickable", async () => {
+  it("keeps mobile quick add controls clickable", async () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<App client={client} />);
@@ -524,60 +465,7 @@ describe("PWA finance experience", () => {
         })
       );
     });
-
-    const nav = screen.getByRole("navigation", { name: "Нижняя навигация" });
-    await user.click(within(nav).getByRole("button", { name: /Операции/i }));
-    await user.upload(
-      screen.getByLabelText("Файл отчета"),
-      new File(["placeholder only"], "mobile-statement.csv", { type: "text/csv" })
-    );
-    await user.click(screen.getByRole("button", { name: /Показать сводку/i }));
-
-    await waitFor(() => expect(client.previewImportReport).toHaveBeenCalled());
   });
-
-  it("shows report import placeholder without changing data", async () => {
-    const user = userEvent.setup();
-    const client = makeClient();
-    render(<App client={client} />);
-
-    await screen.findByRole("heading", { name: "Деньги" });
-    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
-    await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
-
-    expect(screen.getByRole("heading", { name: "Импорт отчета" })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("Тип отчета"), "brokerage_report");
-    await user.upload(
-      screen.getByLabelText("Файл отчета"),
-      new File(["placeholder only"], "broker-report.csv", { type: "text/csv" })
-    );
-    await user.click(screen.getByRole("button", { name: /Показать сводку/i }));
-
-    await waitFor(() => {
-      expect(client.previewImportReport).toHaveBeenCalledWith({
-        reportType: "brokerage_report",
-        sourceType: "file_metadata_only",
-        targetScope: "personal",
-        householdId: null,
-        fileName: "broker-report.csv",
-        fileSizeBytes: 16,
-        mimeType: "text/csv"
-      });
-    });
-    const preview = screen.getByLabelText("Предварительный просмотр импорта");
-    expect(preview).toHaveTextContent(
-      "Импорт пока не выполняется"
-    );
-    expect(screen.getByText("Данные не изменятся без подтверждения.")).toBeInTheDocument();
-    expect(screen.getAllByText("Содержимое файла не сохраняется и не разбирается.").length).toBeGreaterThan(0);
-    expect(within(preview).getByText("Счета и активы")).toBeInTheDocument();
-    expect(within(preview).getByText("Операции")).toBeInTheDocument();
-    expect(within(preview).getByText("Категории")).toBeInTheDocument();
-    expect(within(preview).getByText("Переводы")).toBeInTheDocument();
-    expect(within(preview).getByText("Брокеры, вклады и металлы")).toBeInTheDocument();
-    expect(document.body).not.toHaveTextContent(/Импорт выполнен|Мы распознали операции|CRUD|endpoint/i);
-  });
-
   it("shows explicit personal, shared and overview modes without technical wording", async () => {
     const user = userEvent.setup();
     render(<App client={makeClient()} />);

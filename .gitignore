@@ -49,6 +49,7 @@ dist/
 local.properties
 *.iml
 captures/
+*.hprof
 *.apk
 *.aab
 *.ap_

@@ -67,8 +67,17 @@ class ApiClientCaptureDraftTest {
             assertEquals("12.34", json.getString("amount"))
             assertEquals("notification", json.getString("captureSource"))
             assertEquals("0.9000", json.getString("confidence"))
-            assertFalse(json.has("rawBody"))
-            assertFalse(json.has("rawText"))
+            listOf(
+                "rawBody",
+                "rawText",
+                "rawImage",
+                "rawOcrText",
+                "rawNotification",
+                "messageText",
+                "notificationText",
+            ).forEach { key ->
+                assertFalse("Request must not include $key", json.has(key))
+            }
             assertFalse(json.toString().contains("Paid 12.34 USD at Test Market"))
         }
     }
@@ -84,6 +93,15 @@ class ApiClientCaptureDraftTest {
         assertEquals("0.8765", json.getString("confidence"))
         assertEquals("acc-card", json.getString("accountId"))
         assertEquals("cat-food", json.getString("categoryId"))
+        listOf(
+            "rawImage",
+            "rawOcrText",
+            "rawNotification",
+            "messageText",
+            "notificationText",
+        ).forEach { key ->
+            assertFalse("Request must not include $key", json.has(key))
+        }
     }
 
     @Test

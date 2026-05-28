@@ -14,18 +14,19 @@ object CaptureParser {
         "spent",
         "debit",
         "card charge",
+        "buy",
+        "bought",
+        "order executed",
+        "trade",
+        "brokerage",
         "spisanie",
         "oplata",
         "pokupka",
-        "списание",
-        "оплата",
-        "покупка",
-        "потрачено",
     )
     private val incomeSignals = listOf(
         "refund",
         "reversal",
-        "cashback",
+        "cashback credited",
         "deposit",
         "credited",
         "income",
@@ -33,24 +34,82 @@ object CaptureParser {
         "vozvrat",
         "zachislen",
         "popolnen",
-        "возврат",
-        "зачислен",
-        "зачисление",
-        "поступление",
-        "пополнение",
-        "зарплата",
+    )
+    private val brokerSignals = listOf(
+        "broker",
+        "brokerage",
+        "investment",
+        "portfolio",
+        "stock",
+        "etf",
+        "asset",
+        "order executed",
+    )
+    private val transferSignals = listOf(
+        "transfer",
+        "sent to",
+        "between accounts",
+        "p2p",
+        "card to card",
+    )
+    private val primaryAmountSignals = listOf(
+        "purchase",
+        "payment",
+        "paid",
+        "spent",
+        "debit",
+        "buy",
+        "bought",
+        "order",
+        "total",
+        "amount",
+        "sum",
+        "broker",
+        "trade",
+    )
+    private val balanceSignals = listOf(
+        "balance",
+        "available",
+        "cashback",
     )
     private val amountAfterRegex = Regex(
-        """(?i)(\d[\d\s.,]*\d|\d)(?:\s*)(₽|руб\.?|rub|rur|usd|\$|eur|€)\b?""",
+        "(?i)(\\d[\\d\\s.,]*\\d|\\d)(?:\\s*)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)\\b?",
     )
     private val amountBeforeRegex = Regex(
-        """(?i)(₽|руб\.?|rub|rur|usd|\$|eur|€)(?:\s*)(\d[\d\s.,]*\d|\d)\b""",
+        "(?i)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)(?:\\s*)(\\d[\\d\\s.,]*\\d|\\d)\\b",
     )
     private val merchantPatterns = listOf(
         Regex("""(?i)\b(?:at|in)\s+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
         Regex("""(?i)\bmerchant[:\s]+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
-        Regex("""(?i)\b(?:v|vo|в)\s+([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9 ._&'-]{1,48})"""),
-        Regex("""(?i)\b(?:место|магазин)[:\s]+([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9 ._&'-]{1,48})"""),
+        Regex("""(?i)\bbroker:\s+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
+    )
+    private val screenshotMerchantPatterns = listOf(
+        Regex("""(?i)\b(?:at|in)\s+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
+        Regex("""(?i)\bmerchant[:\s]+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
+        Regex("""(?i)\bbroker:\s+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
+    )
+    private val screenshotMerchantStopWords = setOf(
+        "account",
+        "acct",
+        "amount",
+        "auth",
+        "available",
+        "balance",
+        "card",
+        "cashback",
+        "date",
+        "internal",
+        "line",
+        "paid",
+        "payment",
+        "purchase",
+        "receipt",
+        "reference",
+        "routing",
+        "sum",
+        "terminal",
+        "time",
+        "total",
     )
 
     fun parseSms(
@@ -89,6 +148,26 @@ object CaptureParser {
         )
     }
 
+    fun parseScreenshotOcr(
+        text: String,
+        capturedAtMillis: Long,
+    ): CaptureCandidate? {
+        val normalizedText = normalizeText(text)
+        if (normalizedText.isBlank() || looksLikeTransfer(normalizedText)) {
+            return null
+        }
+        return parse(
+            text = text,
+            title = null,
+            capturedAtMillis = capturedAtMillis,
+            source = "screenshot",
+            sourceAppPackage = null,
+            sourceAppLabel = "Photo Picker",
+            minimumConfidence = 0.55,
+            preferContextualAmount = true,
+        )
+    }
+
     fun syntheticCandidate(nowMillis: Long = System.currentTimeMillis()): CaptureCandidate {
         return parseNotification(
             title = "Payment",
@@ -106,14 +185,18 @@ object CaptureParser {
         source: String,
         sourceAppPackage: String?,
         sourceAppLabel: String?,
+        minimumConfidence: Double = 0.0,
+        preferContextualAmount: Boolean = false,
     ): CaptureCandidate? {
         val normalizedText = normalizeText(text)
         if (normalizedText.isBlank() || looksLikeIncome(normalizedText)) {
             return null
         }
-        val amount = findAmount(normalizedText) ?: return null
-        val merchant = extractMerchant(normalizedText)
+        val amount = findAmount(normalizedText, preferContextualAmount) ?: return null
+        val isScreenshot = source == "screenshot"
+        val merchant = extractMerchant(normalizedText, strict = isScreenshot)
             ?: title?.takeUnless { it.equals("payment", ignoreCase = true) }?.trim()?.take(64)
+            ?: brokerDescription(normalizedText)
         val occurredAt = Instant.ofEpochMilli(capturedAtMillis).toString()
         val timeBucket = (capturedAtMillis / 60_000L).toString()
         val evidenceInput = listOf(
@@ -138,11 +221,14 @@ object CaptureParser {
             evidenceHash.take(16),
         ).joinToString(":")
         val confidence = confidenceFor(normalizedText, merchant)
+        if (confidence < minimumConfidence) {
+            return null
+        }
 
         return CaptureCandidate(
             amount = amount.amount,
             currency = amount.currency,
-            description = merchant ?: "Captured ${source.replaceFirstChar { it.uppercase(Locale.US) }} payment",
+            description = merchant ?: genericDescription(source),
             merchantName = merchant,
             capturedAt = occurredAt,
             occurredAt = occurredAt,
@@ -160,29 +246,60 @@ object CaptureParser {
         return incomeSignals.any { it in lower }
     }
 
+    private fun looksLikeTransfer(text: String): Boolean {
+        val lower = text.lowercase(Locale.getDefault())
+        return transferSignals.any { it in lower }
+    }
+
     private fun confidenceFor(text: String, merchant: String?): Double {
         val lower = text.lowercase(Locale.getDefault())
         var confidence = 0.45
         if (expenseSignals.any { it in lower }) {
             confidence += 0.25
         }
+        if (brokerSignals.any { it in lower }) {
+            confidence += 0.15
+        }
         if (!merchant.isNullOrBlank()) {
             confidence += 0.2
         }
-        if (Regex("""(?i)\b(card|visa|mastercard|мир|карта)\b""").containsMatchIn(text)) {
+        if (Regex("""(?i)\b(card|visa|mastercard)\b""").containsMatchIn(text)) {
             confidence += 0.05
         }
         return confidence.coerceIn(0.0, 0.95)
     }
 
-    private fun findAmount(text: String): ParsedAmount? {
-        amountAfterRegex.find(text)?.let { match ->
-            return normalizeAmount(match.groupValues[1], match.groupValues[2])
+    private fun findAmount(text: String, preferContextualAmount: Boolean = false): ParsedAmount? {
+        val matches = amountMatches(text)
+        if (matches.isEmpty()) {
+            return null
         }
-        amountBeforeRegex.find(text)?.let { match ->
-            return normalizeAmount(match.groupValues[2], match.groupValues[1])
+        if (!preferContextualAmount) {
+            return matches.first().amount
         }
-        return null
+        val lower = text.lowercase(Locale.getDefault())
+        return matches.firstOrNull { match ->
+            val before = lower.substring((match.start - 28).coerceAtLeast(0), match.start)
+            val window = lower.substring((match.start - 56).coerceAtLeast(0), (match.end + 56).coerceAtMost(text.length))
+            balanceSignals.none { it in before } && primaryAmountSignals.any { it in window }
+        }?.amount ?: matches.firstOrNull { match ->
+            val before = lower.substring((match.start - 28).coerceAtLeast(0), match.start)
+            balanceSignals.none { it in before }
+        }?.amount ?: matches.first().amount
+    }
+
+    private fun amountMatches(text: String): List<ParsedAmountMatch> {
+        val afterMatches = amountAfterRegex.findAll(text).mapNotNull { match ->
+            normalizeAmount(match.groupValues[1], match.groupValues[2])?.let {
+                ParsedAmountMatch(it, match.range.first, match.range.last + 1)
+            }
+        }.toList()
+        val beforeMatches = amountBeforeRegex.findAll(text).mapNotNull { match ->
+            normalizeAmount(match.groupValues[2], match.groupValues[1])?.let {
+                ParsedAmountMatch(it, match.range.first, match.range.last + 1)
+            }
+        }.toList()
+        return (afterMatches + beforeMatches).sortedBy { it.start }
     }
 
     private fun normalizeAmount(rawAmount: String, rawCurrency: String): ParsedAmount? {
@@ -203,22 +320,77 @@ object CaptureParser {
         val lower = raw.lowercase(Locale.US)
         return when {
             raw == "$" || lower == "usd" -> "USD"
-            raw == "€" || lower == "eur" -> "EUR"
+            raw == "\u20AC" || lower == "eur" -> "EUR"
             else -> "RUB"
         }
     }
 
-    private fun extractMerchant(text: String): String? {
-        return merchantPatterns.firstNotNullOfOrNull { pattern ->
-            pattern.find(text)?.groupValues?.getOrNull(1)?.trimMerchant()
+    private fun extractMerchant(text: String, strict: Boolean): String? {
+        val patterns = if (strict) screenshotMerchantPatterns else merchantPatterns
+        return patterns.firstNotNullOfOrNull { pattern ->
+            pattern.find(text)?.groupValues?.getOrNull(1)?.let { raw ->
+                if (strict) raw.trimScreenshotMerchant() else raw.trimMerchant()
+            }
         }
     }
 
+    private fun genericDescription(source: String): String {
+        return if (source == "screenshot") {
+            "Screenshot capture"
+        } else {
+            "Captured ${source.replaceFirstChar { it.uppercase(Locale.US) }} payment"
+        }
+    }
+
+    private fun brokerDescription(text: String): String? {
+        val lower = text.lowercase(Locale.getDefault())
+        return if (brokerSignals.any { it in lower }) "Brokerage operation" else null
+    }
+
     private fun String.trimMerchant(): String? {
-        val cleaned = replace(Regex("""\s+(?:amount|sum|card|остаток|balance)\b.*$""", RegexOption.IGNORE_CASE), "")
+        val cleaned = replace(Regex("""[\s.]+(?:amount|sum|card|balance|cashback|total)\b.*$""", RegexOption.IGNORE_CASE), "")
             .trim(' ', '.', ',', ';', ':', '-')
             .take(64)
         return cleaned.takeIf { it.length >= 2 }
+    }
+
+    private fun String.trimScreenshotMerchant(): String? {
+        if (contains('@')) {
+            return null
+        }
+        val tokens = replace(Regex("""[.,;:|/\\].*$"""), "")
+            .trim(' ', '.', ',', ';', ':', '-')
+            .split(Regex("""\s+"""))
+            .filter { token ->
+                token.isNotBlank() && token.any(Char::isLetterOrDigit)
+            }
+        val safeTokens = tokens.takeWhile { token ->
+            token.lowercase(Locale.US).trim(' ', '.', ',', ';', ':', '-') !in screenshotMerchantStopWords
+        }.take(3)
+        if (safeTokens.isEmpty() || tokens.size > safeTokens.size + 4) {
+            return null
+        }
+        val cleaned = safeTokens.joinToString(" ")
+            .replace(Regex("""[^A-Za-z0-9 ._&'-]"""), "")
+            .trim(' ', '.', ',', ';', ':', '-')
+            .take(40)
+        return cleaned.takeIf { value ->
+            value.length in 2..40 &&
+                value.count { it.isWhitespace() } <= 2 &&
+                !value.looksLikeSensitiveScreenshotMerchant()
+        }
+    }
+
+    private fun String.looksLikeSensitiveScreenshotMerchant(): Boolean {
+        val digitCount = count(Char::isDigit)
+        val letterCount = count(Char::isLetter)
+        if (digitCount >= 6) {
+            return true
+        }
+        if (digitCount >= 4 && letterCount == 0) {
+            return true
+        }
+        return Regex("""(?i)(?:\+?\d[\d\s().-]{7,}\d)""").containsMatchIn(this)
     }
 
     private fun normalizeText(value: String): String {
@@ -228,7 +400,7 @@ object CaptureParser {
     private fun normalizeKeyPart(value: String?): String {
         return value.orEmpty()
             .lowercase(Locale.getDefault())
-            .replace(Regex("""[^a-zа-я0-9]+"""), "-")
+            .replace(Regex("""[^a-z0-9]+"""), "-")
             .trim('-')
             .take(48)
     }
@@ -241,5 +413,11 @@ object CaptureParser {
     private data class ParsedAmount(
         val amount: String,
         val currency: String,
+    )
+
+    private data class ParsedAmountMatch(
+        val amount: ParsedAmount,
+        val start: Int,
+        val end: Int,
     )
 }

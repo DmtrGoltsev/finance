@@ -74,7 +74,7 @@ class ModelMetadataTests(unittest.TestCase):
         self.assertCheckContains(
             "capture_drafts",
             "capture_source_valid",
-            ["capture_source", "sms", "notification"],
+            ["capture_source", "sms", "notification", "screenshot"],
         )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:

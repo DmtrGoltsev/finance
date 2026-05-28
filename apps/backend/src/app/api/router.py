@@ -7,7 +7,6 @@ from app.api.error_contract import ErrorEnvelopeRoute, error_response, request_i
 from app.auth.router import router as auth_router
 from app.capture_drafts import router as capture_drafts_router
 from app.categories import router as categories_router
-from app.imports import router as imports_router
 from app.reports import router as reports_router
 from app.transactions import router as transactions_router
 
@@ -55,7 +54,6 @@ _include_router_with_error_envelope(categories_router)
 _include_router_with_error_envelope(transactions_router)
 _include_router_with_error_envelope(capture_drafts_router)
 _include_router_with_error_envelope(reports_router)
-_include_router_with_error_envelope(imports_router)
 
 
 @api_router.api_route(

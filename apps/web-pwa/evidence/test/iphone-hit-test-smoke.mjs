@@ -186,31 +186,6 @@ async function installApiMock(page) {
     if (url.pathname === "/api/v1/reports/summary" && method === "GET") {
       return json(route, report(url.searchParams.get("reportMode") || "combined_viewer_overview"));
     }
-    if (url.pathname === "/api/v1/imports/report-preview" && method === "POST") {
-      const input = JSON.parse(request.postData() || "{}");
-      return json(route, {
-        status: "preview_placeholder",
-        canConfirm: false,
-        willChangeData: false,
-        message: "Preview only",
-        scope: {
-          targetScope: input.targetScope,
-          householdId: input.householdId
-        },
-        file: {
-          fileName: input.fileName,
-          fileSizeBytes: input.fileSizeBytes,
-          mimeType: input.mimeType
-        },
-        summary: {
-          title: "Import preview",
-          statusText: "Not imported",
-          sections: []
-        },
-        warnings: []
-      });
-    }
-
     return json(route, { error: { code: "not_found" } }, 404);
   });
 }

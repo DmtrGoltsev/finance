@@ -22,10 +22,15 @@ from tests.transactions.test_transactions_db_runtime import (
 pytest_plugins = ["tests.transactions.test_transactions_db_runtime"]
 
 
-def _draft_payload(transaction_graph: dict[str, Any], *, idempotency_key: str) -> dict[str, Any]:
+def _draft_payload(
+    transaction_graph: dict[str, Any],
+    *,
+    idempotency_key: str,
+    capture_source: str = "sms",
+) -> dict[str, Any]:
     return {
         "idempotencyKey": idempotency_key,
-        "captureSource": "sms",
+        "captureSource": capture_source,
         "capturedAt": "2026-05-17T14:01:00+00:00",
         "occurredAt": "2026-05-17T14:00:00+00:00",
         "amount": "12.3400",
@@ -38,6 +43,20 @@ def _draft_payload(transaction_graph: dict[str, Any], *, idempotency_key: str) -
         "sourceAppPackage": "ru.bank.safe",
         "sourceAppLabel": "Bank",
         "evidenceHash": "sha256:capture-fixture",
+    }
+
+
+def _raw_capture_fields() -> dict[str, str]:
+    return {
+        "rawMessage": "secret sms body must never be stored",
+        "rawScreenshot": "secret screenshot payload must never be stored",
+        "rawImage": "secret raw image payload must never be stored",
+        "rawOcrText": "secret raw ocr text must never be stored",
+        "rawNotification": "secret raw notification must never be stored",
+        "messageText": "secret message text must never be stored",
+        "notificationText": "secret notification text must never be stored",
+        "body": "secret body",
+        "text": "secret text",
     }
 
 
@@ -100,6 +119,30 @@ def test_capture_draft_create_list_dedup_update_and_confirm(
         for item in transactions_after_replay.json()["items"]
         if item["description"] == "reviewed grocery candidate"
     ] == [transaction_id]
+
+
+def test_capture_draft_accepts_screenshot_source_without_transaction_source_change(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    payload = _draft_payload(
+        transaction_graph,
+        idempotency_key="capture-screenshot",
+        capture_source="screenshot",
+    )
+
+    with _client_for_actor(owner) as client:
+        created = client.post("/api/v1/capture-drafts", json=payload)
+        draft_id = created.json()["data"]["id"]
+        confirmed = client.post(f"/api/v1/capture-drafts/{draft_id}/confirm")
+        transaction_id = confirmed.json()["data"]["transactionId"]
+        transaction = client.get(f"/api/v1/transactions/{transaction_id}")
+
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["captureSource"] == "screenshot"
+    assert confirmed.status_code == 200, confirmed.text
+    assert transaction.status_code == 200, transaction.text
+    assert transaction.json()["data"]["sourceType"] == "manual"
 
 
 def test_in_memory_capture_draft_repeated_confirm_is_idempotent() -> None:
@@ -227,11 +270,10 @@ def test_capture_draft_discard_and_access_isolation(transaction_graph: dict[str,
 
 def test_capture_drafts_reject_raw_text_fields(transaction_graph: dict[str, Any]) -> None:
     owner = transaction_graph["actors"]["owner_a"]
+    raw_fields = _raw_capture_fields()
     payload = {
         **_draft_payload(transaction_graph, idempotency_key="capture-raw"),
-        "rawMessage": "secret sms body must never be stored",
-        "body": "secret body",
-        "text": "secret text",
+        **raw_fields,
     }
 
     with _client_for_actor(owner) as client:
@@ -239,11 +281,36 @@ def test_capture_drafts_reject_raw_text_fields(transaction_graph: dict[str, Any]
         listed = client.get("/api/v1/capture-drafts")
 
     assert rejected.status_code == 422
-    assert "secret sms body" not in rejected.text
-    assert "secret body" not in rejected.text
-    assert "secret text" not in rejected.text
+    for raw_value in raw_fields.values():
+        assert raw_value not in rejected.text
     assert listed.status_code == 200
     assert listed.json()["items"] == []
+
+
+def test_capture_draft_update_rejects_raw_text_fields(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    raw_fields = _raw_capture_fields()
+    payload = _draft_payload(transaction_graph, idempotency_key="capture-update-raw")
+
+    with _client_for_actor(owner) as client:
+        created = client.post("/api/v1/capture-drafts", json=payload)
+        draft_id = created.json()["data"]["id"]
+        rejected = client.patch(
+            f"/api/v1/capture-drafts/{draft_id}",
+            json={"description": "raw update should not persist", **raw_fields},
+        )
+        listed = client.get("/api/v1/capture-drafts")
+
+    assert created.status_code == 201, created.text
+    assert rejected.status_code == 422
+    for raw_value in raw_fields.values():
+        assert raw_value not in rejected.text
+    assert listed.status_code == 200
+    stored = listed.json()["items"][0]
+    assert stored["id"] == draft_id
+    assert stored["description"] == payload["description"]
 
 
 def test_capture_draft_create_rejects_inaccessible_missing_and_invalid_refs_neutrally(

@@ -62,7 +62,6 @@ interface FinanceApiClient {
         destination: AccountSummary,
         amount: String = "1.00",
     ): ApiResult<TransactionSummary>
-    suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse>
     suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> =
         ApiResult.Failure("Capture drafts are not supported by this client")
     suspend fun listCaptureDrafts(status: String = "pending"): ApiResult<List<CaptureDraft>> =
@@ -141,23 +140,6 @@ data class MoneyTotal(
     val incomeTotal: String,
     val expenseTotal: String,
     val netTotal: String,
-)
-
-data class ImportReportPreviewRequest(
-    val reportType: String,
-    val targetScope: String,
-    val householdId: String? = null,
-    val fileName: String? = null,
-    val fileSizeBytes: Long? = null,
-    val mimeType: String? = null,
-    val sourceType: String = "file_metadata_only",
-)
-
-data class ImportReportPreviewResponse(
-    val status: String,
-    val canConfirm: Boolean,
-    val willChangeData: Boolean,
-    val message: String,
 )
 
 data class CaptureDraftCreateRequest(
@@ -483,26 +465,6 @@ class LiveFinanceApiClient(
         ).dataObject().let(::parseTransaction)
     }
 
-    override suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse> = safeCall {
-        val body = JSONObject()
-            .put("reportType", request.reportType)
-            .put("sourceType", "file_metadata_only")
-            .put("targetScope", request.targetScope)
-            .put("householdId", request.householdId)
-            .apply {
-                request.fileName?.take(255)?.let { put("fileName", it) }
-                request.fileSizeBytes?.takeIf { it >= 0 }?.let { put("fileSizeBytes", it) }
-                request.mimeType?.let { put("mimeType", it) }
-            }
-            .toString()
-
-        request(
-            path = "/api/v1/imports/report-preview",
-            method = "POST",
-            body = body,
-        ).let(::parseImportReportPreview)
-    }
-
     override suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> = safeCall {
         request(
             path = "/api/v1/capture-drafts",
@@ -702,15 +664,6 @@ private fun parseMoneyTotal(json: JSONObject): MoneyTotal {
         incomeTotal = json.optString("incomeTotal"),
         expenseTotal = json.optString("expenseTotal"),
         netTotal = json.optString("netTotal"),
-    )
-}
-
-private fun parseImportReportPreview(json: JSONObject): ImportReportPreviewResponse {
-    return ImportReportPreviewResponse(
-        status = json.optString("status", "preview_placeholder"),
-        canConfirm = json.optBoolean("canConfirm", false),
-        willChangeData = json.optBoolean("willChangeData", false),
-        message = json.optString("message", "Файл не импортирован. Сейчас показана только предварительная сводка."),
     )
 }
 

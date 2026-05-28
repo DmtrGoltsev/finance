@@ -19,13 +19,13 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 - Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
 - PWA/iPhone final GO: `MVP_EVIDENCE/prod-qa-20260519-040710/pwa-iphone-final/prod-pwa-iphone-final-qa-report.md`.
-- Финальное покрытие включает login/logout, accounts/assets, shared/personal privacy, categories add/edit, income/expense/transfer, brokerage/investment API smoke, report modes и metadata-only import placeholder.
+- Финальное покрытие включает login/logout, accounts/assets, shared/personal privacy, categories add/edit, income/expense/transfer, brokerage/investment API smoke и report modes. Backend/OpenAPI cleanup после этого статуса вывел metadata-only import placeholder из mounted MVP scope.
 
 ## Ограничения
 
 - PWA service worker на plain HTTP IP ограничен средой: приложение работает online, но штатный service worker/PWA install требует HTTPS/domain.
 - CVE scans, backup/restore, physical iPhone/Safari требуют отдельного proof или waiver.
-- Import остается metadata-only; файл не парсится и не создает операции, категории или переводы.
+- Import endpoints не входят в текущий mounted backend/OpenAPI MVP scope; реальные импорт, парсинг файлов и создание операций/категорий/переводов остаются вне scope.
 - Post-MVP safe auto-capture documented as Android opt-in pending drafts: SMS uses `RECEIVE_SMS`, notification capture uses system notification listener settings, raw SMS/notification body is not stored server-side, and transactions are created only after user confirm/edit.
 - Investment detailed UI ограничен; подтвержден smoke-уровень brokerage/investment API.
 - Production QA data cleanup/retention остается отдельным xhigh owner decision.

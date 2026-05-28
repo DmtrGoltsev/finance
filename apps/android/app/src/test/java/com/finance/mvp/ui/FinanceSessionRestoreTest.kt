@@ -6,8 +6,6 @@ import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
-import com.finance.mvp.api.ImportReportPreviewRequest
-import com.finance.mvp.api.ImportReportPreviewResponse
 import com.finance.mvp.api.LiveFinanceApiClient
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.SessionStatus
@@ -298,12 +296,6 @@ private class FakeFinanceApiClient(
         destination: AccountSummary,
         amount: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Failure("unused")
-    }
-
-    override suspend fun previewImportReport(
-        request: ImportReportPreviewRequest,
-    ): ApiResult<ImportReportPreviewResponse> {
         return ApiResult.Failure("unused")
     }
 

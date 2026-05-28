@@ -6,8 +6,6 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
-  ImportReportPreviewRequest,
-  ImportReportPreviewResponse,
   MoneyAmount,
   OperationSummary,
   ReportMode,
@@ -216,7 +214,6 @@ export interface FinanceApiClient {
   }): Promise<TransferSummary>;
   archiveTransfer(transactionId: string): Promise<void>;
   restoreTransfer(transactionId: string): Promise<TransferSummary>;
-  previewImportReport(input: ImportReportPreviewRequest): Promise<ImportReportPreviewResponse>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -547,28 +544,6 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapTransfer(envelope.data, []);
   }
 
-  async previewImportReport(
-    input: ImportReportPreviewRequest
-  ): Promise<ImportReportPreviewResponse> {
-    const payload = normalizeImportPreviewRequest(input);
-
-    try {
-      return await this.request<ImportReportPreviewResponse>(
-        "/api/v1/imports/report-preview",
-        {
-          method: "POST",
-          body: JSON.stringify(payload)
-        }
-      );
-    } catch (error) {
-      if (!shouldUseImportPreviewFallback(error)) {
-        throw error;
-      }
-
-      return buildImportPreviewPlaceholder(payload);
-    }
-  }
-
   private async getReports(
     householdId: string | null,
     currency: CurrencyCode
@@ -648,14 +623,6 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
 function isUnsafeMethod(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
-}
-
-function shouldUseImportPreviewFallback(error: unknown): boolean {
-  if (error instanceof ApiRequestError) {
-    return error.status === 404 || error.status === 405;
-  }
-
-  return Boolean(import.meta.env.DEV) && error instanceof TypeError;
 }
 
 function readCookie(name: string): string | null {
@@ -915,92 +882,6 @@ function userFacingSeedText(value: string | null | undefined): string {
 
 function uniqueSuffix(): string {
   return new Date().toISOString().replace(/\D/g, "").slice(4, 14);
-}
-
-function normalizeImportPreviewRequest(
-  input: ImportReportPreviewRequest
-): ImportReportPreviewRequest {
-  return {
-    reportType: input.reportType,
-    sourceType: "file_metadata_only",
-    targetScope: input.targetScope,
-    householdId: input.targetScope === "shared" ? input.householdId : null,
-    ...(input.fileName ? { fileName: input.fileName.slice(0, 255) } : {}),
-    ...(Number.isFinite(input.fileSizeBytes)
-      ? { fileSizeBytes: Math.max(0, Math.trunc(input.fileSizeBytes ?? 0)) }
-      : {}),
-    ...(input.mimeType ? { mimeType: input.mimeType } : {})
-  };
-}
-
-function buildImportPreviewPlaceholder(
-  input: ImportReportPreviewRequest
-): ImportReportPreviewResponse {
-  return {
-    status: "preview_placeholder",
-    canConfirm: false,
-    willChangeData: false,
-    message: "Файл не импортирован. Сейчас показана только предварительная сводка.",
-    scope: {
-      targetScope: input.targetScope,
-      householdId: input.targetScope === "shared" ? input.householdId : null
-    },
-    file: {
-      fileName: input.fileName,
-      fileSizeBytes: input.fileSizeBytes,
-      mimeType: input.mimeType
-    },
-    summary: {
-      title: "Предварительный просмотр импорта",
-      statusText: "Импорт пока не выполняется",
-      sections: [
-        {
-          key: "accounts_assets",
-          title: "Счета и активы",
-          status: "not_recognized_yet",
-          text: "Будущий импорт сможет показать найденные счета и активы."
-        },
-        {
-          key: "transactions",
-          title: "Операции",
-          status: "not_recognized_yet",
-          text: "Операции не распознаны и не добавлены."
-        },
-        {
-          key: "categories",
-          title: "Категории",
-          status: "not_recognized_yet",
-          text: "Категории не распознаны и не созданы."
-        },
-        {
-          key: "transfers",
-          title: "Переводы",
-          status: "not_recognized_yet",
-          text: "Переводы не распознаны и не созданы."
-        },
-        {
-          key: "brokerage_deposits_metals",
-          title: "Брокеры, вклады и металлы",
-          status: "not_recognized_yet",
-          text: "Специальные активы пока не обрабатываются."
-        }
-      ]
-    },
-    warnings: [
-      {
-        code: "NO_DATA_CHANGES_WITHOUT_CONFIRMATION",
-        text: "Данные не изменятся без подтверждения."
-      },
-      {
-        code: "NO_FILE_STORAGE_OR_PARSING",
-        text: "Содержимое файла не сохраняется и не разбирается."
-      },
-      {
-        code: "PLACEHOLDER_ONLY",
-        text: "Импорт пока не выполняется."
-      }
-    ]
-  };
 }
 
 export const financeApiClient: FinanceApiClient = new LiveFinanceApiClient();

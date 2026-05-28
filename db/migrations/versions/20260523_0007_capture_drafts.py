@@ -6,7 +6,7 @@ Create Date: 2026-05-23
 
 Rollback notes:
 - Downgrade drops only capture_drafts and its indexes.
-- No raw SMS or notification body columns are created by this revision.
+- No raw SMS, notification, or screenshot payload columns are created by this revision.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def upgrade() -> None:
             name=op.f("ck_capture_drafts_status_valid"),
         ),
         sa.CheckConstraint(
-            "capture_source IN ('sms', 'notification')",
+            "capture_source IN ('sms', 'notification', 'screenshot')",
             name=op.f("ck_capture_drafts_capture_source_valid"),
         ),
         sa.CheckConstraint("amount > 0", name=op.f("ck_capture_drafts_positive_amount")),

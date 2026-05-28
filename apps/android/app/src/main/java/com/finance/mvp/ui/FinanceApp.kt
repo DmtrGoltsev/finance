@@ -1,10 +1,13 @@
 package com.finance.mvp.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -79,8 +82,6 @@ import com.finance.mvp.api.CaptureDraftUpdateRequest
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
-import com.finance.mvp.api.ImportReportPreviewRequest
-import com.finance.mvp.api.ImportReportPreviewResponse
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.RegistrationResult
 import com.finance.mvp.api.SessionStatus
@@ -89,12 +90,19 @@ import com.finance.mvp.api.userFacingSeedText
 import com.finance.mvp.capture.CaptureOptInStore
 import com.finance.mvp.capture.CaptureParser
 import com.finance.mvp.ui.theme.FinanceTheme
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text as MlKitText
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -121,6 +129,7 @@ fun FinanceApp(
     var captureDrafts by remember { mutableStateOf<List<CaptureDraft>>(emptyList()) }
     var captureIsLoading by rememberSaveable { mutableStateOf(false) }
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
     val smsPermissionLauncher = rememberLauncherForActivityResult(
@@ -133,6 +142,63 @@ fun FinanceApp(
         } else {
             "SMS permission was not granted"
         }
+    }
+
+    fun processScreenshotCapture(uri: Uri) {
+        scope.launch {
+            captureIsLoading = true
+            screenshotOcrStatus = "Reading screenshot locally"
+            val candidateResult = withContext(Dispatchers.IO) {
+                runCatching {
+                    val ocrText = recognizeScreenshotText(context, uri)
+                    CaptureParser.parseScreenshotOcr(
+                        text = ocrText,
+                        capturedAtMillis = System.currentTimeMillis(),
+                    )
+                }
+            }
+            val candidate = candidateResult.getOrNull()
+            if (candidateResult.isFailure || candidate == null) {
+                screenshotOcrStatus = "Could not recognize a payment from this screenshot"
+                captureMessage = "Choose another screenshot or add the operation manually"
+                captureIsLoading = false
+                return@launch
+            }
+
+            screenshotOcrStatus = "Creating draft from recognized fields"
+            when (
+                val result = withContext(Dispatchers.IO) {
+                    apiClient.createCaptureDraft(candidate.toCreateRequest())
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val refreshResult = withContext(Dispatchers.IO) {
+                        apiClient.listCaptureDrafts(status = "pending")
+                    }
+                    if (refreshResult is ApiResult.Success) {
+                        captureDrafts = refreshResult.value
+                    }
+                    screenshotOcrStatus = "Screenshot draft created: ${candidate.amount} ${candidate.currency}"
+                    captureMessage = "Screenshot draft created"
+                    captureIsLoading = false
+                }
+                is ApiResult.Failure -> {
+                    screenshotOcrStatus = "Could not create screenshot draft"
+                    captureMessage = result.userFacingMessage()
+                    captureIsLoading = false
+                }
+            }
+        }
+    }
+
+    val screenshotPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) {
+            screenshotOcrStatus = "Screenshot selection cancelled"
+            return@rememberLauncherForActivityResult
+        }
+        processScreenshotCapture(uri)
     }
 
     fun hasSmsPermission(): Boolean {
@@ -578,9 +644,17 @@ fun FinanceApp(
                     captureDrafts = captureDrafts,
                     captureIsLoading = captureIsLoading,
                     captureMessage = captureMessage,
+                    screenshotOcrStatus = screenshotOcrStatus,
                     onSmsCaptureChange = ::setSmsCaptureOptIn,
                     onNotificationCaptureChange = ::setNotificationCaptureOptIn,
                     onRefreshCaptureDrafts = { loadCaptureDrafts() },
+                    onPickScreenshot = {
+                        screenshotPickerLauncher.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    },
                     onSubmitSyntheticCapture = ::submitSyntheticCapture,
                     onConfirmCaptureDraft = ::confirmCaptureDraft,
                     onDiscardCaptureDraft = ::discardCaptureDraft,
@@ -864,9 +938,11 @@ private fun LazyListScope.operationsContent(
     captureDrafts: List<CaptureDraft>,
     captureIsLoading: Boolean,
     captureMessage: String?,
+    screenshotOcrStatus: String?,
     onSmsCaptureChange: (Boolean) -> Unit,
     onNotificationCaptureChange: (Boolean) -> Unit,
     onRefreshCaptureDrafts: () -> Unit,
+    onPickScreenshot: () -> Unit,
     onSubmitSyntheticCapture: () -> Unit,
     onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
@@ -883,9 +959,11 @@ private fun LazyListScope.operationsContent(
             categories = dashboard?.categories.orEmpty(),
             isLoading = captureIsLoading,
             message = captureMessage,
+            screenshotOcrStatus = screenshotOcrStatus,
             onSmsCaptureChange = onSmsCaptureChange,
             onNotificationCaptureChange = onNotificationCaptureChange,
             onRefresh = onRefreshCaptureDrafts,
+            onPickScreenshot = onPickScreenshot,
             onSubmitSynthetic = onSubmitSyntheticCapture,
             onConfirm = onConfirmCaptureDraft,
             onDiscard = onDiscardCaptureDraft,
@@ -912,9 +990,11 @@ private fun CaptureDraftReviewCard(
     categories: List<CategorySummary>,
     isLoading: Boolean,
     message: String?,
+    screenshotOcrStatus: String?,
     onSmsCaptureChange: (Boolean) -> Unit,
     onNotificationCaptureChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
+    onPickScreenshot: () -> Unit,
     onSubmitSynthetic: () -> Unit,
     onConfirm: (CaptureDraft, String, String) -> Unit,
     onDiscard: (CaptureDraft) -> Unit,
@@ -951,6 +1031,18 @@ private fun CaptureDraftReviewCard(
                 enabled = true,
                 onCheckedChange = onNotificationCaptureChange,
             )
+
+            Button(
+                onClick = onPickScreenshot,
+                enabled = isAuthenticated && !isLoading,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Choose screenshot")
+            }
+
+            screenshotOcrStatus?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
@@ -1166,7 +1258,6 @@ private fun LazyListScope.analyticsContent(
         )
     }
     item { AnalyticsSummaryCard(view) }
-    item { ImportReportPlaceholderCard() }
     item { CategoryBreakdownCard(view.topCategories) }
     item { CapitalBreakdownCard(view.assetSummaries) }
 }
@@ -1404,111 +1495,6 @@ private fun AnalyticsSummaryCard(view: DashboardView) {
             MetricLine("Доходы", view.monthIncome.formatMoney(view.primaryCurrency), Color(0xFF2E7D62))
             MetricLine("Расходы", view.monthExpenses.formatMoney(view.primaryCurrency), Color(0xFFE35D4F))
             MetricLine("Переводы", view.transferTotal.formatMoney(view.primaryCurrency), Color(0xFF5B6EE1))
-        }
-    }
-}
-
-@Composable
-private fun ImportReportPlaceholderCard() {
-    var reportType by rememberSaveable { mutableStateOf(ImportReportType.Generic) }
-    var fileName by rememberSaveable { mutableStateOf("report.pdf") }
-    var targetScope by rememberSaveable { mutableStateOf(ImportTargetScope.Personal) }
-    var showPreview by rememberSaveable { mutableStateOf(true) }
-    val draft = ImportReportDraft(
-        reportType = reportType,
-        fileName = fileName.ifBlank { "report.pdf" },
-        targetScope = targetScope,
-    )
-    val preview = importReportPlaceholderPreview(draft)
-
-    ElevatedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("import-report-placeholder"),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconBubble(R.drawable.ic_receipt_24, Color(0xFF227C9D), size = 36)
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Импорт отчета", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Показана только предварительная сводка", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            Text("Тип отчета", style = MaterialTheme.typography.labelLarge)
-            ChipRow(
-                values = ImportReportType.entries.toList(),
-                selected = reportType,
-                onSelected = { reportType = it },
-                title = { it.title },
-                icon = { it.icon() },
-            )
-
-            OutlinedTextField(
-                value = fileName,
-                onValueChange = { fileName = it.take(255) },
-                label = { Text("Имя файла-заглушка") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Text("Режим видимости", style = MaterialTheme.typography.labelLarge)
-            ChipRow(
-                values = ImportTargetScope.entries.toList(),
-                selected = targetScope,
-                onSelected = { targetScope = it },
-                title = { it.title },
-                icon = { it.icon() },
-            )
-
-            Button(
-                onClick = { showPreview = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Показать сводку")
-            }
-
-            if (showPreview) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(preview.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(preview.statusText) },
-                        leadingIcon = {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_receipt_24),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                    )
-                    Text(preview.fileStatusText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    Text(preview.summaryText, style = MaterialTheme.typography.bodySmall)
-                    Text(preview.scopeText, style = MaterialTheme.typography.bodySmall)
-                    Text("Что сможет распознать импорт", style = MaterialTheme.typography.labelLarge)
-                    preview.sections.forEach { section ->
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(section.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text(section.text, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    Text("Перед импортом", style = MaterialTheme.typography.labelLarge)
-                    preview.warnings.forEach { warning ->
-                        MetricLine(warning, " ", Color(0xFF8A6A12))
-                    }
-                    OutlinedButton(
-                        onClick = {},
-                        enabled = preview.canConfirm,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Подтверждение пока недоступно")
-                    }
-                }
-            }
         }
     }
 }
@@ -2260,21 +2246,6 @@ private fun QuickEntryType.icon(): Int = when (this) {
     QuickEntryType.Asset -> R.drawable.ic_wallet_24
 }
 
-@DrawableRes
-private fun ImportReportType.icon(): Int = when (this) {
-    ImportReportType.Generic -> R.drawable.ic_receipt_24
-    ImportReportType.Bank -> R.drawable.ic_bank_24
-    ImportReportType.Broker -> R.drawable.ic_chart_24
-    ImportReportType.Deposit -> R.drawable.ic_savings_24
-    ImportReportType.Metals -> R.drawable.ic_coin_24
-}
-
-@DrawableRes
-private fun ImportTargetScope.icon(): Int = when (this) {
-    ImportTargetScope.Personal -> R.drawable.ic_person_24
-    ImportTargetScope.Shared -> R.drawable.ic_group_24
-}
-
 private fun List<AccountSummary>.firstByIdOrFirst(id: String): AccountSummary? {
     return firstOrNull { it.id.isNotBlank() && it.id == id } ?: firstOrNull()
 }
@@ -2325,6 +2296,31 @@ private fun ApiResult.Failure.isAuthenticationFailure(): Boolean {
         "HTTP 401",
         "HTTP 403",
     ).any { message.contains(it, ignoreCase = true) }
+}
+
+private suspend fun recognizeScreenshotText(context: Context, uri: Uri): String {
+    val image = InputImage.fromFilePath(context, uri)
+    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    return try {
+        recognizer.process(image).awaitMlKitText().text
+    } finally {
+        recognizer.close()
+    }
+}
+
+private suspend fun com.google.android.gms.tasks.Task<MlKitText>.awaitMlKitText(): MlKitText {
+    return suspendCancellableCoroutine { continuation ->
+        addOnSuccessListener { result ->
+            if (continuation.isActive) {
+                continuation.resume(result)
+            }
+        }
+        addOnFailureListener { error ->
+            if (continuation.isActive) {
+                continuation.resumeWithException(error)
+            }
+        }
+    }
 }
 
 @Preview(showBackground = true, widthDp = 390)
@@ -2417,17 +2413,6 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         amount: String,
     ): ApiResult<TransactionSummary> {
         return ApiResult.Success(TransactionSummary("transfer", amount, source.currency, "2026-05-18T09:00:00Z", "Между счетами", "personal_same_owner", "posted", id = "txn-transfer-created", accountId = source.id, counterpartyAccountId = destination.id, version = 1))
-    }
-
-    override suspend fun previewImportReport(request: ImportReportPreviewRequest): ApiResult<ImportReportPreviewResponse> {
-        return ApiResult.Success(
-            ImportReportPreviewResponse(
-                status = "preview_placeholder",
-                canConfirm = false,
-                willChangeData = false,
-                message = "Файл не импортирован. Сейчас показана только предварительная сводка.",
-            ),
-        )
     }
 
     override suspend fun logout(): ApiResult<Unit> = ApiResult.Success(Unit)

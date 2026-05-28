@@ -86,8 +86,8 @@ class CaptureDraftsMigrationSliceTests(unittest.TestCase):
 
     def test_revision_source_documents_no_raw_payload_columns(self) -> None:
         lowered = self.source.lower()
-        self.assertIn("no raw sms or notification body columns", lowered)
-        for forbidden in ("raw_message", "raw_notification", "raw_body"):
+        self.assertIn("no raw sms, notification, or screenshot payload columns", lowered)
+        for forbidden in ("raw_message", "raw_notification", "raw_screenshot", "raw_body"):
             self.assertNotIn(forbidden, lowered)
 
 

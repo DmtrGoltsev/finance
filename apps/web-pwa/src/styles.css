@@ -281,7 +281,6 @@ button {
 .operationRow,
 .listRow,
 .settingRow,
-.importPanel,
 .categoryForm,
 .recognitionItem {
   border: 1px solid var(--border);
@@ -329,120 +328,24 @@ button {
   gap: 8px;
 }
 
-.importPanel {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-}
-
-.importPanel.compact {
-  background: #fbfdff;
-}
-
-.importForm {
-  display: grid;
-  gap: 12px;
-}
-
-.importFields {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1.2fr) minmax(210px, 1fr);
-  gap: 10px;
-  align-items: end;
-}
-
-.importModeGroup {
-  min-height: 42px;
-  align-content: center;
-}
-
-.importActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.importActions span,
-.importGuardrail,
-.importError,
 .formError,
 .formHint,
-.importPreviewHead span,
-.importMeta dt,
-.recognitionItem span,
-.importWarnings span {
+.recognitionItem span {
   color: var(--muted);
   font-size: 13px;
 }
 
-.importGuardrail,
-.importError,
 .formError,
 .formHint {
   margin: 0;
 }
 
-.importError,
 .formError {
   color: var(--danger);
 }
 
 .formHint {
   color: var(--success);
-}
-
-.importPreview {
-  display: grid;
-  gap: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-
-.importPreviewHead {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.importPreviewHead > div {
-  display: grid;
-  gap: 3px;
-}
-
-.importPreviewHead b {
-  color: var(--accent-strong);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.importMeta {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-}
-
-.importMeta div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px;
-}
-
-.importMeta dt,
-.importMeta dd {
-  margin: 0;
-}
-
-.importMeta dd {
-  overflow: hidden;
-  color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .recognitionGrid {
@@ -461,20 +364,6 @@ button {
 .recognitionItem strong,
 .recognitionItem span {
   overflow-wrap: anywhere;
-}
-
-.importWarnings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.importWarnings span {
-  border: 1px solid #c8d7f4;
-  border-radius: 8px;
-  background: #edf4ff;
-  padding: 7px 9px;
-  color: var(--accent-strong);
 }
 
 .listRow,
@@ -757,12 +646,7 @@ button {
   .assetGrid,
   .categoryGrid,
   .categoryFormGrid,
-  .importMeta,
   .recognitionGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .importFields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -803,8 +687,6 @@ button {
   .assetGrid,
   .categoryGrid,
   .categoryFormGrid,
-  .importFields,
-  .importMeta,
   .recognitionGrid {
     grid-template-columns: 1fr;
   }

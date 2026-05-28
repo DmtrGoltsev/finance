@@ -7,7 +7,6 @@ import {
   Check,
   CircleDollarSign,
   CreditCard,
-  FileUp,
   Landmark,
   Layers3,
   LineChart,
@@ -39,8 +38,6 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
-  ImportReportPreviewResponse,
-  ImportReportType,
   MoneyAmount,
   OperationSummary,
   ReportMode,
@@ -59,7 +56,6 @@ type SectionId =
 type ViewMode = "personal" | "shared" | "overview";
 type VisibilityMode = "personal" | "shared";
 type QuickKind = "expense" | "income" | "transfer" | "asset";
-type ImportMode = ViewMode;
 
 type QuickAddInput = {
   kind: QuickKind;
@@ -143,14 +139,6 @@ const categoryPalette = [
   "#b45309"
 ];
 
-const importReportTypeLabels: Record<ImportReportType, string> = {
-  generic_finance_report: "Общий финансовый",
-  bank_statement: "Выписка банка",
-  brokerage_report: "Отчет брокера",
-  deposit_report: "Вклад",
-  metals_report: "Металлы"
-};
-
 function formatMoney(amount: MoneyAmount): string {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -164,22 +152,6 @@ function formatDate(value: string): string {
     day: "2-digit",
     month: "short"
   }).format(new Date(value));
-}
-
-function formatFileSize(value?: number): string {
-  if (!Number.isFinite(value)) {
-    return "Размер не указан";
-  }
-
-  const bytes = Math.max(0, value ?? 0);
-  if (bytes < 1024) {
-    return `${bytes} Б`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${Math.round(bytes / 1024)} КБ`;
-  }
-
-  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
 function todayInputValue(): string {
@@ -403,7 +375,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           />
         )}
         {activeSection === "operations" && (
-          <OperationsPage snapshot={snapshot} viewMode={viewMode} client={client} />
+          <OperationsPage snapshot={snapshot} viewMode={viewMode} />
         )}
         {activeSection === "assets" && (
           <AssetsPage snapshot={snapshot} viewMode={viewMode} />
@@ -420,7 +392,6 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
             snapshot={snapshot}
             report={activeReport}
             viewMode={viewMode}
-            client={client}
           />
         )}
         {activeSection === "settings" && (
@@ -684,12 +655,10 @@ function Metric({
 
 function OperationsPage({
   snapshot,
-  viewMode,
-  client
+  viewMode
 }: {
   snapshot: DashboardSnapshot;
   viewMode: ViewMode;
-  client: FinanceApiClient;
 }) {
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
   const operations = visibleOperations(snapshot.operations, accounts);
@@ -702,7 +671,6 @@ function OperationsPage({
         <h3 id="operations-title">Операции</h3>
         <span>{timeline.length} записей</span>
       </div>
-      <ImportReportPanel client={client} snapshot={snapshot} viewMode={viewMode} compact />
       <TimelineList items={timeline} />
     </section>
   );
@@ -904,13 +872,11 @@ function CategoryForm({
 function AnalyticsPage({
   snapshot,
   report,
-  viewMode,
-  client
+  viewMode
 }: {
   snapshot: DashboardSnapshot;
   report: ReportSummary;
   viewMode: ViewMode;
-  client: FinanceApiClient;
 }) {
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
   const operations = visibleOperations(snapshot.operations, accounts);
@@ -924,7 +890,6 @@ function AnalyticsPage({
         <h3 id="analytics-title">Аналитика</h3>
         <span>{report.periodLabel}</span>
       </div>
-      <ImportReportPanel client={client} snapshot={snapshot} viewMode={viewMode} />
       <div className="metricGrid three">
         <Metric label="Доходы" value={formatMoney(report.income)} tone="success" />
         <Metric label="Расходы" value={formatMoney(report.expense)} tone="danger" />
@@ -954,191 +919,6 @@ function AnalyticsPage({
           </div>
         </section>
       </div>
-    </section>
-  );
-}
-
-function ImportReportPanel({
-  client,
-  snapshot,
-  viewMode,
-  compact = false
-}: {
-  client: FinanceApiClient;
-  snapshot: DashboardSnapshot;
-  viewMode: ViewMode;
-  compact?: boolean;
-}) {
-  const [reportType, setReportType] = useState<ImportReportType>("generic_finance_report");
-  const [mode, setMode] = useState<ImportMode>(viewMode);
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<ImportReportPreviewResponse | null>(null);
-  const [isLoading, setLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-
-  const householdId = snapshot.session.householdId;
-  const targetScope = mode === "shared" ? "shared" : "personal";
-  const canPreview = Boolean(file) && (!mode || mode !== "shared" || householdId);
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!file || !canPreview) {
-      return;
-    }
-
-    setLoading(true);
-    setPreviewError(null);
-    try {
-      const nextPreview = await client.previewImportReport({
-        reportType,
-        sourceType: "file_metadata_only",
-        targetScope,
-        householdId: targetScope === "shared" ? householdId : null,
-        fileName: file.name,
-        fileSizeBytes: file.size,
-        mimeType: file.type || "application/octet-stream"
-      });
-      setPreview(nextPreview);
-    } catch {
-      setPreviewError("Не удалось показать сводку. Попробуйте выбрать файл еще раз.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <section
-      className={compact ? "importPanel compact" : "importPanel"}
-      aria-labelledby={compact ? "import-entry-operations" : "import-entry-analytics"}
-    >
-      <form className="importForm" onSubmit={submit}>
-        <div className="sectionHead compact">
-          <div>
-            <h3 id={compact ? "import-entry-operations" : "import-entry-analytics"}>
-              Импорт отчета
-            </h3>
-            <span>Показана только предварительная сводка</span>
-          </div>
-          <FileUp size={20} aria-hidden="true" />
-        </div>
-
-        <div className="importFields">
-          <label className="field">
-            <span>Тип отчета</span>
-            <select
-              value={reportType}
-              onChange={(event) => setReportType(event.target.value as ImportReportType)}
-            >
-              {Object.entries(importReportTypeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Файл</span>
-            <input
-              aria-label="Файл отчета"
-              type="file"
-              onChange={(event) => {
-                setFile(event.target.files?.[0] ?? null);
-                setPreview(null);
-              }}
-            />
-          </label>
-          <fieldset className="visibilityGroup importModeGroup">
-            <legend>Режим</legend>
-            <label>
-              <input
-                checked={mode === "personal"}
-                name={compact ? "import-mode-operations" : "import-mode-analytics"}
-                type="radio"
-                onChange={() => setMode("personal")}
-              />
-              Личное
-            </label>
-            <label>
-              <input
-                checked={mode === "shared"}
-                name={compact ? "import-mode-operations" : "import-mode-analytics"}
-                type="radio"
-                onChange={() => setMode("shared")}
-              />
-              Общее
-            </label>
-            <label>
-              <input
-                checked={mode === "overview"}
-                name={compact ? "import-mode-operations" : "import-mode-analytics"}
-                type="radio"
-                onChange={() => setMode("overview")}
-              />
-              Обзор
-            </label>
-          </fieldset>
-        </div>
-
-        <div className="importActions">
-          <button className="ghostButton" type="submit" disabled={!canPreview || isLoading}>
-            <FileUp size={17} aria-hidden="true" />
-            {isLoading ? "Показываем" : "Показать сводку"}
-          </button>
-          <span>Данные не изменятся без подтверждения</span>
-        </div>
-        <p className="importGuardrail">Содержимое файла не сохраняется и не разбирается.</p>
-        {mode === "shared" && !householdId && (
-          <p className="importError">Для общего режима нужен семейный доступ.</p>
-        )}
-        {previewError && <p className="importError">{previewError}</p>}
-      </form>
-
-      {preview && (
-        <div className="importPreview" aria-label="Предварительный просмотр импорта">
-          <div className="importPreviewHead">
-            <div>
-              <strong>{preview.summary.title}</strong>
-              <span>{preview.summary.statusText}</span>
-            </div>
-            <b>Файл не разобран</b>
-          </div>
-          <dl className="importMeta">
-            <div>
-              <dt>Источник</dt>
-              <dd>{importReportTypeLabels[reportType]}</dd>
-            </div>
-            <div>
-              <dt>Режим</dt>
-              <dd>{modeLabel(mode)}</dd>
-            </div>
-            <div>
-              <dt>Имя файла</dt>
-              <dd>{preview.file.fileName || "Файл выбран"}</dd>
-            </div>
-            <div>
-              <dt>Размер</dt>
-              <dd>{formatFileSize(preview.file.fileSizeBytes)}</dd>
-            </div>
-            <div>
-              <dt>Статус</dt>
-              <dd>{preview.summary.statusText}</dd>
-            </div>
-          </dl>
-          <div className="recognitionGrid" aria-label="Секции распознавания">
-            {preview.summary.sections.map((section) => (
-              <article key={section.key} className="recognitionItem">
-                <strong>{section.title}</strong>
-                <span>{section.text}</span>
-              </article>
-            ))}
-          </div>
-          <div className="importWarnings" aria-label="Перед импортом">
-            {preview.warnings.map((warning) => (
-              <span key={warning.code}>{warning.text}</span>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 }
@@ -1709,16 +1489,6 @@ function viewModeDescription(mode: ViewMode): string {
   };
 
   return descriptions[mode];
-}
-
-function modeLabel(mode: ImportMode): string {
-  const labels: Record<ImportMode, string> = {
-    personal: "Личное",
-    shared: "Общее",
-    overview: "Обзор"
-  };
-
-  return labels[mode];
 }
 
 function shortCategoryName(name: string): string {

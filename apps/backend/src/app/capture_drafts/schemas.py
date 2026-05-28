@@ -19,6 +19,7 @@ class CaptureDraftStatus(StrEnum):
 class CaptureSource(StrEnum):
     SMS = "sms"
     NOTIFICATION = "notification"
+    SCREENSHOT = "screenshot"
 
 
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=500)]

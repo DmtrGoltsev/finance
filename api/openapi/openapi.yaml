@@ -11,14 +11,13 @@ info:
     enum values, error codes, pagination envelopes, and auth requirements.
 
     MVP boundaries are intentionally narrow: financial data is manual-entry only,
-    `sourceType` accepts only `manual`, transfers are same-scope only, and the
-    only import surface is a metadata-only report-preview placeholder. Safe
-    auto-capture may create pending drafts from sanitized structured SMS or
-    notification candidates, but raw message/notification bodies are rejected
-    and confirmed transactions remain `sourceType=manual`. There is no real
-    import, parser, file storage, bank API, SMS import, push import, broker
-    credential, external credential, card, IBAN, raw statement, or
-    notification-token endpoint.
+    `sourceType` accepts only `manual`, and transfers are same-scope only. Safe
+    auto-capture may create pending drafts from sanitized structured SMS,
+    notification, or screenshot candidates, but raw message/notification bodies
+    and raw screenshot payloads are rejected and confirmed transactions remain
+    `sourceType=manual`. There is no real import, parser, file storage, bank API,
+    SMS import, push import, broker credential, external credential, card, IBAN,
+    raw statement, or notification-token endpoint.
 
     Privacy invariants:
     - personal data is owner-only;
@@ -39,13 +38,11 @@ tags:
   - name: Transactions
     description: Manual transaction entry, search, autocomplete, and lifecycle operations.
   - name: CaptureDrafts
-    description: Pending safe auto-capture candidates. Raw SMS and notification body text is never accepted.
+    description: Pending safe auto-capture candidates. Raw SMS, notification, and screenshot payloads are never accepted.
   - name: Categories
     description: Personal and household category management for manual finance records.
   - name: Reports
     description: Privacy-filtered MVP reports over visible manual financial data.
-  - name: Imports
-    description: Metadata-only import preview placeholder. It never stores files, parses rows, or changes financial records.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
@@ -856,33 +853,6 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
-  /imports/report-preview:
-    post:
-      tags: [Imports]
-      operationId: previewImportReport
-      summary: Preview a future report import using metadata only.
-      description: |
-        Placeholder-only endpoint. It accepts selected report metadata, file name,
-        size, and MIME type only. It never accepts file bodies, parsed rows,
-        account ids from file content, amounts, descriptions, credentials, or a
-        confirm/apply action. `canConfirm` and `willChangeData` are always false.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ImportReportPreviewRequest'
-      responses:
-        '200':
-          description: Safe placeholder preview.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ImportReportPreviewResponse'
-        '4XX':
-          $ref: '#/components/responses/Error'
-        default:
-          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     pwaCookieAuth:
@@ -1129,19 +1099,8 @@ components:
       enum: [pending, confirmed, discarded]
     CaptureSource:
       type: string
-      enum: [sms, notification]
+      enum: [sms, notification, screenshot]
       description: Sanitized structured capture source only; it is not a transaction sourceType.
-    ImportReportType:
-      type: string
-      enum: [generic_finance_report, bank_statement, brokerage_report, deposit_report, metals_report]
-    ImportSourceType:
-      type: string
-      enum: [file_metadata_only]
-      description: Only file metadata is accepted by the placeholder endpoint.
-      x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
-    ImportTargetScope:
-      type: string
-      enum: [personal, shared]
     RecordStatus:
       type: string
       enum: [active, archived, deleted]
@@ -1681,7 +1640,7 @@ components:
           $ref: '#/components/schemas/DateTime'
         updatedAt:
           $ref: '#/components/schemas/DateTime'
-      description: Contains sanitized structured fields only. Raw SMS or notification bodies are never stored or returned.
+      description: Contains sanitized structured fields only. Raw SMS, notification, or screenshot payloads are never stored or returned.
     CaptureDraftCreateRequest:
       type: object
       additionalProperties: false
@@ -2056,128 +2015,6 @@ components:
             $ref: '#/components/schemas/TransactionDto'
         page:
           $ref: '#/components/schemas/PageInfo'
-    ImportReportPreviewRequest:
-      type: object
-      additionalProperties: false
-      required: [reportType, sourceType, targetScope]
-      properties:
-        reportType:
-          $ref: '#/components/schemas/ImportReportType'
-        sourceType:
-          $ref: '#/components/schemas/ImportSourceType'
-        targetScope:
-          $ref: '#/components/schemas/ImportTargetScope'
-        householdId:
-          anyOf:
-            - $ref: '#/components/schemas/ResourceId'
-            - type: 'null'
-          description: Required for shared preview; rejected for personal preview.
-        fileName:
-          type: string
-          maxLength: 255
-          description: Display basename only; path segments and NUL bytes are not echoed.
-        fileSizeBytes:
-          type: integer
-          minimum: 0
-        mimeType:
-          type: string
-          maxLength: 255
-      description: Must not include fileContent, base64, text, rows, parsedData, accountIds, transactionIds, amounts, descriptions, credentials, or file bodies.
-    ImportScopeDto:
-      type: object
-      additionalProperties: false
-      required: [targetScope]
-      properties:
-        targetScope:
-          $ref: '#/components/schemas/ImportTargetScope'
-        householdId:
-          anyOf:
-            - $ref: '#/components/schemas/ResourceId'
-            - type: 'null'
-    ImportFileMetadataDto:
-      type: object
-      additionalProperties: false
-      properties:
-        fileName:
-          type: string
-          maxLength: 255
-        fileSizeBytes:
-          type: integer
-          minimum: 0
-        mimeType:
-          type: string
-          maxLength: 255
-    ImportSummarySectionDto:
-      type: object
-      additionalProperties: false
-      required: [key, title, status, text]
-      properties:
-        key:
-          type: string
-          enum: [accounts_assets, transactions, categories, transfers, brokerage_deposits_metals]
-        title:
-          type: string
-          maxLength: 120
-        status:
-          type: string
-          enum: [not_recognized_yet]
-        text:
-          type: string
-          maxLength: 500
-      description: Placeholder sections do not include counts, amounts, account names, category names, or transaction descriptions.
-    ImportSummaryDto:
-      type: object
-      additionalProperties: false
-      required: [title, statusText, sections]
-      properties:
-        title:
-          type: string
-          maxLength: 120
-        statusText:
-          type: string
-          maxLength: 160
-        sections:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportSummarySectionDto'
-    ImportWarningDto:
-      type: object
-      additionalProperties: false
-      required: [code, text]
-      properties:
-        code:
-          type: string
-          enum: [NO_DATA_CHANGES_WITHOUT_CONFIRMATION, NO_FILE_STORAGE_OR_PARSING, PLACEHOLDER_ONLY]
-        text:
-          type: string
-          maxLength: 300
-    ImportReportPreviewResponse:
-      type: object
-      additionalProperties: false
-      required: [status, canConfirm, willChangeData, message, scope, file, summary, warnings]
-      properties:
-        status:
-          type: string
-          enum: [preview_placeholder]
-        canConfirm:
-          type: boolean
-          enum: [false]
-        willChangeData:
-          type: boolean
-          enum: [false]
-        message:
-          type: string
-          maxLength: 300
-        scope:
-          $ref: '#/components/schemas/ImportScopeDto'
-        file:
-          $ref: '#/components/schemas/ImportFileMetadataDto'
-        summary:
-          $ref: '#/components/schemas/ImportSummaryDto'
-        warnings:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportWarningDto'
     SessionEnvelope:
       type: object
       additionalProperties: false

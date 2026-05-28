@@ -198,33 +198,9 @@
       "details": ""
     },
     {
-      "name": "select import report type",
+      "name": "removed file import preview UI is absent",
       "ok": true,
-      "details": ""
-    },
-    {
-      "name": "set import fixture file",
-      "ok": true,
-      "details": ""
-    },
-    {
-      "name": "tap import preview submit",
-      "ok": true,
-      "details": ""
-    },
-    {
-      "name": "import preview metadata only",
-      "ok": true,
-      "details": "{\"reportType\":\"bank_statement\",\"sourceType\":\"file_metadata_only\",\"targetScope\":\"personal\",\"householdId\":null,\"fileName\":\"iphone-flow-import-sample.csv\",\"fileSizeBytes\":26,\"mimeType\":\"text/csv\"}"
+      "details": "fileInputs=0"
     }
-  ],
-  "importRequest": {
-    "reportType": "bank_statement",
-    "sourceType": "file_metadata_only",
-    "targetScope": "personal",
-    "householdId": null,
-    "fileName": "iphone-flow-import-sample.csv",
-    "fileSizeBytes": 26,
-    "mimeType": "text/csv"
-  }
+  ]
 }

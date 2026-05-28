@@ -59,9 +59,6 @@ EXPECTED_APPROVED_REPORT_OPERATIONS = {
     ("GET", "/api/v1/reports/cash-flow"): "getReportCashFlow",
     ("GET", "/api/v1/reports/transactions"): "getReportTransactions",
 }
-EXPECTED_APPROVED_IMPORT_OPERATIONS = {
-    ("POST", "/api/v1/imports/report-preview"): "previewImportReport",
-}
 EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
     {
         ("DELETE", "/api/v1/sessions"),
@@ -75,7 +72,6 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
-        *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
     }
 )
 EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
@@ -86,7 +82,6 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
-        *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
     }
 )
 
@@ -126,6 +121,7 @@ EXCLUDED_CONCRETE_OPERATIONS = frozenset(
 )
 
 EXCLUDED_ROUTE_PREFIXES = (
+    "/api/v1/imports",
     "/api/v1/import-jobs",
     "/api/v1/files/imports",
     "/api/v1/bank-connections",
@@ -238,7 +234,6 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
             **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
-            **EXPECTED_APPROVED_IMPORT_OPERATIONS,
         }
     }
 
@@ -247,7 +242,6 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
         **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
-        **EXPECTED_APPROVED_IMPORT_OPERATIONS,
     }
 
 
@@ -260,7 +254,6 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
             **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
-            **EXPECTED_APPROVED_IMPORT_OPERATIONS,
         }
     }
 
@@ -269,7 +262,6 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
         **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
-        **EXPECTED_APPROVED_IMPORT_OPERATIONS,
     }
 
 
