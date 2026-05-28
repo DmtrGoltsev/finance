@@ -206,10 +206,16 @@ def test_openapi_manual_first_enum_boundaries() -> None:
     ]
     assert _inline_array_value(_schema_block("SourceType"), "enum") == ["manual"]
     assert _inline_array_value(_schema_block("CaptureSource"), "enum") == [
-        "sms",
-        "notification",
         "screenshot",
     ]
+    contract = _contract_text()
+    forbidden_capture_fields = (
+        "raw" + "Notification",
+        "message" + "Text",
+        "notification" + "Text",
+    )
+    for field_name in forbidden_capture_fields:
+        assert field_name not in contract
     assert _inline_array_value(_schema_block("ReportMode"), "enum") == [
         "shared_family_report",
         "combined_viewer_overview",

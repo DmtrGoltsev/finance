@@ -26,10 +26,10 @@ class ApiClientCaptureDraftTest {
                     "merchantName": "Test Market",
                     "capturedAt": "2026-05-23T10:00:00Z",
                     "occurredAt": "2026-05-23T10:00:00Z",
-                    "captureSource": "notification",
+                    "captureSource": "screenshot",
                     "confidence": "0.9000",
-                    "sourceAppPackage": "com.finance.synthetic",
-                    "sourceAppLabel": "Synthetic",
+                    "sourceAppPackage": "",
+                    "sourceAppLabel": "Photo Picker",
                     "evidenceHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     "idempotencyKey": "capture-v1:test",
                     "accountId": "acc-card",
@@ -49,11 +49,11 @@ class ApiClientCaptureDraftTest {
                     merchantName = "Test Market",
                     capturedAt = "2026-05-23T10:00:00Z",
                     occurredAt = "2026-05-23T10:00:00Z",
-                    captureSource = "notification",
+                    captureSource = "screenshot",
                     idempotencyKey = "capture-v1:test",
                     confidence = 0.9,
-                    sourceAppPackage = "com.finance.synthetic",
-                    sourceAppLabel = "Synthetic",
+                    sourceAppPackage = null,
+                    sourceAppLabel = "Photo Picker",
                     evidenceHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 ),
             )
@@ -65,16 +65,14 @@ class ApiClientCaptureDraftTest {
             assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/capture-drafts"))
             val json = JSONObject(request.substringAfter("\r\n\r\n"))
             assertEquals("12.34", json.getString("amount"))
-            assertEquals("notification", json.getString("captureSource"))
+            assertEquals("screenshot", json.getString("captureSource"))
             assertEquals("0.9000", json.getString("confidence"))
             listOf(
                 "rawBody",
                 "rawText",
                 "rawImage",
                 "rawOcrText",
-                "rawNotification",
                 "messageText",
-                "notificationText",
             ).forEach { key ->
                 assertFalse("Request must not include $key", json.has(key))
             }
@@ -96,10 +94,8 @@ class ApiClientCaptureDraftTest {
         listOf(
             "rawImage",
             "rawOcrText",
-            "rawNotification",
-            "messageText",
-            "notificationText",
-        ).forEach { key ->
+                "messageText",
+            ).forEach { key ->
             assertFalse("Request must not include $key", json.has(key))
         }
     }
@@ -138,10 +134,10 @@ class ApiClientCaptureDraftTest {
                 "merchantName": "Test Market",
                 "capturedAt": "2026-05-23T10:00:00Z",
                 "occurredAt": "2026-05-23T10:00:00Z",
-                "captureSource": "notification",
+                "captureSource": "screenshot",
                 "confidence": "0.9000",
-                "sourceAppPackage": "com.finance.synthetic",
-                "sourceAppLabel": "Synthetic",
+                "sourceAppPackage": "",
+                "sourceAppLabel": "Photo Picker",
                 "evidenceHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 "idempotencyKey": "capture-v1:test",
                 "accountId": "acc-card",

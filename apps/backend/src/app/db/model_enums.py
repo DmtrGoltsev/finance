@@ -38,7 +38,7 @@ TRANSFER_SCOPES = (
 )
 TRANSFER_STATUSES = ("posted", "voided")
 CAPTURE_DRAFT_STATUSES = ("pending", "confirmed", "discarded")
-CAPTURE_SOURCES = ("sms", "notification", "screenshot")
+CAPTURE_SOURCES = ("screenshot",)
 SESSION_TRANSPORTS = ("cookie", "android_bearer")
 SESSION_STATUSES = ("active", "revoked", "expired")
 RESET_TOKEN_STATUSES = ("pending", "used", "expired", "revoked")

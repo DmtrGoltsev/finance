@@ -12,12 +12,11 @@ info:
 
     MVP boundaries are intentionally narrow: financial data is manual-entry only,
     `sourceType` accepts only `manual`, and transfers are same-scope only. Safe
-    auto-capture may create pending drafts from sanitized structured SMS,
-    notification, or screenshot candidates, but raw message/notification bodies
-    and raw screenshot payloads are rejected and confirmed transactions remain
-    `sourceType=manual`. There is no real import, parser, file storage, bank API,
-    SMS import, push import, broker credential, external credential, card, IBAN,
-    raw statement, or notification-token endpoint.
+    screenshot OCR capture may create pending drafts from sanitized structured
+    candidates, but raw image bytes and OCR text are rejected and confirmed
+    transactions remain `sourceType=manual`. There is no real import, parser,
+    file storage, bank API, automated ingestion, broker credential, external
+    credential, card, IBAN, raw statement, or device-token endpoint.
 
     Privacy invariants:
     - personal data is owner-only;
@@ -38,7 +37,7 @@ tags:
   - name: Transactions
     description: Manual transaction entry, search, autocomplete, and lifecycle operations.
   - name: CaptureDrafts
-    description: Pending safe auto-capture candidates. Raw SMS, notification, and screenshot payloads are never accepted.
+    description: Pending screenshot OCR capture candidates. Raw image bytes and OCR text are never accepted.
   - name: Categories
     description: Personal and household category management for manual finance records.
   - name: Reports
@@ -473,9 +472,9 @@ paths:
       operationId: createCaptureDraft
       summary: Create pending capture draft.
       description: |
-        Accepts only sanitized structured candidates. `rawMessage`,
-        `rawNotification`, `body`, `text`, and other raw payload/body fields
-        are not part of this schema and must be rejected. Reusing the same
+        Accepts only sanitized structured screenshot OCR candidates. Raw image
+        bytes, raw OCR text, `body`, `text`, and other raw payload/body fields are
+        not part of this schema and must be rejected. Reusing the same
         owner/idempotencyKey returns the existing draft without creating a
         duplicate row.
       requestBody:
@@ -1099,8 +1098,8 @@ components:
       enum: [pending, confirmed, discarded]
     CaptureSource:
       type: string
-      enum: [sms, notification, screenshot]
-      description: Sanitized structured capture source only; it is not a transaction sourceType.
+      enum: [screenshot]
+      description: Sanitized structured screenshot OCR capture source only; it is not a transaction sourceType.
     RecordStatus:
       type: string
       enum: [active, archived, deleted]
@@ -1640,7 +1639,7 @@ components:
           $ref: '#/components/schemas/DateTime'
         updatedAt:
           $ref: '#/components/schemas/DateTime'
-      description: Contains sanitized structured fields only. Raw SMS, notification, or screenshot payloads are never stored or returned.
+      description: Contains sanitized structured fields only. Raw image bytes and OCR text are never stored or returned.
     CaptureDraftCreateRequest:
       type: object
       additionalProperties: false
@@ -1681,7 +1680,7 @@ components:
         evidenceHash:
           type: string
           maxLength: 128
-      description: Must not include rawMessage, rawNotification, body, text, messageText, notificationText, or any raw payload/body field.
+      description: Must not include raw image bytes, raw OCR text, body, text, or any raw payload/body field.
     CaptureDraftUpdateRequest:
       type: object
       additionalProperties: false
@@ -1721,7 +1720,7 @@ components:
         evidenceHash:
           type: [string, 'null']
           maxLength: 128
-      description: Only pending draft candidate fields are editable. Raw message or notification body fields are not accepted.
+      description: Only pending draft candidate fields are editable. Raw image bytes and OCR text are not accepted.
     CategoryDto:
       type: object
       additionalProperties: false

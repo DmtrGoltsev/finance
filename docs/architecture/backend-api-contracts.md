@@ -4,7 +4,7 @@
 
 Документ фиксирует контракт backend API для Wave 1 MVP. Он не заменяет `access-model.md`, `security-baseline.md` и `privacy-baseline.md`: здесь описаны routes, DTO, ошибки и authz-предикаты, а детальная реализация проверок остается задачей W1-03.
 
-MVP поддерживает ручной ввод: `sourceType = manual`. Импорт файлов, банковские API, полноценные SMS/push-интеграции, банковские и брокерские credentials, внешние платежи и автоматическая синхронизация не входят в API surface MVP. Post-MVP safe auto-capture является отдельной draft-only surface: Android opt-in, no raw SMS/notification body server-side, structured draft with `idempotencyKey`/`evidenceHash`, transaction только после user confirm/edit.
+MVP поддерживает ручной ввод: `sourceType = manual`. Импорт файлов, банковские API, SMS/push-интеграции, перехват SMS/push/notifications, банковские и брокерские credentials, внешние платежи и автоматическая синхронизация не входят в API surface MVP. Capture drafts являются отдельной draft-only surface: user-initiated OCR из выбранного скриншота, local/on-device before structured review, no raw SMS/push/notification body server-side, structured draft with `idempotencyKey`/`evidenceHash`, transaction только после user confirm/edit.
 
 Канонические правила wire contract:
 

@@ -1,11 +1,7 @@
 package com.finance.mvp.ui
 
-import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,7 +42,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -87,7 +82,6 @@ import com.finance.mvp.api.RegistrationResult
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
-import com.finance.mvp.capture.CaptureOptInStore
 import com.finance.mvp.capture.CaptureParser
 import com.finance.mvp.ui.theme.FinanceTheme
 import com.google.mlkit.vision.common.InputImage
@@ -112,7 +106,6 @@ fun FinanceApp(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val captureOptInStore = remember(context) { CaptureOptInStore(context) }
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
@@ -124,26 +117,12 @@ fun FinanceApp(
     var registerConfirmPassword by rememberSaveable { mutableStateOf("") }
     var registerDisplayName by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
-    var smsCaptureEnabled by rememberSaveable { mutableStateOf(false) }
-    var notificationCaptureEnabled by rememberSaveable { mutableStateOf(false) }
     var captureDrafts by remember { mutableStateOf<List<CaptureDraft>>(emptyList()) }
     var captureIsLoading by rememberSaveable { mutableStateOf(false) }
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
-    val smsPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        smsCaptureEnabled = granted
-        with(captureOptInStore) { setSmsCaptureEnabled(granted) }
-        captureMessage = if (granted) {
-            "SMS capture enabled"
-        } else {
-            "SMS permission was not granted"
-        }
-    }
-
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
@@ -201,10 +180,6 @@ fun FinanceApp(
         processScreenshotCapture(uri)
     }
 
-    fun hasSmsPermission(): Boolean {
-        return context.checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
-    }
-
     fun loadCaptureDrafts(successMessage: String? = null) {
         scope.launch {
             captureIsLoading = true
@@ -219,39 +194,6 @@ fun FinanceApp(
                 }
             }
             captureIsLoading = false
-        }
-    }
-
-    fun setSmsCaptureOptIn(enabled: Boolean) {
-        if (!enabled) {
-            captureOptInStore.setSmsCaptureEnabled(false)
-            smsCaptureEnabled = false
-            captureMessage = "SMS capture disabled"
-            return
-        }
-        if (hasSmsPermission()) {
-            captureOptInStore.setSmsCaptureEnabled(true)
-            smsCaptureEnabled = true
-            captureMessage = "SMS capture enabled"
-        } else {
-            smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
-        }
-    }
-
-    fun setNotificationCaptureOptIn(enabled: Boolean) {
-        captureOptInStore.setNotificationCaptureEnabled(enabled)
-        notificationCaptureEnabled = enabled
-        captureMessage = if (enabled) {
-            "Notification capture enabled"
-        } else {
-            "Notification capture disabled"
-        }
-        if (enabled) {
-            runCatching {
-                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            }.onFailure {
-                captureMessage = "Open Android notification access settings manually"
-            }
         }
     }
 
@@ -273,23 +215,6 @@ fun FinanceApp(
                             message = result.userFacingMessage(),
                         )
                     }
-                }
-            }
-        }
-    }
-
-    fun submitSyntheticCapture() {
-        scope.launch {
-            captureIsLoading = true
-            val candidate = CaptureParser.syntheticCandidate()
-            val result = withContext(Dispatchers.IO) {
-                apiClient.createCaptureDraft(candidate.toCreateRequest())
-            }
-            when (result) {
-                is ApiResult.Success -> loadCaptureDrafts("Synthetic draft created")
-                is ApiResult.Failure -> {
-                    captureMessage = result.userFacingMessage()
-                    captureIsLoading = false
                 }
             }
         }
@@ -513,17 +438,6 @@ fun FinanceApp(
         uiState = withContext(Dispatchers.IO) { restoredFinanceUiState(apiClient) }
     }
 
-    LaunchedEffect(captureOptInStore) {
-        val settings = withContext(Dispatchers.IO) {
-            captureOptInStore.isSmsCaptureEnabled() to captureOptInStore.isNotificationCaptureEnabled()
-        }
-        smsCaptureEnabled = settings.first && hasSmsPermission()
-        if (settings.first && !hasSmsPermission()) {
-            withContext(Dispatchers.IO) { captureOptInStore.setSmsCaptureEnabled(false) }
-        }
-        notificationCaptureEnabled = settings.second
-    }
-
     LaunchedEffect(apiClient, uiState.session?.isAuthenticated) {
         if (uiState.session?.isAuthenticated == true) {
             captureIsLoading = true
@@ -638,15 +552,10 @@ fun FinanceApp(
                 AppSection.Home -> homeContent(dashboard, selectedMode) { selectedMode = it }
                 AppSection.Operations -> operationsContent(
                     dashboard = dashboard,
-                    smsCaptureEnabled = smsCaptureEnabled,
-                    notificationCaptureEnabled = notificationCaptureEnabled,
-                    hasSmsPermission = hasSmsPermission(),
                     captureDrafts = captureDrafts,
                     captureIsLoading = captureIsLoading,
                     captureMessage = captureMessage,
                     screenshotOcrStatus = screenshotOcrStatus,
-                    onSmsCaptureChange = ::setSmsCaptureOptIn,
-                    onNotificationCaptureChange = ::setNotificationCaptureOptIn,
                     onRefreshCaptureDrafts = { loadCaptureDrafts() },
                     onPickScreenshot = {
                         screenshotPickerLauncher.launch(
@@ -655,7 +564,6 @@ fun FinanceApp(
                             ),
                         )
                     },
-                    onSubmitSyntheticCapture = ::submitSyntheticCapture,
                     onConfirmCaptureDraft = ::confirmCaptureDraft,
                     onDiscardCaptureDraft = ::discardCaptureDraft,
                 )
@@ -932,18 +840,12 @@ private fun LazyListScope.homeContent(
 
 private fun LazyListScope.operationsContent(
     dashboard: FinanceDashboard?,
-    smsCaptureEnabled: Boolean,
-    notificationCaptureEnabled: Boolean,
-    hasSmsPermission: Boolean,
     captureDrafts: List<CaptureDraft>,
     captureIsLoading: Boolean,
     captureMessage: String?,
     screenshotOcrStatus: String?,
-    onSmsCaptureChange: (Boolean) -> Unit,
-    onNotificationCaptureChange: (Boolean) -> Unit,
     onRefreshCaptureDrafts: () -> Unit,
     onPickScreenshot: () -> Unit,
-    onSubmitSyntheticCapture: () -> Unit,
     onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
 ) {
@@ -951,20 +853,14 @@ private fun LazyListScope.operationsContent(
     item {
         CaptureDraftReviewCard(
             isAuthenticated = dashboard?.session?.isAuthenticated == true,
-            smsCaptureEnabled = smsCaptureEnabled,
-            notificationCaptureEnabled = notificationCaptureEnabled,
-            hasSmsPermission = hasSmsPermission,
             drafts = captureDrafts,
             accounts = dashboard?.accounts.orEmpty(),
             categories = dashboard?.categories.orEmpty(),
             isLoading = captureIsLoading,
             message = captureMessage,
             screenshotOcrStatus = screenshotOcrStatus,
-            onSmsCaptureChange = onSmsCaptureChange,
-            onNotificationCaptureChange = onNotificationCaptureChange,
             onRefresh = onRefreshCaptureDrafts,
             onPickScreenshot = onPickScreenshot,
-            onSubmitSynthetic = onSubmitSyntheticCapture,
             onConfirm = onConfirmCaptureDraft,
             onDiscard = onDiscardCaptureDraft,
         )
@@ -982,20 +878,14 @@ private fun LazyListScope.operationsContent(
 @Composable
 private fun CaptureDraftReviewCard(
     isAuthenticated: Boolean,
-    smsCaptureEnabled: Boolean,
-    notificationCaptureEnabled: Boolean,
-    hasSmsPermission: Boolean,
     drafts: List<CaptureDraft>,
     accounts: List<AccountSummary>,
     categories: List<CategorySummary>,
     isLoading: Boolean,
     message: String?,
     screenshotOcrStatus: String?,
-    onSmsCaptureChange: (Boolean) -> Unit,
-    onNotificationCaptureChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onPickScreenshot: () -> Unit,
-    onSubmitSynthetic: () -> Unit,
     onConfirm: (CaptureDraft, String, String) -> Unit,
     onDiscard: (CaptureDraft) -> Unit,
 ) {
@@ -1013,24 +903,9 @@ private fun CaptureDraftReviewCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Capture drafts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Opt-in local capture and review before sending", style = MaterialTheme.typography.bodySmall)
+                    Text("Review screenshot OCR drafts before sending", style = MaterialTheme.typography.bodySmall)
                 }
             }
-
-            CaptureSwitchRow(
-                title = "SMS",
-                subtitle = if (hasSmsPermission) "RECEIVE_SMS granted" else "Runtime permission required",
-                checked = smsCaptureEnabled,
-                enabled = true,
-                onCheckedChange = onSmsCaptureChange,
-            )
-            CaptureSwitchRow(
-                title = "Notifications",
-                subtitle = "Opens Android notification access settings",
-                checked = notificationCaptureEnabled,
-                enabled = true,
-                onCheckedChange = onNotificationCaptureChange,
-            )
 
             Button(
                 onClick = onPickScreenshot,
@@ -1048,16 +923,9 @@ private fun CaptureDraftReviewCard(
                 OutlinedButton(
                     onClick = onRefresh,
                     enabled = isAuthenticated && !isLoading,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Refresh")
-                }
-                Button(
-                    onClick = onSubmitSynthetic,
-                    enabled = isAuthenticated && !isLoading,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Test draft")
                 }
             }
 
@@ -1082,30 +950,6 @@ private fun CaptureDraftReviewCard(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun CaptureSwitchRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-        )
     }
 }
 

@@ -6,7 +6,7 @@ Create Date: 2026-05-23
 
 Rollback notes:
 - Downgrade drops only capture_drafts and its indexes.
-- No raw SMS, notification, or screenshot payload columns are created by this revision.
+- No raw screenshot image or OCR payload columns are created by this revision.
 """
 
 from __future__ import annotations

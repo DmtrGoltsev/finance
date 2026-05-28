@@ -26,7 +26,7 @@ def _draft_payload(
     transaction_graph: dict[str, Any],
     *,
     idempotency_key: str,
-    capture_source: str = "sms",
+    capture_source: str = "screenshot",
 ) -> dict[str, Any]:
     return {
         "idempotencyKey": idempotency_key,
@@ -48,13 +48,10 @@ def _draft_payload(
 
 def _raw_capture_fields() -> dict[str, str]:
     return {
-        "rawMessage": "secret sms body must never be stored",
+        "rawMessage": "secret raw message body must never be stored",
         "rawScreenshot": "secret screenshot payload must never be stored",
         "rawImage": "secret raw image payload must never be stored",
         "rawOcrText": "secret raw ocr text must never be stored",
-        "rawNotification": "secret raw notification must never be stored",
-        "messageText": "secret message text must never be stored",
-        "notificationText": "secret notification text must never be stored",
         "body": "secret body",
         "text": "secret text",
     }
@@ -145,6 +142,62 @@ def test_capture_draft_accepts_screenshot_source_without_transaction_source_chan
     assert transaction.json()["data"]["sourceType"] == "manual"
 
 
+def test_capture_draft_rejects_removed_sms_and_notification_sources(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+
+    with _client_for_actor(owner) as client:
+        sms = client.post(
+            "/api/v1/capture-drafts",
+            json=_draft_payload(
+                transaction_graph,
+                idempotency_key="capture-removed-sms",
+                capture_source="sms",
+            ),
+        )
+        notification = client.post(
+            "/api/v1/capture-drafts",
+            json=_draft_payload(
+                transaction_graph,
+                idempotency_key="capture-removed-notification",
+                capture_source="notification",
+            ),
+        )
+        listed = client.get("/api/v1/capture-drafts")
+
+    assert sms.status_code == 422
+    assert notification.status_code == 422
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
+
+
+def test_capture_draft_update_rejects_capture_source_field(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    payload = _draft_payload(transaction_graph, idempotency_key="capture-update-source")
+
+    with _client_for_actor(owner) as client:
+        created = client.post("/api/v1/capture-drafts", json=payload)
+        draft_id = created.json()["data"]["id"]
+        sms = client.patch(
+            f"/api/v1/capture-drafts/{draft_id}",
+            json={"captureSource": "sms"},
+        )
+        notification = client.patch(
+            f"/api/v1/capture-drafts/{draft_id}",
+            json={"captureSource": "notification"},
+        )
+        stored = client.get("/api/v1/capture-drafts")
+
+    assert created.status_code == 201, created.text
+    assert sms.status_code == 422
+    assert notification.status_code == 422
+    assert stored.status_code == 200
+    assert stored.json()["items"][0]["captureSource"] == "screenshot"
+
+
 def test_in_memory_capture_draft_repeated_confirm_is_idempotent() -> None:
     now = datetime(2026, 5, 17, 14, 0, tzinfo=UTC)
     owner_id = "owner_a"
@@ -204,7 +257,7 @@ def test_in_memory_capture_draft_repeated_confirm_is_idempotent() -> None:
         actor=actor,
         request=CaptureDraftCreateRequest(
             idempotency_key="memory-replay",
-            capture_source="sms",
+            capture_source="screenshot",
             captured_at=now,
             occurred_at=now,
             amount=Decimal("12.3400"),

@@ -6,8 +6,8 @@
 
 Область MVP:
 - ручной ввод счетов и операций;
-- без импорта файлов, банковских API и полноценных SMS/push-интеграций;
-- post-MVP safe auto-capture допускается только как opt-in Android capture в pending drafts: SMS через `RECEIVE_SMS`, notification listener через системные настройки, без server-side хранения raw SMS/notification body;
+- без импорта файлов, банковских API, SMS/push-интеграций и перехвата SMS/push/notifications;
+- capture drafts допускаются только как user-initiated OCR из выбранного пользователем скриншота: локально/on-device до structured draft review, без server-side хранения raw SMS/push/notification body;
 - personal и shared счета;
 - операции, категории и отчеты с теми же правилами доступа, что и связанные с ними счета;
 - `shared family report` только по shared данным Household;
@@ -19,8 +19,8 @@
 Вне области MVP:
 - банковские интеграции;
 - автоматический импорт транзакций;
-- автосоздание операций из SMS/push без user confirm/edit;
-- server-side хранение raw SMS/notification body;
+- автосоздание операций из SMS/push или notifications;
+- server-side хранение raw SMS/push/notification body;
 - внешние платежи;
 - хранение платежных или банковских секретов.
 

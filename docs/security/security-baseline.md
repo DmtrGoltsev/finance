@@ -6,10 +6,10 @@
 
 MVP строится на следующих безопасных допущениях:
 
-- банковские API, полноценный SMS/push-import pipeline и импорт файлов не входят в MVP; post-MVP safe auto-capture разрешен только как opt-in Android capture в pending drafts;
+- банковские API, SMS/push-import pipeline, перехват SMS/push/notifications и импорт файлов не входят в MVP; capture drafts разрешены только как user-initiated OCR из выбранного пользователем скриншота с подтверждением перед созданием операции;
 - счета и операции вводятся вручную;
 - банковские токены, банковские пароли, SMS-коды, push-секреты и учетные данные брокеров не хранятся;
-- raw body SMS/notification не отправляется на backend и не хранится server-side;
+- raw body SMS/push/notification не отправляется на backend и не хранится server-side;
 - личный счет видит только его владелец;
 - общий счет видят активные участники семейного пространства;
 - семейное пространство MVP рассчитано на двух участников без сложной ролевой модели.
@@ -68,11 +68,12 @@ MVP строится на следующих безопасных допущен
 - Бывший участник семьи продолжает использовать старую сессию или старый invite token.
 - Атакующий многократно пробует пароли или reset-токены без rate limit.
 - Финансовые суммы, описания операций или названия счетов попадают в application logs, crash reports или frontend telemetry.
-- Raw SMS/notification body, SMS-коды или notification secrets попадают в backend, logs, telemetry, audit, crash reports или backups.
+- Raw SMS/push/notification body, SMS-коды или notification secrets попадают в backend, logs, telemetry, audit, crash reports или backups.
 
-### Safe auto-capture boundary
+### Capture draft boundary
 
-- Android capture включается только пользователем. SMS-capture использует `RECEIVE_SMS`, а не `READ_SMS`; notification capture требует включения Android notification listener в системных настройках.
+- Приложение не перехватывает SMS, push-уведомления или системные notifications и не использует SMS receiver / Android notification listener для создания draft.
+- User-initiated OCR из выбранного пользователем скриншота выполняется локально/on-device и может создать structured capture draft.
 - Backend принимает и хранит только structured capture draft, `idempotencyKey`/`evidenceHash`, confidence/metadata без raw body и статус `pending`/`confirmed`/`discarded`.
 - `pending` draft не изменяет счета, остатки, отчеты и search/autocomplete. Transaction создается только после user confirm/edit и затем обрабатывается как manual transaction.
 - `confirmed`/`discarded` lifecycle должен быть идемпотентным: повторное событие с тем же evidence не создает дубликат.
@@ -254,7 +255,7 @@ MVP строится на следующих безопасных допущен
 - Секреты вынесены из репозитория и frontend/mobile bundles.
 - База и backups имеют encryption at rest; restore проверен минимум один раз.
 - Логи и telemetry проверены на отсутствие финансовых значений, паролей, токенов и invite/reset secrets.
-- Явно подтверждено, что банковские токены, банковские пароли, SMS/push/API секреты, raw SMS/notification body и импорт файлов не входят в MVP и не хранятся server-side.
+- Явно подтверждено, что банковские токены, банковские пароли, SMS/push/API секреты, raw SMS/push/notification body, перехват SMS/push/notifications и импорт файлов не входят в MVP и не хранятся server-side.
 - Для переводов между personal и shared выбран безопасный вариант: split visibility или запрет до отдельного решения.
 
 ## Post-MVP
@@ -266,7 +267,7 @@ MVP строится на следующих безопасных допущен
 - Формальная data retention и account deletion policy.
 - Юридическая и комплаенс-проработка для публичного запуска и выбранных юрисдикций.
 - Безопасный импорт Excel/CSV: file validation, malware scanning, sandboxed parsing, preview before commit, audit.
-- Full SMS/push/API интеграции только после отдельной threat model для банковских и брокерских секретов. Post-MVP safe auto-capture уже ограничен opt-in Android draft-only режимом: `RECEIVE_SMS`, notification listener через системные настройки, no raw body server-side, user confirm/edit before transaction.
+- Full SMS/push/API интеграции, SMS receiver, push capture и notification listener только после отдельной threat model для банковских и брокерских секретов. Текущий capture draft flow ограничен user-initiated OCR выбранного скриншота, no raw body server-side, user confirm/edit before transaction.
 - Хранилище банковских/API токенов с envelope encryption/HSM/KMS и отдельной процедурой ротации.
 - Security monitoring, alerting, SIEM/use cases для подозрительных authz отказов, brute force и массового доступа.
 - Периодический pentest или focused security review перед публичным релизом.
@@ -280,7 +281,7 @@ MVP строится на следующих безопасных допущен
 - Нужно сделать 2FA/passkeys обязательными или отказаться от них перед публичным запуском.
 - Требуется field-level encryption, client-side encryption или отдельное шифрование финансовых полей.
 - Нужно выбрать production secret manager, KMS/HSM или схему хранения master keys.
-- Появляются банковские API, брокерские API, банковские токены, банковские пароли, SMS/push секреты, raw SMS/notification body server-side storage или импорт файлов.
+- Появляются банковские API, брокерские API, банковские токены, банковские пароли, SMS/push секреты, raw SMS/push/notification body server-side storage, перехват SMS/push/notifications или импорт файлов.
 - Требуется расширить семейную модель за пределы двух участников или добавить детальные роли и приватность.
 - Возникает необходимость показывать личные счета одному участнику семьи по решению другого участника.
 - Нужно разрешить переводы между personal и shared без split visibility.
@@ -314,4 +315,4 @@ MVP строится на следующих безопасных допущен
 - Audit event создается для login, failed login, password reset, invite accepted/revoked, account create/update/delete, transaction create/update/delete и access denied.
 - Backup создается encrypted и restore успешно проходит на отдельном окружении.
 - В репозитории и клиентских bundles отсутствуют production secrets.
-- В MVP отсутствуют поля, endpoints или настройки для хранения банковских токенов, банковских паролей, SMS/push секретов, raw SMS/notification body и банковских API credentials; safe capture хранит только structured draft, `idempotencyKey`/`evidenceHash` и status lifecycle.
+- В MVP отсутствуют поля, endpoints или настройки для хранения банковских токенов, банковских паролей, SMS/push секретов, raw SMS/push/notification body и банковских API credentials; capture draft flow хранит только structured draft, `idempotencyKey`/`evidenceHash` и status lifecycle.

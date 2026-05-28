@@ -321,7 +321,7 @@ Wave 0 documents remain valid as product/security/privacy inputs, but API contra
 - Membership `removed` становится `revoked`.
 - Invite expiry выражается через `Invite.status = expired` и `expiresAt`, а не через `MembershipStatus.expired`.
 - MVP transfer contract разрешает только same-scope. Любая personal<->shared формулировка в старом product text трактуется как unsupported by API и отклоняется с `TRANSFER_SCOPE_NOT_SUPPORTED`.
-- `sourceType = manual` является единственным direct transaction source в MVP; `file_import`, `bank_api`, `sms`, `push` зарезервированы как post-MVP values и не подразумевают direct transaction endpoints. Safe auto-capture использует отдельный draft lifecycle с `pending`/`confirmed`/`discarded` и создает transaction только после user confirm/edit.
+- `sourceType = manual` является единственным direct transaction source в MVP; `file_import`, `bank_api`, `sms`, `push` зарезервированы как post-MVP values и не подразумевают direct transaction endpoints. Capture drafts используют отдельный user-confirmed lifecycle с `pending`/`confirmed`/`discarded`: OCR запускается пользователем из выбранного скриншота локально/on-device, SMS/push/notifications не перехватываются, transaction создается только после user confirm/edit.
 
 This migration has no known blocker for W1-02/W1-03. Backend/client/API tasks should treat this document as the source of truth for wire names and enum values.
 

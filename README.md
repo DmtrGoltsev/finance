@@ -33,8 +33,8 @@ This scaffold intentionally contains README and ignore files only. Do not add `p
 - Transfers are same-scope only: `personal_same_owner` or `household_same_household`.
 - Missing and inaccessible resources return neutral responses.
 - Logs, audit, telemetry, crash reports, exports, caches, and client states must not disclose hidden data.
-- MVP excludes file imports, bank APIs, bank credentials, broker credentials, card data, IBAN/account requisites, and raw bank statements.
-- Post-MVP safe auto-capture is supported only as opt-in Android capture into pending drafts: SMS capture uses `RECEIVE_SMS` rather than `READ_SMS`, notification capture uses the Android notification listener enabled in system settings, raw SMS/notification bodies are not sent to the backend or stored server-side, and a transaction is created only after the user confirms or edits the structured draft.
+- MVP excludes file imports, bank APIs, bank credentials, broker credentials, card data, IBAN/account requisites, raw bank statements, SMS interception, and push/notification interception.
+- The remaining capture-draft flow is user-initiated: OCR from a user-selected screenshot stays local/on-device, creates a structured draft for review, and a transaction is created only after the user confirms or edits the draft.
 
 ## Repository Areas
 

@@ -78,11 +78,6 @@ object CaptureParser {
     private val amountBeforeRegex = Regex(
         "(?i)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)(?:\\s*)(\\d[\\d\\s.,]*\\d|\\d)\\b",
     )
-    private val merchantPatterns = listOf(
-        Regex("""(?i)\b(?:at|in)\s+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
-        Regex("""(?i)\bmerchant[:\s]+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
-        Regex("""(?i)\bbroker:\s+([A-Za-z0-9][A-Za-z0-9 ._&'-]{1,48})"""),
-    )
     private val screenshotMerchantPatterns = listOf(
         Regex("""(?i)\b(?:at|in)\s+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
         Regex("""(?i)\bmerchant[:\s]+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
@@ -112,42 +107,6 @@ object CaptureParser {
         "total",
     )
 
-    fun parseSms(
-        body: String,
-        sender: String?,
-        receivedAtMillis: Long,
-    ): CaptureCandidate? {
-        return parse(
-            text = body,
-            title = null,
-            capturedAtMillis = receivedAtMillis,
-            source = "sms",
-            sourceAppPackage = null,
-            sourceAppLabel = "SMS",
-        )
-    }
-
-    fun parseNotification(
-        title: String?,
-        text: String?,
-        packageName: String,
-        appLabel: String?,
-        postedAtMillis: Long,
-    ): CaptureCandidate? {
-        val joined = listOfNotNull(title, text).joinToString(" ").trim()
-        if (joined.isBlank()) {
-            return null
-        }
-        return parse(
-            text = joined,
-            title = title,
-            capturedAtMillis = postedAtMillis,
-            source = "notification",
-            sourceAppPackage = packageName.take(160),
-            sourceAppLabel = appLabel?.take(80),
-        )
-    }
-
     fun parseScreenshotOcr(
         text: String,
         capturedAtMillis: Long,
@@ -158,7 +117,6 @@ object CaptureParser {
         }
         return parse(
             text = text,
-            title = null,
             capturedAtMillis = capturedAtMillis,
             source = "screenshot",
             sourceAppPackage = null,
@@ -168,19 +126,8 @@ object CaptureParser {
         )
     }
 
-    fun syntheticCandidate(nowMillis: Long = System.currentTimeMillis()): CaptureCandidate {
-        return parseNotification(
-            title = "Payment",
-            text = "Paid 12.34 USD at Test Market",
-            packageName = "com.finance.synthetic",
-            appLabel = "Synthetic capture",
-            postedAtMillis = nowMillis,
-        ) ?: error("Synthetic capture fixture must parse")
-    }
-
     private fun parse(
         text: String,
-        title: String?,
         capturedAtMillis: Long,
         source: String,
         sourceAppPackage: String?,
@@ -193,9 +140,7 @@ object CaptureParser {
             return null
         }
         val amount = findAmount(normalizedText, preferContextualAmount) ?: return null
-        val isScreenshot = source == "screenshot"
-        val merchant = extractMerchant(normalizedText, strict = isScreenshot)
-            ?: title?.takeUnless { it.equals("payment", ignoreCase = true) }?.trim()?.take(64)
+        val merchant = extractMerchant(normalizedText)
             ?: brokerDescription(normalizedText)
         val occurredAt = Instant.ofEpochMilli(capturedAtMillis).toString()
         val timeBucket = (capturedAtMillis / 60_000L).toString()
@@ -228,7 +173,7 @@ object CaptureParser {
         return CaptureCandidate(
             amount = amount.amount,
             currency = amount.currency,
-            description = merchant ?: genericDescription(source),
+            description = merchant ?: genericDescription(),
             merchantName = merchant,
             capturedAt = occurredAt,
             occurredAt = occurredAt,
@@ -325,33 +270,21 @@ object CaptureParser {
         }
     }
 
-    private fun extractMerchant(text: String, strict: Boolean): String? {
-        val patterns = if (strict) screenshotMerchantPatterns else merchantPatterns
-        return patterns.firstNotNullOfOrNull { pattern ->
+    private fun extractMerchant(text: String): String? {
+        return screenshotMerchantPatterns.firstNotNullOfOrNull { pattern ->
             pattern.find(text)?.groupValues?.getOrNull(1)?.let { raw ->
-                if (strict) raw.trimScreenshotMerchant() else raw.trimMerchant()
+                raw.trimScreenshotMerchant()
             }
         }
     }
 
-    private fun genericDescription(source: String): String {
-        return if (source == "screenshot") {
-            "Screenshot capture"
-        } else {
-            "Captured ${source.replaceFirstChar { it.uppercase(Locale.US) }} payment"
-        }
+    private fun genericDescription(): String {
+        return "Screenshot capture"
     }
 
     private fun brokerDescription(text: String): String? {
         val lower = text.lowercase(Locale.getDefault())
         return if (brokerSignals.any { it in lower }) "Brokerage operation" else null
-    }
-
-    private fun String.trimMerchant(): String? {
-        val cleaned = replace(Regex("""[\s.]+(?:amount|sum|card|balance|cashback|total)\b.*$""", RegexOption.IGNORE_CASE), "")
-            .trim(' ', '.', ',', ';', ':', '-')
-            .take(64)
-        return cleaned.takeIf { it.length >= 2 }
     }
 
     private fun String.trimScreenshotMerchant(): String? {

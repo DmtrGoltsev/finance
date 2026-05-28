@@ -17,8 +17,6 @@ class CaptureDraftStatus(StrEnum):
 
 
 class CaptureSource(StrEnum):
-    SMS = "sms"
-    NOTIFICATION = "notification"
     SCREENSHOT = "screenshot"
 
 
