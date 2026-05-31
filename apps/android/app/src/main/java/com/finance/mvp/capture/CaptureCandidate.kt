@@ -33,3 +33,38 @@ data class CaptureCandidate(
         )
     }
 }
+
+data class CategoryAggregateCandidate(
+    val externalLabel: String,
+    val amount: String,
+    val currency: String,
+    val operationCount: Int,
+    val capturedAt: String,
+    val occurredAt: String,
+    val idempotencyKey: String,
+    val confidence: Double,
+    val evidenceHash: String,
+) {
+    fun toCreateRequest(categoryId: String): CaptureDraftCreateRequest {
+        return CaptureDraftCreateRequest(
+            amount = amount,
+            currency = currency,
+            description = "Скрин: $externalLabel",
+            merchantName = null,
+            capturedAt = capturedAt,
+            occurredAt = occurredAt,
+            captureSource = "screenshot",
+            idempotencyKey = idempotencyKey,
+            confidence = confidence,
+            sourceAppPackage = null,
+            sourceAppLabel = "Photo Picker",
+            evidenceHash = evidenceHash,
+            categoryId = categoryId,
+        )
+    }
+}
+
+data class ScreenshotOcrParseResult(
+    val aggregateCandidates: List<CategoryAggregateCandidate>,
+    val singleCandidate: CaptureCandidate?,
+)

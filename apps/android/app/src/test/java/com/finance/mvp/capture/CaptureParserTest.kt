@@ -169,6 +169,80 @@ class CaptureParserTest {
         assertNotEquals(first.idempotencyKey, different!!.idempotencyKey)
     }
 
+    @Test
+    fun categoryAggregateScreenshotExtractsVisibleRowsAndIgnoresSummary() {
+        val result = CaptureParser.parseScreenshotOcrResult(
+            text = """
+                Анализ финансов
+                Расходы
+                Супермаркеты
+                224 584 ₽
+                34 операции
+                Кафе, рестораны, фастфуд
+                222 129 ₽
+                80 операций
+                Погашение кредитов
+                104 621 ₽
+                1 операция
+                Ещё 17 категорий на 338 156 ₽
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNull(result.singleCandidate)
+        assertEquals(3, result.aggregateCandidates.size)
+        assertEquals("Супермаркеты", result.aggregateCandidates[0].externalLabel)
+        assertEquals("224584.00", result.aggregateCandidates[0].amount)
+        assertEquals("RUB", result.aggregateCandidates[0].currency)
+        assertEquals(34, result.aggregateCandidates[0].operationCount)
+        assertEquals("Кафе, рестораны, фастфуд", result.aggregateCandidates[1].externalLabel)
+        assertEquals("222129.00", result.aggregateCandidates[1].amount)
+        assertEquals(80, result.aggregateCandidates[1].operationCount)
+        assertEquals("Погашение кредитов", result.aggregateCandidates[2].externalLabel)
+        assertEquals("104621.00", result.aggregateCandidates[2].amount)
+        assertEquals(1, result.aggregateCandidates[2].operationCount)
+        assertTrue(result.aggregateCandidates.none { it.externalLabel.contains("Ещё", ignoreCase = true) })
+    }
+
+    @Test
+    fun categoryAggregateScreenshotParsesMultilineCategoryAndAmount() {
+        val candidates = CaptureParser.parseCategoryAggregateScreenshotOcr(
+            text = """
+                Кафе, рестораны,
+                фастфуд
+                222 129 ₽
+                80 операций
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertEquals(1, candidates.size)
+        assertEquals("Кафе, рестораны, фастфуд", candidates.single().externalLabel)
+        assertEquals("222129.00", candidates.single().amount)
+        assertEquals(80, candidates.single().operationCount)
+        val request = candidates.single().toCreateRequest("cat-food")
+        assertEquals("cat-food", request.categoryId)
+        assertEquals("Скрин: Кафе, рестораны, фастфуд", request.description)
+        assertNull(request.merchantName)
+        assertFalse(request.toString().contains("80 операций"))
+    }
+
+    @Test
+    fun categoryAggregateMappingNormalizationIsStable() {
+        assertEquals(
+            "кафе рестораны фастфуд",
+            CategoryAggregateMappingKeys.normalizedExternalLabel("  Кафе, рестораны,\nфастфуд  "),
+        )
+        assertEquals(
+            CategoryAggregateMappingKeys.mappingKey("household:one", "Супермаркеты"),
+            CategoryAggregateMappingKeys.mappingKey("household:one", "супермаркеты"),
+        )
+        assertNotEquals(
+            CategoryAggregateMappingKeys.mappingKey("household:one", "Супермаркеты"),
+            CategoryAggregateMappingKeys.mappingKey("household:two", "Супермаркеты"),
+        )
+    }
+
     private companion object {
         const val FIXED_TIME: Long = 1_779_558_000_000L
     }

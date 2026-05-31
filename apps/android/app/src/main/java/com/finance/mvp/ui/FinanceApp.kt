@@ -82,6 +82,8 @@ import com.finance.mvp.api.RegistrationResult
 import com.finance.mvp.api.SessionStatus
 import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
+import com.finance.mvp.capture.AndroidCategoryAggregateMappingStore
+import com.finance.mvp.capture.CategoryAggregateCandidate
 import com.finance.mvp.capture.CaptureParser
 import com.finance.mvp.ui.theme.FinanceTheme
 import com.google.mlkit.vision.common.InputImage
@@ -106,6 +108,7 @@ fun FinanceApp(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val categoryAggregateMappingStore = remember(context) { AndroidCategoryAggregateMappingStore(context) }
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
@@ -121,23 +124,60 @@ fun FinanceApp(
     var captureIsLoading by rememberSaveable { mutableStateOf(false) }
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
+    var screenshotAggregateDrafts by remember { mutableStateOf<List<ScreenshotAggregateDraftUi>>(emptyList()) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
             screenshotOcrStatus = "Reading screenshot locally"
-            val candidateResult = withContext(Dispatchers.IO) {
+            screenshotAggregateDrafts = emptyList()
+            val capturedAtMillis = System.currentTimeMillis()
+            val parseResult = withContext(Dispatchers.IO) {
                 runCatching {
                     val ocrText = recognizeScreenshotText(context, uri)
-                    CaptureParser.parseScreenshotOcr(
+                    CaptureParser.parseScreenshotOcrResult(
                         text = ocrText,
-                        capturedAtMillis = System.currentTimeMillis(),
+                        capturedAtMillis = capturedAtMillis,
                     )
                 }
             }
-            val candidate = candidateResult.getOrNull()
-            if (candidateResult.isFailure || candidate == null) {
+            val parsed = parseResult.getOrNull()
+            if (parseResult.isFailure || parsed == null) {
+                screenshotOcrStatus = "Could not recognize a payment from this screenshot"
+                captureMessage = "Choose another screenshot or add the operation manually"
+                captureIsLoading = false
+                return@launch
+            }
+
+            val aggregateCandidates = parsed.aggregateCandidates
+            if (aggregateCandidates.isNotEmpty()) {
+                val activeExpenseCategoryIds = uiState.dashboard
+                    ?.categories
+                    .orEmpty()
+                    .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
+                    .map { it.id }
+                    .toSet()
+                val mappingContext = aggregateMappingContext(uiState.session)
+                val drafts = aggregateCandidates.map { candidate ->
+                    val mappedCategoryId = withContext(Dispatchers.IO) {
+                        categoryAggregateMappingStore.readCategoryId(mappingContext, candidate.externalLabel)
+                    }?.takeIf { it in activeExpenseCategoryIds }
+                    ScreenshotAggregateDraftUi(
+                        candidate = candidate,
+                        selectedCategoryId = mappedCategoryId.orEmpty(),
+                        include = mappedCategoryId != null,
+                    )
+                }
+                screenshotAggregateDrafts = drafts
+                screenshotOcrStatus = "Found ${drafts.size} category rows. Review before creating drafts."
+                captureMessage = "Choose categories and confirm screenshot drafts"
+                captureIsLoading = false
+                return@launch
+            }
+
+            val candidate = parsed.singleCandidate
+            if (candidate == null) {
                 screenshotOcrStatus = "Could not recognize a payment from this screenshot"
                 captureMessage = "Choose another screenshot or add the operation manually"
                 captureIsLoading = false
@@ -163,6 +203,80 @@ fun FinanceApp(
                 }
                 is ApiResult.Failure -> {
                     screenshotOcrStatus = "Could not create screenshot draft"
+                    captureMessage = result.userFacingMessage()
+                    captureIsLoading = false
+                }
+            }
+        }
+    }
+
+    fun updateScreenshotAggregateCategory(candidateKey: String, categoryId: String) {
+        screenshotAggregateDrafts = screenshotAggregateDrafts.map { draft ->
+            if (draft.key == candidateKey) {
+                draft.copy(selectedCategoryId = categoryId, include = categoryId.isNotBlank())
+            } else {
+                draft
+            }
+        }
+    }
+
+    fun updateScreenshotAggregateIncluded(candidateKey: String, include: Boolean) {
+        screenshotAggregateDrafts = screenshotAggregateDrafts.map { draft ->
+            if (draft.key == candidateKey) {
+                draft.copy(include = include)
+            } else {
+                draft
+            }
+        }
+    }
+
+    fun createScreenshotAggregateDrafts() {
+        val selectedDrafts = screenshotAggregateDrafts
+            .filter { it.include && it.selectedCategoryId.isNotBlank() }
+        if (selectedDrafts.isEmpty()) {
+            captureMessage = "Choose at least one category row before creating drafts"
+            return
+        }
+        scope.launch {
+            captureIsLoading = true
+            screenshotOcrStatus = "Creating ${selectedDrafts.size} screenshot drafts"
+            val mappingContext = aggregateMappingContext(uiState.session)
+            val result = withContext(Dispatchers.IO) {
+                var failure: ApiResult.Failure? = null
+                for (draft in selectedDrafts) {
+                    when (
+                        val createResult = apiClient.createCaptureDraft(
+                            draft.candidate.toCreateRequest(draft.selectedCategoryId),
+                        )
+                    ) {
+                        is ApiResult.Success -> categoryAggregateMappingStore.saveCategoryId(
+                            userContext = mappingContext,
+                            externalLabel = draft.candidate.externalLabel,
+                            categoryId = draft.selectedCategoryId,
+                        )
+                        is ApiResult.Failure -> {
+                            failure = createResult
+                            break
+                        }
+                    }
+                }
+                failure ?: ApiResult.Success(Unit)
+            }
+            when (result) {
+                is ApiResult.Success -> {
+                    val refreshResult = withContext(Dispatchers.IO) {
+                        apiClient.listCaptureDrafts(status = "pending")
+                    }
+                    if (refreshResult is ApiResult.Success) {
+                        captureDrafts = refreshResult.value
+                    }
+                    screenshotAggregateDrafts = emptyList()
+                    screenshotOcrStatus = "Screenshot drafts created: ${selectedDrafts.size}"
+                    captureMessage = "Review and confirm created drafts"
+                    captureIsLoading = false
+                }
+                is ApiResult.Failure -> {
+                    screenshotOcrStatus = "Could not create screenshot drafts"
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
                 }
@@ -553,6 +667,7 @@ fun FinanceApp(
                 AppSection.Operations -> operationsContent(
                     dashboard = dashboard,
                     captureDrafts = captureDrafts,
+                    screenshotAggregateDrafts = screenshotAggregateDrafts,
                     captureIsLoading = captureIsLoading,
                     captureMessage = captureMessage,
                     screenshotOcrStatus = screenshotOcrStatus,
@@ -563,6 +678,13 @@ fun FinanceApp(
                                 ActivityResultContracts.PickVisualMedia.ImageOnly,
                             ),
                         )
+                    },
+                    onAggregateCategorySelected = ::updateScreenshotAggregateCategory,
+                    onAggregateIncludedChanged = ::updateScreenshotAggregateIncluded,
+                    onConfirmAggregateDrafts = ::createScreenshotAggregateDrafts,
+                    onClearAggregateDrafts = {
+                        screenshotAggregateDrafts = emptyList()
+                        screenshotOcrStatus = null
                     },
                     onConfirmCaptureDraft = ::confirmCaptureDraft,
                     onDiscardCaptureDraft = ::discardCaptureDraft,
@@ -841,11 +963,16 @@ private fun LazyListScope.homeContent(
 private fun LazyListScope.operationsContent(
     dashboard: FinanceDashboard?,
     captureDrafts: List<CaptureDraft>,
+    screenshotAggregateDrafts: List<ScreenshotAggregateDraftUi>,
     captureIsLoading: Boolean,
     captureMessage: String?,
     screenshotOcrStatus: String?,
     onRefreshCaptureDrafts: () -> Unit,
     onPickScreenshot: () -> Unit,
+    onAggregateCategorySelected: (String, String) -> Unit,
+    onAggregateIncludedChanged: (String, Boolean) -> Unit,
+    onConfirmAggregateDrafts: () -> Unit,
+    onClearAggregateDrafts: () -> Unit,
     onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
 ) {
@@ -854,6 +981,7 @@ private fun LazyListScope.operationsContent(
         CaptureDraftReviewCard(
             isAuthenticated = dashboard?.session?.isAuthenticated == true,
             drafts = captureDrafts,
+            screenshotAggregateDrafts = screenshotAggregateDrafts,
             accounts = dashboard?.accounts.orEmpty(),
             categories = dashboard?.categories.orEmpty(),
             isLoading = captureIsLoading,
@@ -861,6 +989,10 @@ private fun LazyListScope.operationsContent(
             screenshotOcrStatus = screenshotOcrStatus,
             onRefresh = onRefreshCaptureDrafts,
             onPickScreenshot = onPickScreenshot,
+            onAggregateCategorySelected = onAggregateCategorySelected,
+            onAggregateIncludedChanged = onAggregateIncludedChanged,
+            onConfirmAggregateDrafts = onConfirmAggregateDrafts,
+            onClearAggregateDrafts = onClearAggregateDrafts,
             onConfirm = onConfirmCaptureDraft,
             onDiscard = onDiscardCaptureDraft,
         )
@@ -879,6 +1011,7 @@ private fun LazyListScope.operationsContent(
 private fun CaptureDraftReviewCard(
     isAuthenticated: Boolean,
     drafts: List<CaptureDraft>,
+    screenshotAggregateDrafts: List<ScreenshotAggregateDraftUi>,
     accounts: List<AccountSummary>,
     categories: List<CategorySummary>,
     isLoading: Boolean,
@@ -886,6 +1019,10 @@ private fun CaptureDraftReviewCard(
     screenshotOcrStatus: String?,
     onRefresh: () -> Unit,
     onPickScreenshot: () -> Unit,
+    onAggregateCategorySelected: (String, String) -> Unit,
+    onAggregateIncludedChanged: (String, Boolean) -> Unit,
+    onConfirmAggregateDrafts: () -> Unit,
+    onClearAggregateDrafts: () -> Unit,
     onConfirm: (CaptureDraft, String, String) -> Unit,
     onDiscard: (CaptureDraft) -> Unit,
 ) {
@@ -933,9 +1070,21 @@ private fun CaptureDraftReviewCard(
                 Text(it, style = MaterialTheme.typography.bodySmall)
             }
 
+            if (screenshotAggregateDrafts.isNotEmpty()) {
+                ScreenshotAggregateDraftList(
+                    drafts = screenshotAggregateDrafts,
+                    categories = categories,
+                    isLoading = isLoading,
+                    onCategorySelected = onAggregateCategorySelected,
+                    onIncludedChanged = onAggregateIncludedChanged,
+                    onConfirm = onConfirmAggregateDrafts,
+                    onClear = onClearAggregateDrafts,
+                )
+            }
+
             if (!isAuthenticated) {
                 Text("Sign in to sync capture drafts.", style = MaterialTheme.typography.bodySmall)
-            } else if (drafts.isEmpty()) {
+            } else if (drafts.isEmpty() && screenshotAggregateDrafts.isEmpty()) {
                 Text("No pending capture drafts.", style = MaterialTheme.typography.bodySmall)
             } else {
                 drafts.forEach { draft ->
@@ -948,6 +1097,111 @@ private fun CaptureDraftReviewCard(
                         onDiscard = onDiscard,
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScreenshotAggregateDraftList(
+    drafts: List<ScreenshotAggregateDraftUi>,
+    categories: List<CategorySummary>,
+    isLoading: Boolean,
+    onCategorySelected: (String, String) -> Unit,
+    onIncludedChanged: (String, Boolean) -> Unit,
+    onConfirm: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val expenseCategories = categories
+        .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
+        .sortedBy { it.displayName() }
+    val selectedCount = drafts.count { it.include && it.selectedCategoryId.isNotBlank() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            "Screenshot categories",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        drafts.forEach { draft ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            draft.candidate.externalLabel,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "${draft.candidate.operationCount} operations",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Text(
+                        "-${draft.candidate.amount} ${draft.candidate.currency}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFE35D4F),
+                    )
+                }
+                FilterChip(
+                    selected = draft.include,
+                    onClick = { onIncludedChanged(draft.key, !draft.include) },
+                    enabled = !isLoading,
+                    label = { Text(if (draft.include) "Include" else "Skip") },
+                )
+                if (expenseCategories.isEmpty()) {
+                    Text("No active expense categories available", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(expenseCategories) { category ->
+                            FilterChip(
+                                selected = draft.selectedCategoryId == category.id,
+                                onClick = { onCategorySelected(draft.key, category.id) },
+                                enabled = !isLoading,
+                                label = {
+                                    Text(
+                                        category.displayName(),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(category.icon()),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onClear,
+                enabled = !isLoading,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Cancel")
+            }
+            Button(
+                onClick = onConfirm,
+                enabled = !isLoading && selectedCount > 0,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Create $selectedCount")
             }
         }
     }
@@ -1727,6 +1981,21 @@ data class FinanceUiState(
     val isLoading: Boolean = false,
     val message: String = "Готово",
 )
+
+private data class ScreenshotAggregateDraftUi(
+    val candidate: CategoryAggregateCandidate,
+    val selectedCategoryId: String,
+    val include: Boolean,
+) {
+    val key: String = candidate.idempotencyKey
+}
+
+private fun aggregateMappingContext(session: SessionStatus?): String {
+    return listOfNotNull(
+        session?.householdId?.takeIf { it.isNotBlank() }?.let { "household:$it" },
+        session?.displayName?.takeIf { it.isNotBlank() }?.let { "user:$it" },
+    ).joinToString("|").ifBlank { "local" }
+}
 
 internal suspend fun restoredFinanceUiState(apiClient: FinanceApiClient): FinanceUiState {
     return when (val sessionResult = apiClient.sessionStatus()) {

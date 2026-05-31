@@ -78,6 +78,25 @@ object CaptureParser {
     private val amountBeforeRegex = Regex(
         "(?i)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)(?:\\s*)(\\d[\\d\\s.,]*\\d|\\d)\\b",
     )
+    private val aggregateOperationCountRegex = Regex(
+        """(?i)(\d{1,4})\s+(?:операци[ияй]|operations?)""",
+    )
+    private val aggregateSummaryRegex = Regex(
+        """(?i)^\s*(?:ещ[её]|more)\s+\d{1,4}\s+(?:категори[ияй]|categories)\s+""",
+    )
+    private val aggregateHeaderLines = setOf(
+        "анализ финансов",
+        "расходы",
+        "доходы",
+        "категории",
+        "операции",
+        "за месяц",
+        "за период",
+        "finance analysis",
+        "expenses",
+        "income",
+        "categories",
+    )
     private val screenshotMerchantPatterns = listOf(
         Regex("""(?i)\b(?:at|in)\s+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
         Regex("""(?i)\bmerchant[:\s]+([A-Za-z0-9@+][A-Za-z0-9@+ ._&'()/-]{1,79})"""),
@@ -124,6 +143,129 @@ object CaptureParser {
             minimumConfidence = 0.55,
             preferContextualAmount = true,
         )
+    }
+
+    fun parseScreenshotOcrResult(
+        text: String,
+        capturedAtMillis: Long,
+    ): ScreenshotOcrParseResult {
+        val aggregateCandidates = parseCategoryAggregateScreenshotOcr(text, capturedAtMillis)
+        return ScreenshotOcrParseResult(
+            aggregateCandidates = aggregateCandidates,
+            singleCandidate = if (aggregateCandidates.isEmpty()) {
+                parseScreenshotOcr(text, capturedAtMillis)
+            } else {
+                null
+            },
+        )
+    }
+
+    fun parseCategoryAggregateScreenshotOcr(
+        text: String,
+        capturedAtMillis: Long,
+    ): List<CategoryAggregateCandidate> {
+        val lines = text.lineSequence()
+            .map { it.replace(Regex("""\s+"""), " ").trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        if (lines.isEmpty()) {
+            return emptyList()
+        }
+
+        val capturedAt = Instant.ofEpochMilli(capturedAtMillis).toString()
+        val timeBucket = (capturedAtMillis / 60_000L).toString()
+        val candidates = mutableListOf<CategoryAggregateCandidate>()
+        val labelBuffer = mutableListOf<String>()
+        var skipLineIndex: Int? = null
+
+        lines.forEachIndexed { index, line ->
+            if (skipLineIndex == index) {
+                skipLineIndex = null
+                return@forEachIndexed
+            }
+            if (line.isAggregateSummaryLine()) {
+                labelBuffer.clear()
+                return@forEachIndexed
+            }
+
+            val amountMatch = amountMatchIn(line)
+            if (amountMatch == null) {
+                if (line.isAggregateLabelLine()) {
+                    labelBuffer += line
+                }
+                return@forEachIndexed
+            }
+
+            val trailingText = line.substring(amountMatch.end).trim()
+            val operationCountInSameLine = aggregateOperationCountRegex.find(trailingText)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+            val operationCountInNextLine = operationCountInSameLine ?: lines
+                .getOrNull(index + 1)
+                ?.let { nextLine ->
+                    aggregateOperationCountRegex.find(nextLine)
+                        ?.takeIf { match -> match.range.first <= 2 }
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                }
+            if (operationCountInSameLine == null && operationCountInNextLine != null) {
+                skipLineIndex = index + 1
+            }
+
+            val labelBeforeAmount = line.substring(0, amountMatch.start).trim()
+            val label = (labelBuffer + labelBeforeAmount)
+                .filter { it.isAggregateLabelLine() }
+                .takeLast(2)
+                .joinToString(" ")
+                .cleanAggregateLabel()
+            labelBuffer.clear()
+
+            val operationCount = operationCountInNextLine
+            if (label.isBlank() || operationCount == null) {
+                return@forEachIndexed
+            }
+
+            val amount = amountMatch.amount
+            val evidenceInput = listOf(
+                "screenshot",
+                "category-aggregate-v1",
+                normalizeAggregateLabel(label),
+                amount.amount,
+                amount.currency,
+                operationCount.toString(),
+                timeBucket,
+            ).joinToString("|")
+            val evidenceHash = sha256Hex(evidenceInput)
+            val labelKey = sha256Hex(normalizeAggregateLabel(label)).take(16)
+            val idempotencyKey = listOf(
+                "capture-v1",
+                "screenshot",
+                "category-aggregate",
+                timeBucket,
+                amount.amount,
+                amount.currency,
+                labelKey,
+                evidenceHash.take(16),
+            ).joinToString(":")
+
+            candidates += CategoryAggregateCandidate(
+                externalLabel = label,
+                amount = amount.amount,
+                currency = amount.currency,
+                operationCount = operationCount,
+                capturedAt = capturedAt,
+                occurredAt = capturedAt,
+                idempotencyKey = idempotencyKey,
+                confidence = 0.82,
+                evidenceHash = evidenceHash,
+            )
+        }
+
+        return candidates.distinctBy { candidate ->
+            "${normalizeAggregateLabel(candidate.externalLabel)}|${candidate.amount}|${candidate.operationCount}"
+        }
     }
 
     private fun parse(
@@ -247,6 +389,20 @@ object CaptureParser {
         return (afterMatches + beforeMatches).sortedBy { it.start }
     }
 
+    private fun amountMatchIn(text: String): ParsedAmountMatch? {
+        val afterMatch = amountAfterRegex.find(text)?.let { match ->
+            normalizeAmount(match.groupValues[1], match.groupValues[2])?.let {
+                ParsedAmountMatch(it, match.range.first, match.range.last + 1)
+            }
+        }
+        val beforeMatch = amountBeforeRegex.find(text)?.let { match ->
+            normalizeAmount(match.groupValues[2], match.groupValues[1])?.let {
+                ParsedAmountMatch(it, match.range.first, match.range.last + 1)
+            }
+        }
+        return listOfNotNull(afterMatch, beforeMatch).minByOrNull { it.start }
+    }
+
     private fun normalizeAmount(rawAmount: String, rawCurrency: String): ParsedAmount? {
         val decimal = rawAmount
             .replace(" ", "")
@@ -336,6 +492,43 @@ object CaptureParser {
             .replace(Regex("""[^a-z0-9]+"""), "-")
             .trim('-')
             .take(48)
+    }
+
+    internal fun normalizeAggregateLabel(value: String): String {
+        return value
+            .lowercase(Locale("ru", "RU"))
+            .replace('ё', 'е')
+            .replace(Regex("""[^\p{L}\p{Nd}]+"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .take(120)
+    }
+
+    private fun String.isAggregateSummaryLine(): Boolean {
+        return aggregateSummaryRegex.containsMatchIn(normalizeAggregateLabel(this))
+    }
+
+    private fun String.isAggregateLabelLine(): Boolean {
+        val normalized = normalizeAggregateLabel(this)
+        if (normalized.isBlank() || normalized in aggregateHeaderLines) {
+            return false
+        }
+        if (amountAfterRegex.containsMatchIn(this) || amountBeforeRegex.containsMatchIn(this)) {
+            return false
+        }
+        if (aggregateOperationCountRegex.containsMatchIn(this)) {
+            return false
+        }
+        if (isAggregateSummaryLine()) {
+            return false
+        }
+        return any(Char::isLetter)
+    }
+
+    private fun String.cleanAggregateLabel(): String {
+        return trim(' ', '.', ',', ';', ':', '-')
+            .replace(Regex("""\s+"""), " ")
+            .take(80)
     }
 
     private fun sha256Hex(value: String): String {

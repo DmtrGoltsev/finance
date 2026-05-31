@@ -155,6 +155,7 @@ data class CaptureDraftCreateRequest(
     val sourceAppPackage: String?,
     val sourceAppLabel: String?,
     val evidenceHash: String,
+    val categoryId: String? = null,
 )
 
 data class CaptureDraftUpdateRequest(
@@ -703,6 +704,7 @@ private fun CaptureDraftCreateRequest.toJson(): JSONObject {
         .put("sourceAppPackage", sourceAppPackage)
         .put("sourceAppLabel", sourceAppLabel)
         .put("evidenceHash", evidenceHash)
+        .apply { categoryId?.takeIf { it.isNotBlank() }?.let { put("categoryId", it) } }
 }
 
 internal fun CaptureDraftUpdateRequest.toJsonForApi(): JSONObject {

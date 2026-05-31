@@ -55,6 +55,7 @@ class ApiClientCaptureDraftTest {
                     sourceAppPackage = null,
                     sourceAppLabel = "Photo Picker",
                     evidenceHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    categoryId = "cat-food",
                 ),
             )
 
@@ -67,6 +68,7 @@ class ApiClientCaptureDraftTest {
             assertEquals("12.34", json.getString("amount"))
             assertEquals("screenshot", json.getString("captureSource"))
             assertEquals("0.9000", json.getString("confidence"))
+            assertEquals("cat-food", json.getString("categoryId"))
             listOf(
                 "rawBody",
                 "rawText",
