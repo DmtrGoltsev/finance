@@ -380,6 +380,40 @@ class CaptureDraft(TimestampMixin, VersionedMixin, Base):
     evidence_hash: Mapped[str | None] = mapped_column(Text)
 
 
+class CaptureCategoryMapping(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "capture_category_mappings"
+    __table_args__ = (
+        CheckConstraint(
+            "length(external_label_hash) = 64",
+            name="external_label_hash_sha256",
+        ),
+        Index(
+            "uq_capture_category_mappings_owner_personal_hash",
+            "owner_user_id",
+            "external_label_hash",
+            unique=True,
+            postgresql_where=text("household_id IS NULL"),
+            sqlite_where=text("household_id IS NULL"),
+        ),
+        Index(
+            "uq_capture_category_mappings_owner_household_hash",
+            "owner_user_id",
+            "household_id",
+            "external_label_hash",
+            unique=True,
+            postgresql_where=text("household_id IS NOT NULL"),
+            sqlite_where=text("household_id IS NOT NULL"),
+        ),
+        Index("ix_capture_category_mappings_category_id", "category_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
+    category_id: Mapped[uuid.UUID] = uuid_fk("categories.id")
+    external_label_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class Session(TimestampMixin, VersionedMixin, Base):
     __tablename__ = "sessions"
     __table_args__ = (

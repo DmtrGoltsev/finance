@@ -1,6 +1,8 @@
 import type {
   AccountKind,
   AccountSummary,
+  CaptureDraftCreateInput,
+  CaptureDraftSummary,
   CategoryDirection,
   CategoryScope,
   CategorySummary,
@@ -10,6 +12,7 @@ import type {
   OperationSummary,
   ReportMode,
   ReportSummary,
+  ScreenshotOcrResult,
   TransferSummary
 } from "./types";
 
@@ -110,6 +113,44 @@ type ReportSummaryDto = {
     incomeTotal?: string | number;
     expenseTotal?: string | number;
     netTotal?: string | number;
+  }>;
+};
+
+type CaptureDraftDto = {
+  id: string;
+  status: "pending" | "confirmed" | "discarded";
+  idempotencyKey: string;
+  captureSource: "screenshot";
+  capturedAt: string;
+  amount: string | number;
+  currency: string;
+  description: string;
+  accountId: string | null;
+  categoryId: string | null;
+  confidence: string | number | null;
+};
+
+type ScreenshotOcrResponseDto = {
+  captureSource: "screenshot";
+  parseVersion: "category-aggregate-v1";
+  recognizedAt: string;
+  items: Array<{
+    candidateType: "categoryAggregate";
+    categoryAggregate: {
+      externalLabel: string;
+    };
+    amount: string | number;
+    currency: string;
+    operationCount: number;
+    description: string;
+    confidence: string | number;
+    idempotencyKey: string;
+    evidenceHash: string;
+    suggestedCategoryId: string | null;
+  }>;
+  warnings: Array<{
+    code: "NO_CATEGORY_AGGREGATES_FOUND";
+    message: string;
   }>;
 };
 
@@ -214,6 +255,17 @@ export interface FinanceApiClient {
   }): Promise<TransferSummary>;
   archiveTransfer(transactionId: string): Promise<void>;
   restoreTransfer(transactionId: string): Promise<TransferSummary>;
+  uploadScreenshotOcr(
+    image: File,
+    capturedAt?: string,
+    householdId?: string | null
+  ): Promise<ScreenshotOcrResult>;
+  saveCategoryMapping(
+    externalLabel: string,
+    categoryId: string,
+    householdId?: string | null
+  ): Promise<void>;
+  createCaptureDraft(input: CaptureDraftCreateInput): Promise<CaptureDraftSummary>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -544,6 +596,91 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapTransfer(envelope.data, []);
   }
 
+  async uploadScreenshotOcr(
+    image: File,
+    capturedAt?: string,
+    householdId?: string | null
+  ): Promise<ScreenshotOcrResult> {
+    const body = new FormData();
+    body.append("image", image);
+    if (capturedAt) {
+      body.append("capturedAt", capturedAt);
+    }
+    if (householdId) {
+      body.append("householdId", householdId);
+    }
+
+    const envelope = await this.request<DataEnvelope<ScreenshotOcrResponseDto>>(
+      "/api/v1/capture-drafts/screenshot-ocr",
+      {
+        method: "POST",
+        body
+      }
+    );
+
+    return {
+      ...envelope.data,
+      items: envelope.data.items.map((item) => ({
+        candidateType: item.candidateType,
+        externalLabel: item.categoryAggregate.externalLabel,
+        amount: money(item.amount, item.currency),
+        operationCount: item.operationCount,
+        description: item.description,
+        confidence: Number(item.confidence),
+        idempotencyKey: item.idempotencyKey,
+        evidenceHash: item.evidenceHash,
+        suggestedCategoryId: item.suggestedCategoryId
+      }))
+    };
+  }
+
+  async saveCategoryMapping(
+    externalLabel: string,
+    categoryId: string,
+    householdId?: string | null
+  ): Promise<void> {
+    await this.request<DataEnvelope<{ categoryId: string; householdId: string | null }>>(
+      "/api/v1/capture-drafts/category-mappings",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          externalLabel,
+          categoryId,
+          ...(householdId ? { householdId } : {})
+        })
+      }
+    );
+  }
+
+  async createCaptureDraft(input: CaptureDraftCreateInput): Promise<CaptureDraftSummary> {
+    const envelope = await this.request<DataEnvelope<CaptureDraftDto>>(
+      "/api/v1/capture-drafts",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          idempotencyKey: input.idempotencyKey,
+          captureSource: input.captureSource,
+          capturedAt: input.capturedAt,
+          amount: input.amount.toFixed(4),
+          currency: input.currency,
+          description: input.description.trim(),
+          ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
+          ...(input.merchantName ? { merchantName: input.merchantName } : {}),
+          ...(input.accountId ? { accountId: input.accountId } : {}),
+          ...(input.categoryId ? { categoryId: input.categoryId } : {}),
+          ...(input.confidence !== undefined && input.confidence !== null
+            ? { confidence: input.confidence.toFixed(4) }
+            : {}),
+          ...(input.sourceAppPackage ? { sourceAppPackage: input.sourceAppPackage } : {}),
+          ...(input.sourceAppLabel ? { sourceAppLabel: input.sourceAppLabel } : {}),
+          ...(input.evidenceHash ? { evidenceHash: input.evidenceHash } : {})
+        })
+      }
+    );
+
+    return mapCaptureDraft(envelope.data);
+  }
+
   private async getReports(
     householdId: string | null,
     currency: CurrencyCode
@@ -584,7 +721,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    if (init.body) {
+    if (init.body && !isFormDataBody(init.body)) {
       headers.set("Content-Type", "application/json");
     }
 
@@ -619,6 +756,10 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
     return (await response.json()) as T;
   }
+}
+
+function isFormDataBody(body: BodyInit): boolean {
+  return typeof FormData !== "undefined" && body instanceof FormData;
 }
 
 function isUnsafeMethod(method: string): boolean {
@@ -767,6 +908,21 @@ function mapTransfer(
       accounts.find((account) => account.id === transaction.counterpartyAccountId)
         ?.name ?? "Куда",
     amount: money(transaction.amount, transaction.currency)
+  };
+}
+
+function mapCaptureDraft(draft: CaptureDraftDto): CaptureDraftSummary {
+  return {
+    id: draft.id,
+    status: draft.status,
+    idempotencyKey: draft.idempotencyKey,
+    captureSource: draft.captureSource,
+    capturedAt: draft.capturedAt,
+    amount: money(draft.amount, draft.currency),
+    description: draft.description,
+    accountId: draft.accountId,
+    categoryId: draft.categoryId,
+    confidence: draft.confidence === null ? null : Number(draft.confidence)
   };
 }
 

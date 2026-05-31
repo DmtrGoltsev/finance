@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiRequestError } from "./api/client";
-import type { DashboardSnapshot } from "./api/types";
+import type { CaptureDraftCreateInput, DashboardSnapshot, ScreenshotOcrResult } from "./api/types";
 
 const financeSnapshot: DashboardSnapshot = {
   session: {
@@ -156,6 +156,18 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     createDemoCategory: vi.fn(async () => snapshot.categories[0]),
     createDemoOperation: vi.fn(async () => snapshot.operations[0]),
     createDemoTransfer: vi.fn(async () => snapshot.transfers[0]),
+    createCaptureDraft: vi.fn(async (_input: CaptureDraftCreateInput) => ({
+      id: "draft-1",
+      status: "pending" as const,
+      idempotencyKey: "ocr-1",
+      captureSource: "screenshot" as const,
+      capturedAt: "2026-05-31T10:00:00.000Z",
+      amount: { value: 123.45, currency: "USD" as const },
+      description: "РџСЂРѕРґСѓРєС‚С‹ В· 3 РѕРїРµСЂР°С†РёРё",
+      accountId: "account-1",
+      categoryId: "category-1",
+      confidence: 0.9
+    })),
     deleteAccount: vi.fn(async () => undefined),
     deleteCategory: vi.fn(async () => undefined),
     getDashboardSnapshot: vi.fn(async () => snapshot),
@@ -165,10 +177,18 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     restoreCategory: vi.fn(async () => snapshot.categories[0]),
     restoreOperation: vi.fn(async () => snapshot.operations[0]),
     restoreTransfer: vi.fn(async () => snapshot.transfers[0]),
+    saveCategoryMapping: vi.fn(async (_externalLabel: string, _categoryId: string, _householdId?: string | null) => undefined),
     updateAccount: vi.fn(async () => snapshot.accounts[0]),
     updateCategory: vi.fn(async () => snapshot.categories[0]),
     updateOperation: vi.fn(async () => snapshot.operations[0]),
-    updateTransfer: vi.fn(async () => snapshot.transfers[0])
+    updateTransfer: vi.fn(async () => snapshot.transfers[0]),
+    uploadScreenshotOcr: vi.fn(async (): Promise<ScreenshotOcrResult> => ({
+      captureSource: "screenshot" as const,
+      parseVersion: "category-aggregate-v1" as const,
+      recognizedAt: "2026-05-31T10:00:01.000Z",
+      items: [],
+      warnings: []
+    }))
   };
 }
 
@@ -441,6 +461,100 @@ describe("PWA finance experience", () => {
 
     expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
     expect(screen.getByText("Продукты")).toBeInTheDocument();
+  });
+
+  it("uploads a screenshot, reviews OCR category candidates, saves mapping and creates drafts after confirmation", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.uploadScreenshotOcr = vi.fn(async () => ({
+      captureSource: "screenshot" as const,
+      parseVersion: "category-aggregate-v1" as const,
+      recognizedAt: "2026-05-31T10:00:01.000Z",
+      items: [
+        {
+          candidateType: "categoryAggregate" as const,
+          externalLabel: "Products",
+          amount: { value: 123.45, currency: "USD" as const },
+          operationCount: 3,
+          description: "Products · 3 operations",
+          confidence: 0.9,
+          idempotencyKey: "ocr-products",
+          evidenceHash: "hash-products",
+          suggestedCategoryId: "category-1"
+        }
+      ],
+      warnings: []
+    }));
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Операции/i }));
+
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).toHaveAttribute("accept", "image/png,image/jpeg,image/webp");
+    const screenshot = new File(["image"], "expenses.png", { type: "image/png" });
+    await user.upload(fileInput!, screenshot);
+
+    expect(await screen.findByText("Products")).toBeInTheDocument();
+    expect(screen.getByText("Products · 3 operations")).toBeInTheDocument();
+    expect(screen.getByText("3 операций")).toBeInTheDocument();
+    expect(screen.getByLabelText("Категория для Products")).toHaveValue("category-1");
+    expect(client.createCaptureDraft).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Создать черновики/i }));
+
+    await waitFor(() => {
+      expect(client.saveCategoryMapping).toHaveBeenCalledWith("Products", "category-1", null);
+      expect(client.createCaptureDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: "ocr-products",
+          captureSource: "screenshot",
+          amount: 123.45,
+          currency: "USD",
+          description: "Скрин: агрегированные расходы, 3 операций",
+          accountId: "account-1",
+          categoryId: "category-1",
+          confidence: 0.9,
+          evidenceHash: "hash-products"
+        })
+      );
+    });
+    const payload = client.createCaptureDraft.mock.calls[0][0];
+    expect(payload.description).not.toContain("Products");
+    expect(JSON.stringify(payload)).not.toMatch(/ocrText|rawOcrText|body|text|image/i);
+    expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows warnings-only OCR results without rendering create candidates", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.uploadScreenshotOcr = vi.fn(async () => ({
+      captureSource: "screenshot" as const,
+      parseVersion: "category-aggregate-v1" as const,
+      recognizedAt: "2026-05-31T10:00:01.000Z",
+      items: [],
+      warnings: [
+        {
+          code: "NO_CATEGORY_AGGREGATES_FOUND" as const,
+          message: "Итоговые строки не превращены в категории."
+        }
+      ]
+    }));
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Операции/i }));
+
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(fileInput!, new File(["image"], "summary.webp", { type: "image/webp" }));
+
+    expect(await screen.findByText("Итоговые строки не превращены в категории.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Проверка распознанных расходов")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Создать черновики/i })).not.toBeInTheDocument();
+    expect(client.createCaptureDraft).not.toHaveBeenCalled();
+    expect(document.body).not.toHaveTextContent(/Импорт отчета|Файл отчета|report-preview/i);
   });
 
   it("keeps mobile quick add controls clickable", async () => {

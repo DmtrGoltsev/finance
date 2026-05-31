@@ -471,6 +471,152 @@ describe("LiveFinanceApiClient", () => {
     expect(headers.get("Authorization")).toBeNull();
   });
 
+  it("uploads screenshot OCR as multipart form data without forcing a JSON content type", async () => {
+    document.cookie = "finance_csrf=csrf-ocr; path=/";
+    const image = new File(["png"], "screen.png", { type: "image/png" });
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      expect(path).toBe("/api/v1/capture-drafts/screenshot-ocr");
+      expect(init?.method).toBe("POST");
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-ocr");
+      expect(headers.get("Content-Type")).toBeNull();
+      expect(init?.body).toBeInstanceOf(FormData);
+      const body = init?.body as FormData;
+      expect(body.get("image")).toBe(image);
+      expect(body.get("capturedAt")).toBe("2026-05-31T10:00:00.000Z");
+      expect(body.get("householdId")).toBe("household-1");
+
+      return jsonResponse({
+        data: {
+          captureSource: "screenshot",
+          parseVersion: "category-aggregate-v1",
+          recognizedAt: "2026-05-31T10:00:01.000Z",
+          items: [
+            {
+              candidateType: "categoryAggregate",
+              categoryAggregate: { externalLabel: "Products" },
+              amount: "123.4500",
+              currency: "RUB",
+              operationCount: 3,
+              description: "Products · 3 operations",
+              confidence: "0.9000",
+              idempotencyKey: "ocr-1",
+              evidenceHash: "hash-1",
+              suggestedCategoryId: "category-1"
+            }
+          ],
+          warnings: []
+        }
+      });
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const result = await client.uploadScreenshotOcr(
+      image,
+      "2026-05-31T10:00:00.000Z",
+      "household-1"
+    );
+
+    expect(result.items[0]).toMatchObject({
+      externalLabel: "Products",
+      amount: { value: 123.45, currency: "RUB" },
+      operationCount: 3,
+      suggestedCategoryId: "category-1"
+    });
+  });
+
+  it("saves screenshot category mappings and creates structured capture drafts only", async () => {
+    document.cookie = "finance_csrf=csrf-capture; path=/";
+    const bodies: unknown[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-capture");
+
+      if (path === "/api/v1/capture-drafts/category-mappings" && init?.method === "PUT") {
+        expect(init?.body).toBe(
+          JSON.stringify({
+            externalLabel: "Products",
+            categoryId: "category-1",
+            householdId: "household-1"
+          })
+        );
+        return jsonResponse({ data: { categoryId: "category-1", householdId: "household-1" } });
+      }
+
+      if (path === "/api/v1/capture-drafts" && init?.method === "POST") {
+        const parsed = JSON.parse(String(init?.body));
+        bodies.push(parsed);
+        expect(parsed).toEqual({
+          idempotencyKey: "ocr-1",
+          captureSource: "screenshot",
+          capturedAt: "2026-05-31T10:00:00.000Z",
+          amount: "123.4500",
+          currency: "RUB",
+          description: "Products · 3 operations",
+          accountId: "account-1",
+          categoryId: "category-1",
+          confidence: "0.9000",
+          evidenceHash: "hash-1"
+        });
+        expect(Object.keys(parsed)).not.toEqual(
+          expect.arrayContaining(["ocrText", "rawOcrText", "body", "text", "image"])
+        );
+        return jsonResponse(
+          {
+            data: {
+              id: "draft-1",
+              status: "pending",
+              idempotencyKey: "ocr-1",
+              captureSource: "screenshot",
+              capturedAt: "2026-05-31T10:00:00.000Z",
+              amount: "123.4500",
+              currency: "RUB",
+              description: "Products · 3 operations",
+              accountId: "account-1",
+              categoryId: "category-1",
+              confidence: "0.9000"
+            }
+          },
+          201
+        );
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    await client.saveCategoryMapping("Products", "category-1", "household-1");
+    const draft = await client.createCaptureDraft({
+      idempotencyKey: "ocr-1",
+      captureSource: "screenshot",
+      capturedAt: "2026-05-31T10:00:00.000Z",
+      amount: 123.45,
+      currency: "RUB",
+      description: "Products · 3 operations",
+      accountId: "account-1",
+      categoryId: "category-1",
+      confidence: 0.9,
+      evidenceHash: "hash-1"
+    });
+
+    expect(bodies).toHaveLength(1);
+    expect(JSON.stringify(bodies[0])).not.toMatch(/ocrText|rawOcrText|body|text|image/i);
+    expect(draft).toMatchObject({
+      id: "draft-1",
+      categoryId: "category-1",
+      amount: { value: 123.45, currency: "RUB" }
+    });
+  });
+
   it("logs out the current PWA cookie session and clears readable csrf state", async () => {
     document.cookie = "finance_csrf=csrf-logout; path=/";
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

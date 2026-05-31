@@ -130,6 +130,8 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/transactions/{transactionId}/restore",
         "/transactions/autocomplete",
         "/capture-drafts",
+        "/capture-drafts/screenshot-ocr",
+        "/capture-drafts/category-mappings",
         "/capture-drafts/{draftId}",
         "/capture-drafts/{draftId}/confirm",
         "/capture-drafts/{draftId}/discard",
@@ -181,6 +183,27 @@ def test_openapi_excludes_post_mvp_import_bank_sms_push_broker_routes() -> None:
 
     assert violations == set()
     assert "/transactions/{transactionId}/void" not in paths
+
+
+def test_openapi_capture_screenshot_ocr_contract_is_structured_only() -> None:
+    contract = _contract_text()
+
+    assert "/capture-drafts/screenshot-ocr:" in contract
+    assert "multipart/form-data:" in contract
+    assert "$ref: '#/components/schemas/ScreenshotOcrEnvelope'" in contract
+    assert "/capture-drafts/category-mappings:" in contract
+    assert "$ref: '#/components/schemas/CaptureCategoryMappingPutRequest'" in contract
+
+    forbidden_fields = (
+        "rawImage",
+        "rawScreenshot",
+        "rawOcrText",
+        "ocrText:",
+        "body:",
+        "text:",
+    )
+    for field_name in forbidden_fields:
+        assert field_name not in contract
 
 
 def test_openapi_manual_first_enum_boundaries() -> None:

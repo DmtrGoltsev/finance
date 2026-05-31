@@ -46,6 +46,8 @@ EXPECTED_MOUNTED_CAPTURE_DRAFT_OPERATIONS = frozenset(
     {
         ("GET", "/api/v1/capture-drafts"),
         ("POST", "/api/v1/capture-drafts"),
+        ("POST", "/api/v1/capture-drafts/screenshot-ocr"),
+        ("PUT", "/api/v1/capture-drafts/category-mappings"),
         ("PATCH", "/api/v1/capture-drafts/{draftId}"),
         ("POST", "/api/v1/capture-drafts/{draftId}/confirm"),
         ("POST", "/api/v1/capture-drafts/{draftId}/discard"),
@@ -159,6 +161,8 @@ def test_runtime_openapi_exposes_transactions_and_reports_for_w3_runtime_workers
     assert "/api/v1/transactions/{transactionId}/restore" in runtime_paths
     assert "/api/v1/transactions/{transactionId}/void" not in runtime_paths
     assert "/api/v1/capture-drafts" in runtime_paths
+    assert "/api/v1/capture-drafts/screenshot-ocr" in runtime_paths
+    assert "/api/v1/capture-drafts/category-mappings" in runtime_paths
     assert "/api/v1/capture-drafts/{draftId}" in runtime_paths
     assert "/api/v1/capture-drafts/{draftId}/confirm" in runtime_paths
     assert "/api/v1/capture-drafts/{draftId}/discard" in runtime_paths

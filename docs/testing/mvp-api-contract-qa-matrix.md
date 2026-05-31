@@ -30,7 +30,7 @@ OpenAPI `api/openapi/openapi.yaml` синхронизирован с факти�
 | Imports/files/bank/full SMS/push/broker | `/api/v1/imports*`, `/api/v1/import-jobs*`, `/api/v1/files/imports*`, `/api/v1/bank-*`, `/api/v1/sms-imports*`, `/api/v1/push-imports*`, `/api/v1/broker-connections*`, `/api/v1/external-credentials*`, `/api/v1/notifications/push-tokens*` |
 | Debug/support bypass | User-facing debug/support routes that bypass visible-scope predicates and redaction |
 
-Reserved post-MVP `sourceType` vocabulary such as `file_import`, `bank_api`, `sms` and `push` remains rejected by direct transaction create/update flows. Capture drafts must use a separate user-confirmed lifecycle: user-initiated OCR from a selected screenshot, local/on-device before structured draft review, no SMS/push/notification interception, no raw SMS/push/notification body server-side, structured draft with `idempotencyKey`/`evidenceHash`, and transaction creation only after user confirm/edit.
+Reserved post-MVP `sourceType` vocabulary such as `file_import`, `bank_api`, `sms` and `push` remains rejected by direct transaction create/update flows. Capture drafts must use a separate user-confirmed lifecycle: user-initiated OCR from a selected screenshot, Android on-device OCR without screenshot upload, PWA/iOS browser temporary upload to self-hosted backend OCR, no SMS/push/notification interception, no persistent screenshot/raw OCR/raw SMS/push/notification body server-side storage, structured draft with `idempotencyKey`/`evidenceHash`, and transaction creation only after user confirm/edit.
 
 ## Contract guards
 

@@ -93,6 +93,34 @@ class Settings(BaseSettings):
         ge=210_000,
         description="PBKDF2-SHA256 iterations for MVP password hash verification.",
     )
+    capture_screenshot_ocr_enabled: bool = Field(
+        default=True,
+        description="Enable server-side screenshot OCR for PWA/iOS capture drafts.",
+    )
+    capture_screenshot_ocr_tesseract_cmd: str | None = Field(
+        default=None,
+        description="Optional path to the self-hosted Tesseract binary.",
+    )
+    capture_screenshot_ocr_lang: str = Field(
+        default="rus+eng",
+        min_length=1,
+        description="Tesseract language pack list for screenshot OCR.",
+    )
+    capture_screenshot_ocr_max_upload_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=1,
+        description="Maximum screenshot upload size for OCR in bytes.",
+    )
+    capture_screenshot_ocr_max_pixels: int = Field(
+        default=16_000_000,
+        ge=1,
+        description="Maximum decoded screenshot pixels accepted by OCR.",
+    )
+    capture_screenshot_ocr_timeout_seconds: int = Field(
+        default=8,
+        ge=1,
+        description="Per-image Tesseract OCR timeout in seconds.",
+    )
 
 
 @lru_cache

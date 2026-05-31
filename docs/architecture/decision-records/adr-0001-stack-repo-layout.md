@@ -17,7 +17,7 @@ The MVP is a closed manual-entry personal and household finance application with
 - future Android client;
 - contract-first API discipline;
 - strict deny-by-default authz tests;
-- no file imports, bank APIs, SMS/push integrations, SMS/push/notification interception, bank credentials, broker credentials, card data, IBAN/account requisites, raw SMS/push/notification body server-side storage, or raw bank statements. Capture drafts are limited to user-initiated OCR from a selected screenshot, local/on-device before structured review, and user-confirmed transactions.
+- no file imports, bank APIs, SMS/push integrations, SMS/push/notification interception, bank credentials, broker credentials, card data, IBAN/account requisites, raw SMS/push/notification body server-side storage, or raw bank statements. Capture drafts are limited to user-initiated OCR from a selected screenshot: Android on-device without upload, PWA/iOS browser temporary self-hosted backend OCR without persistent screenshot/raw OCR storage, and user-confirmed transactions.
 
 Wave 1 contracts establish these non-negotiable invariants:
 

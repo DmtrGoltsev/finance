@@ -15,6 +15,13 @@ RESTRICT_REVISION_PATH = (
     / "versions"
     / "20260528_0008_restrict_capture_drafts_screenshot_source.py"
 )
+MAPPING_REVISION_PATH = (
+    REPO_ROOT
+    / "db"
+    / "migrations"
+    / "versions"
+    / "20260531_0009_capture_category_mappings.py"
+)
 
 
 class ScalarResult:
@@ -79,6 +86,11 @@ class CaptureDraftsMigrationSliceTests(unittest.TestCase):
             "restrict_capture_drafts_revision",
             RESTRICT_REVISION_PATH,
         )
+        self.mapping_source = MAPPING_REVISION_PATH.read_text(encoding="utf-8")
+        self.mapping_module = self.load_revision(
+            "capture_category_mappings_revision",
+            MAPPING_REVISION_PATH,
+        )
 
     def load_revision(self, name: str, path: Path) -> ModuleType:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -95,6 +107,10 @@ class CaptureDraftsMigrationSliceTests(unittest.TestCase):
     def test_restrict_source_revision_chains_after_capture_drafts(self) -> None:
         self.assertEqual("20260528_0008", self.restrict_module.revision)
         self.assertEqual("20260523_0007", self.restrict_module.down_revision)
+
+    def test_mapping_revision_chains_after_screenshot_source_restriction(self) -> None:
+        self.assertEqual("20260531_0009", self.mapping_module.revision)
+        self.assertEqual("20260528_0008", self.mapping_module.down_revision)
 
     def test_creates_safe_capture_drafts_table_without_raw_body_columns(self) -> None:
         recorder = OperationRecorder()
@@ -138,6 +154,49 @@ class CaptureDraftsMigrationSliceTests(unittest.TestCase):
         lowered = self.source.lower()
         self.assertIn("no raw screenshot image or ocr payload columns", lowered)
         for forbidden in ("raw_message", "raw_notification", "raw_screenshot", "raw_body"):
+            self.assertNotIn(forbidden, lowered)
+
+    def test_mapping_revision_creates_hash_only_table_without_raw_label_storage(self) -> None:
+        recorder = OperationRecorder()
+        original_op = self.mapping_module.op
+        self.mapping_module.op = recorder
+        try:
+            self.mapping_module.upgrade()
+        finally:
+            self.mapping_module.op = original_op
+
+        self.assertEqual(
+            ["capture_category_mappings"],
+            [name for name, _ in recorder.created_tables],
+        )
+        columns = set(recorder.created_tables[0][1])
+        self.assertIn("owner_user_id", columns)
+        self.assertIn("household_id", columns)
+        self.assertIn("category_id", columns)
+        self.assertIn("external_label_hash", columns)
+        self.assertTrue(
+            {
+                "external_label",
+                "raw_external_label",
+                "ocr_text",
+                "raw_ocr_text",
+                "body",
+                "text",
+            }.isdisjoint(columns)
+        )
+        self.assertIn(
+            (
+                "uq_capture_category_mappings_owner_personal_hash",
+                "capture_category_mappings",
+                True,
+            ),
+            recorder.created_indexes,
+        )
+
+    def test_mapping_revision_source_documents_no_raw_columns(self) -> None:
+        lowered = self.mapping_source.lower()
+        self.assertIn("no raw external label, ocr text, or screenshot image columns", lowered)
+        for forbidden in ("external_label,", "raw_external_label", "ocr_text", "raw_ocr_text"):
             self.assertNotIn(forbidden, lowered)
 
     def test_restrict_source_upgrade_tightens_check_without_data_cleanup(self) -> None:

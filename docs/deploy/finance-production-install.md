@@ -20,11 +20,63 @@ FINANCE_BACKEND_AUTH_TOKEN_HASH_SECRET=<32+ byte secret from secret manager>
 FINANCE_BACKEND_AUTH_COOKIE_PATH=/
 FINANCE_BACKEND_AUTH_COOKIE_SECURE=true
 FINANCE_BACKEND_AUTH_COOKIE_SAMESITE=lax
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_ENABLED=true
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TESSERACT_CMD=/usr/bin/tesseract
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_LANG=rus+eng
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_UPLOAD_BYTES=8388608
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_PIXELS=16000000
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TIMEOUT_SECONDS=8
 ```
 
 `psycopg` is required by the sync SQLAlchemy path because
 `postgresql+asyncpg` is converted to `postgresql+psycopg` for migrations and
 DB-backed runtime helpers.
+
+## Screenshot OCR runtime
+
+PWA/iOS browser screenshot capture uses `POST /api/v1/capture-drafts/screenshot-ocr`
+and requires self-hosted Tesseract on the backend host. Android OCR remains
+on-device and does not upload screenshots.
+
+Install the OS packages before enabling OCR:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
+tesseract --list-langs
+```
+
+Expected language output includes `rus` and `eng`. If the binary is outside
+`/usr/bin/tesseract`, set `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TESSERACT_CMD`
+to the absolute path.
+
+Operational OCR checks:
+
+- `curl -fsS http://127.0.0.1:8081/health` confirms the backend process, not the
+  Tesseract binary.
+- A small authenticated PNG/JPEG/WebP request to
+  `/finance-api/api/v1/capture-drafts/screenshot-ocr` is the runtime diagnostic
+  for OCR availability. `OCR_ENGINE_UNAVAILABLE` means the binary or language
+  data is missing; `OCR_DISABLED` means the env flag is off; `OCR_TIMEOUT` means
+  the image or host is too slow for the configured timeout.
+- The endpoint accepts only PNG/JPEG/WebP, max upload bytes and decoded pixels
+  from the `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_*` settings. HEIC and raw
+  text/body payloads must be rejected.
+
+Screenshots and raw OCR text are temporary request data only. They must not be
+written to application logs, audit, backups, object storage, support artifacts,
+or debug dumps. Category mappings store only normalized label hashes; raw labels
+are transient request/response values for user confirmation.
+
+If nginx fronts `/finance-api/`, set a body-size limit high enough for the OCR
+upload cap and low enough to preserve the backend limit, for example:
+
+```nginx
+location /finance-api/ {
+    client_max_body_size 8m;
+    proxy_pass http://127.0.0.1:8081/;
+}
+```
 
 ## Frontend build
 

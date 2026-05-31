@@ -55,6 +55,61 @@ export type OperationSummary = {
   amount: MoneyAmount;
 };
 
+export type ScreenshotOcrCandidate = {
+  candidateType: "categoryAggregate";
+  externalLabel: string;
+  amount: MoneyAmount;
+  operationCount: number;
+  description: string;
+  confidence: number;
+  idempotencyKey: string;
+  evidenceHash: string;
+  suggestedCategoryId: string | null;
+};
+
+export type ScreenshotOcrWarning = {
+  code: "NO_CATEGORY_AGGREGATES_FOUND";
+  message: string;
+};
+
+export type ScreenshotOcrResult = {
+  captureSource: "screenshot";
+  parseVersion: "category-aggregate-v1";
+  recognizedAt: string;
+  items: ScreenshotOcrCandidate[];
+  warnings: ScreenshotOcrWarning[];
+};
+
+export type CaptureDraftCreateInput = {
+  idempotencyKey: string;
+  captureSource: "screenshot";
+  capturedAt: string;
+  amount: number;
+  currency: CurrencyCode;
+  description: string;
+  occurredAt?: string | null;
+  merchantName?: string | null;
+  accountId?: string | null;
+  categoryId?: string | null;
+  confidence?: number | null;
+  sourceAppPackage?: string | null;
+  sourceAppLabel?: string | null;
+  evidenceHash?: string | null;
+};
+
+export type CaptureDraftSummary = {
+  id: string;
+  status: "pending" | "confirmed" | "discarded";
+  idempotencyKey: string;
+  captureSource: "screenshot";
+  capturedAt: string;
+  amount: MoneyAmount;
+  description: string;
+  accountId: string | null;
+  categoryId: string | null;
+  confidence: number | null;
+};
+
 export type TransferSummary = {
   id: string;
   date: string;

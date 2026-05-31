@@ -37,7 +37,7 @@ tags:
   - name: Transactions
     description: Manual transaction entry, search, autocomplete, and lifecycle operations.
   - name: CaptureDrafts
-    description: Pending screenshot OCR capture candidates. Raw image bytes and OCR text are never accepted.
+    description: Pending screenshot OCR capture candidates plus transient server-side screenshot recognition. Raw OCR text is never accepted by structured draft endpoints or returned.
   - name: Categories
     description: Personal and household category management for manual finance records.
   - name: Reports
@@ -490,6 +490,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/screenshot-ocr:
+    post:
+      tags: [CaptureDrafts]
+      operationId: recognizeCaptureDraftScreenshotOcr
+      summary: Recognize category aggregate rows from a screenshot.
+      description: |
+        Authenticated server-side OCR endpoint for PWA/iOS screenshot capture.
+        The screenshot upload is temporary, accepted only as PNG, JPEG, or WebP,
+        and is not stored. The response contains structured candidates only and
+        never returns raw OCR text, full OCR blocks, image bytes, or image hashes.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ScreenshotOcrRequest'
+      responses:
+        '200':
+          description: Structured screenshot OCR candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenshotOcrEnvelope'
+        '413':
+          $ref: '#/components/responses/Error'
+        '415':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/category-mappings:
+    put:
+      tags: [CaptureDrafts]
+      operationId: putCaptureDraftCategoryMapping
+      summary: Save a hash-only screenshot category mapping.
+      description: |
+        Stores only the authenticated actor, optional household context,
+        selected category, and normalized external label hash. The submitted
+        externalLabel is transient request input and is never stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureCategoryMappingPutRequest'
+      responses:
+        '200':
+          description: Stored category mapping without echoing externalLabel.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureCategoryMappingEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -1129,10 +1188,18 @@ components:
         - TRANSFER_SCOPE_NOT_SUPPORTED
         - TRANSFER_COUNTERPARTY_REQUIRED
         - TRANSFER_COUNTERPARTY_NOT_ACCESSIBLE
+        - TOO_MANY_REQUESTS
         - RATE_LIMITED
         - LOGIN_RATE_LIMITED
         - RESET_RATE_LIMITED
         - INVITE_RATE_LIMITED
+        - UPLOAD_TOO_LARGE
+        - IMAGE_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
+        - INVALID_IMAGE
+        - OCR_DISABLED
+        - OCR_ENGINE_UNAVAILABLE
+        - OCR_TIMEOUT
         - INVITE_NOT_FOUND_OR_NOT_ACCESSIBLE
         - INVITE_EXPIRED
         - INVITE_ALREADY_USED
@@ -1721,6 +1788,134 @@ components:
           type: [string, 'null']
           maxLength: 128
       description: Only pending draft candidate fields are editable. Raw image bytes and OCR text are not accepted.
+    ScreenshotOcrRequest:
+      type: object
+      additionalProperties: false
+      required: [image]
+      properties:
+        image:
+          type: string
+          format: binary
+          description: Temporary PNG, JPEG, or WebP screenshot; max 8 MiB and 16 MP decoded.
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+      description: Multipart OCR request. HEIC and all non-image/raw payload formats are rejected.
+    CategoryAggregateDto:
+      type: object
+      additionalProperties: false
+      required: [externalLabel]
+      properties:
+        externalLabel:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Transient visible label for UI mapping only; never stored by the server.
+    ScreenshotOcrCandidateDto:
+      type: object
+      additionalProperties: false
+      required:
+        - candidateType
+        - categoryAggregate
+        - amount
+        - currency
+        - operationCount
+        - description
+        - confidence
+        - idempotencyKey
+        - evidenceHash
+      properties:
+        candidateType:
+          type: string
+          enum: [categoryAggregate]
+        categoryAggregate:
+          $ref: '#/components/schemas/CategoryAggregateDto'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        operationCount:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        confidence:
+          type: string
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        evidenceHash:
+          type: string
+          maxLength: 128
+          description: Hash over sanitized candidate fields, not over the uploaded image.
+        suggestedCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+      description: Structured category aggregate OCR candidate; no raw OCR text or image data.
+    ScreenshotOcrWarningCode:
+      type: string
+      enum: [NO_CATEGORY_AGGREGATES_FOUND]
+    ScreenshotOcrWarningDto:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ScreenshotOcrWarningCode'
+        message:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ScreenshotOcrResponseDto:
+      type: object
+      additionalProperties: false
+      required: [captureSource, parseVersion, recognizedAt, items, warnings]
+      properties:
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        parseVersion:
+          type: string
+          enum: [category-aggregate-v1]
+        recognizedAt:
+          $ref: '#/components/schemas/DateTime'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScreenshotOcrCandidateDto'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScreenshotOcrWarningDto'
+    CaptureCategoryMappingPutRequest:
+      type: object
+      additionalProperties: false
+      required: [externalLabel, categoryId]
+      properties:
+        externalLabel:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Transient UI label submitted for hashing only; never stored.
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+    CaptureCategoryMappingDto:
+      type: object
+      additionalProperties: false
+      required: [categoryId]
+      properties:
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
     CategoryDto:
       type: object
       additionalProperties: false
@@ -2093,6 +2288,20 @@ components:
             $ref: '#/components/schemas/CaptureDraftDto'
         page:
           $ref: '#/components/schemas/PageInfo'
+    ScreenshotOcrEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ScreenshotOcrResponseDto'
+    CaptureCategoryMappingEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CaptureCategoryMappingDto'
     CategoryEnvelope:
       type: object
       additionalProperties: false

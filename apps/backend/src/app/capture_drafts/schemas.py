@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
 
@@ -25,6 +25,7 @@ OptionalShortText = Annotated[str, StringConstraints(max_length=500)]
 SourceAppText = Annotated[str, StringConstraints(max_length=255)]
 EvidenceHash = Annotated[str, StringConstraints(max_length=128)]
 Confidence = Annotated[Decimal, Field(ge=0, le=1, max_digits=5, decimal_places=4)]
+ExternalLabel = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 
 
 class CaptureDraftDto(ApiModel):
@@ -91,3 +92,56 @@ class CaptureDraftEnvelope(ApiModel):
 class CaptureDraftPageEnvelope(ApiModel):
     items: list[CaptureDraftDto]
     page: PageInfo
+
+
+class CategoryAggregateDto(ApiModel):
+    external_label: ExternalLabel
+
+
+class ScreenshotOcrCandidateDto(ApiModel):
+    candidate_type: Literal["categoryAggregate"] = "categoryAggregate"
+    category_aggregate: CategoryAggregateDto
+    amount: DecimalString
+    currency: CurrencyCode
+    operation_count: Annotated[int, Field(ge=1, le=10_000)]
+    description: ShortText
+    confidence: Confidence
+    idempotency_key: ResourceId
+    evidence_hash: EvidenceHash
+    suggested_category_id: ResourceId | None = None
+
+
+class ScreenshotOcrWarningCode(StrEnum):
+    NO_CATEGORY_AGGREGATES_FOUND = "NO_CATEGORY_AGGREGATES_FOUND"
+
+
+class ScreenshotOcrWarningDto(ApiModel):
+    code: ScreenshotOcrWarningCode
+    message: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class ScreenshotOcrResponseDto(ApiModel):
+    capture_source: CaptureSource
+    parse_version: Annotated[str, StringConstraints(min_length=1, max_length=80)]
+    recognized_at: datetime
+    items: list[ScreenshotOcrCandidateDto]
+    warnings: list[ScreenshotOcrWarningDto] = Field(default_factory=list)
+
+
+class ScreenshotOcrEnvelope(ApiModel):
+    data: ScreenshotOcrResponseDto
+
+
+class CaptureCategoryMappingPutRequest(ApiModel):
+    external_label: ExternalLabel
+    category_id: ResourceId
+    household_id: ResourceId | None = None
+
+
+class CaptureCategoryMappingDto(ApiModel):
+    category_id: ResourceId
+    household_id: ResourceId | None = None
+
+
+class CaptureCategoryMappingEnvelope(ApiModel):
+    data: CaptureCategoryMappingDto

@@ -18,6 +18,7 @@ import {
   Shield,
   ShoppingCart,
   Tag,
+  Upload,
   WalletCards,
   X
 } from "lucide-react";
@@ -42,6 +43,7 @@ import type {
   OperationSummary,
   ReportMode,
   ReportSummary,
+  ScreenshotOcrCandidate,
   TransferSummary
 } from "./api/types";
 
@@ -375,7 +377,12 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           />
         )}
         {activeSection === "operations" && (
-          <OperationsPage snapshot={snapshot} viewMode={viewMode} />
+          <OperationsPage
+            client={client}
+            snapshot={snapshot}
+            viewMode={viewMode}
+            onCaptureDraftsSaved={loadSnapshot}
+          />
         )}
         {activeSection === "assets" && (
           <AssetsPage snapshot={snapshot} viewMode={viewMode} />
@@ -654,9 +661,13 @@ function Metric({
 }
 
 function OperationsPage({
+  client,
+  onCaptureDraftsSaved,
   snapshot,
   viewMode
 }: {
+  client: FinanceApiClient;
+  onCaptureDraftsSaved: () => Promise<DashboardSnapshot>;
   snapshot: DashboardSnapshot;
   viewMode: ViewMode;
 }) {
@@ -664,6 +675,9 @@ function OperationsPage({
   const operations = visibleOperations(snapshot.operations, accounts);
   const transfers = visibleTransfers(snapshot.transfers, accounts);
   const timeline = recentTimeline(operations, transfers);
+  const categories = visibleCategories(snapshot.categories, viewMode).filter(
+    (category) => category.direction === "expense"
+  );
 
   return (
     <section className="screenStack" aria-labelledby="operations-title">
@@ -671,7 +685,254 @@ function OperationsPage({
         <h3 id="operations-title">Операции</h3>
         <span>{timeline.length} записей</span>
       </div>
+      <ScreenshotOcrCapture
+        accounts={accounts}
+        canUseHousehold={Boolean(snapshot.session.householdId)}
+        categories={categories}
+        client={client}
+        householdId={viewMode === "shared" ? snapshot.session.householdId : null}
+        onSaved={onCaptureDraftsSaved}
+      />
       <TimelineList items={timeline} />
+    </section>
+  );
+}
+
+type OcrReviewRow = {
+  candidate: ScreenshotOcrCandidate;
+  include: boolean;
+  categoryId: string;
+};
+
+const screenshotMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function captureDraftDescriptionForAggregate(candidate: ScreenshotOcrCandidate): string {
+  return `Скрин: агрегированные расходы, ${candidate.operationCount} операций`;
+}
+
+function ScreenshotOcrCapture({
+  accounts,
+  canUseHousehold,
+  categories,
+  client,
+  householdId,
+  onSaved
+}: {
+  accounts: AccountSummary[];
+  canUseHousehold: boolean;
+  categories: CategorySummary[];
+  client: FinanceApiClient;
+  householdId: string | null;
+  onSaved: () => Promise<DashboardSnapshot>;
+}) {
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [rows, setRows] = useState<OcrReviewRow[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [isRecognizing, setRecognizing] = useState(false);
+  const [isSaving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setAccountId((current) =>
+      current && accounts.some((account) => account.id === current)
+        ? current
+        : accounts[0]?.id ?? ""
+    );
+  }, [accounts]);
+
+  const recognize = async (file: File | undefined) => {
+    setStatus("");
+    setError("");
+    setWarnings([]);
+    setRows([]);
+
+    if (!file) {
+      return;
+    }
+    if (!screenshotMimeTypes.has(file.type)) {
+      setError("Поддерживаются только PNG, JPEG или WebP скриншоты.");
+      return;
+    }
+
+    const nextCapturedAt = new Date().toISOString();
+    setCapturedAt(nextCapturedAt);
+    setRecognizing(true);
+    try {
+      const result = await client.uploadScreenshotOcr(
+        file,
+        nextCapturedAt,
+        canUseHousehold ? householdId : null
+      );
+      setWarnings(result.warnings.map((warning) => warning.message));
+      setRows(
+        result.items.map((candidate) => ({
+          candidate,
+          include: true,
+          categoryId:
+            candidate.suggestedCategoryId &&
+            categories.some((category) => category.id === candidate.suggestedCategoryId)
+              ? candidate.suggestedCategoryId
+              : ""
+        }))
+      );
+      setStatus(
+        result.items.length > 0
+          ? "Проверьте найденные категории перед сохранением."
+          : "Категории расходов на скриншоте не найдены."
+      );
+    } catch {
+      setError("Не удалось распознать скрин расходов. Попробуйте другой скриншот.");
+    } finally {
+      setRecognizing(false);
+    }
+  };
+
+  const updateRow = (idempotencyKey: string, patch: Partial<OcrReviewRow>) => {
+    setRows((currentRows) =>
+      currentRows.map((row) =>
+        row.candidate.idempotencyKey === idempotencyKey ? { ...row, ...patch } : row
+      )
+    );
+  };
+
+  const selectedRows = rows.filter((row) => row.include);
+  const canConfirm =
+    selectedRows.length > 0 &&
+    selectedRows.every((row) => row.categoryId) &&
+    Boolean(accountId) &&
+    !isRecognizing &&
+    !isSaving;
+
+  const confirmRows = async () => {
+    if (!canConfirm || !capturedAt) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setStatus("Сохраняем черновики");
+    try {
+      for (const row of selectedRows) {
+        await client.saveCategoryMapping(
+          row.candidate.externalLabel,
+          row.categoryId,
+          canUseHousehold ? householdId : null
+        );
+        await client.createCaptureDraft({
+          idempotencyKey: row.candidate.idempotencyKey,
+          captureSource: "screenshot",
+          capturedAt,
+          amount: Math.abs(row.candidate.amount.value),
+          currency: row.candidate.amount.currency,
+          description: captureDraftDescriptionForAggregate(row.candidate),
+          accountId,
+          categoryId: row.categoryId,
+          confidence: row.candidate.confidence,
+          evidenceHash: row.candidate.evidenceHash
+        });
+      }
+      await onSaved();
+      setRows([]);
+      setWarnings([]);
+      setStatus("Черновики расходов сохранены");
+    } catch {
+      setError("Не удалось сохранить черновики. Проверьте категории и счет.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="plainSection" aria-labelledby="screenshot-ocr-title">
+      <div className="sectionHead compact">
+        <h3 id="screenshot-ocr-title">Скрин расходов</h3>
+        <label className="ghostButton uploadButton">
+          <Upload size={17} aria-hidden="true" />
+          {isRecognizing ? "Распознаем" : "Распознать скрин расходов"}
+          <input
+            accept="image/png,image/jpeg,image/webp"
+            disabled={isRecognizing || isSaving}
+            type="file"
+            onChange={(event) => {
+              void recognize(event.target.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+      </div>
+
+      {accounts.length > 0 && (
+        <label className="field compactField">
+          <span>Счет для черновиков</span>
+          <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {error && <p className="formError">{error}</p>}
+      {status && <p className={error ? "formError" : "formHint"}>{status}</p>}
+      {warnings.map((warning) => (
+        <p className="formError" key={warning}>
+          {warning}
+        </p>
+      ))}
+
+      {rows.length > 0 && (
+        <div className="captureReviewList" aria-label="Проверка распознанных расходов">
+          {rows.map((row) => (
+            <article className="captureReviewRow" key={row.candidate.idempotencyKey}>
+              <label className="includeToggle">
+                <input
+                  checked={row.include}
+                  type="checkbox"
+                  onChange={(event) =>
+                    updateRow(row.candidate.idempotencyKey, { include: event.target.checked })
+                  }
+                />
+                <span>Сохранить</span>
+              </label>
+              <div>
+                <strong>{row.candidate.externalLabel}</strong>
+                <span>{row.candidate.description}</span>
+              </div>
+              <div>
+                <strong>{formatMoney(row.candidate.amount)}</strong>
+                <span>{row.candidate.operationCount} операций</span>
+              </div>
+              <label className="field compactField">
+                <span>Категория</span>
+                <select
+                  aria-label={`Категория для ${row.candidate.externalLabel}`}
+                  value={row.categoryId}
+                  onChange={(event) =>
+                    updateRow(row.candidate.idempotencyKey, {
+                      categoryId: event.target.value
+                    })
+                  }
+                >
+                  <option value="">Выберите</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </article>
+          ))}
+          <button className="submitButton" disabled={!canConfirm} type="button" onClick={confirmRows}>
+            <Check size={18} aria-hidden="true" />
+            {isSaving ? "Сохраняем" : "Создать черновики"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

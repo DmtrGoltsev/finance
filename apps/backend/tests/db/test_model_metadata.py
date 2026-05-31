@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "categories",
     "transactions",
     "capture_drafts",
+    "capture_category_mappings",
     "sessions",
     "password_reset_tokens",
     "export_jobs",
@@ -99,6 +100,10 @@ class ModelMetadataTests(unittest.TestCase):
             ("sessions", "ix_sessions_session_version"),
             ("transactions", "ix_transactions_account_occurred_status"),
             ("capture_drafts", "ix_capture_drafts_owner_status_created"),
+            (
+                "capture_category_mappings",
+                "uq_capture_category_mappings_owner_personal_hash",
+            ),
             ("export_jobs", "ix_export_jobs_requested_status_created"),
             ("outbox_events", "ix_outbox_events_status_available_created"),
         ):

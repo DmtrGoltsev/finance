@@ -36,6 +36,8 @@ class RateLimitKey(StrEnum):
     INVITE_TOKEN_IP_HOUR = "invite_token.ip.hour"
     EXPORT_CREATE_USER_HOUR = "export_create.user.hour"
     EXPORT_CREATE_USER_DAY = "export_create.user.day"
+    SCREENSHOT_OCR_ACTOR_MINUTE = "screenshot_ocr.actor.minute"
+    SCREENSHOT_OCR_IP_MINUTE = "screenshot_ocr.ip.minute"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +176,20 @@ ADR_ENGINEERING_DEFAULT_RULES: tuple[RateLimitRule, ...] = (
         "user",
         "Export job creates per user per day.",
     ),
+    RateLimitRule(
+        RateLimitKey.SCREENSHOT_OCR_ACTOR_MINUTE,
+        10,
+        timedelta(minutes=1),
+        "actor",
+        "Screenshot OCR requests per actor per minute.",
+    ),
+    RateLimitRule(
+        RateLimitKey.SCREENSHOT_OCR_IP_MINUTE,
+        30,
+        timedelta(minutes=1),
+        "ip",
+        "Screenshot OCR requests per IP per minute.",
+    ),
 )
 
 DEFAULT_RATE_LIMIT_RULES = MappingProxyType(
@@ -274,3 +290,8 @@ def auth_rate_limit_identity_for_email(email: str) -> str:
 def auth_rate_limit_identity_for_ip(ip_address: str | None) -> str:
     normalized = (ip_address or "unknown").strip().lower() or "unknown"
     return f"ip:{normalized}"
+
+
+def auth_rate_limit_identity_for_actor(user_id: str | None) -> str:
+    normalized = (user_id or "unknown").strip().lower() or "unknown"
+    return "actor:" + sha256(normalized.encode("utf-8")).hexdigest()

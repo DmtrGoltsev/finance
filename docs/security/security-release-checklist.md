@@ -194,8 +194,9 @@
 - [ ] MVP contains no full import endpoints such as `/api/v1/sms-imports`, `/api/v1/push-imports`, `/api/v1/notifications/push-tokens`; capture endpoints, if present, are limited to user-initiated screenshot OCR draft lifecycle.
 - [ ] MVP contains no `/api/v1/broker-connections`, `/api/v1/external-credentials`.
 - [ ] Transaction create/update flows create financial transactions only after manual entry or user-confirmed capture draft; raw `sms`/`push` source values cannot create transactions directly.
-- [ ] Capture draft flow uses only user-initiated OCR from a selected screenshot, local/on-device before structured draft review; it does not intercept SMS, push notifications or Android notifications.
-- [ ] Capture stores only structured capture draft, `idempotencyKey`/`evidenceHash`, confidence/metadata and status `pending`/`confirmed`/`discarded`.
+- [ ] Capture draft flow uses only user-initiated OCR from a selected screenshot: Android on-device without screenshot upload; PWA/iOS browser temporary upload to self-hosted backend OCR. It does not intercept SMS, push notifications or Android notifications.
+- [ ] Capture stores only structured capture draft, `idempotencyKey`/`evidenceHash`, confidence/metadata and status `pending`/`confirmed`/`discarded`; screenshots and raw OCR text are not persisted or logged.
+- [ ] OCR category mappings store only normalized label hashes; raw labels are transient request/response values for user confirmation only.
 - [ ] MVP has no fields, tables, settings, secrets, logs or backups intended to store bank passwords, bank/API/broker tokens, SMS codes, push secrets, raw SMS/push/notification body, card numbers, IBAN/account requisites or raw bank statements.
 
 ## Обязательные доказательства перед MVP release
@@ -213,7 +214,7 @@
 - [ ] Secret evidence: repo/bundle/image scan output, deployment secret-source review and rotation/runbook evidence.
 - [ ] Backup/restore evidence: encrypted backup job proof, access control proof, restore test report on separate environment, RPO/RTO measurement and tenant-boundary verification.
 - [ ] Dependency evidence: dependency scan/SBOM with no unaccepted critical/high CVEs in auth, crypto, session, parser, ORM or web framework components.
-- [ ] Out-of-scope evidence: API route inventory, schema/config scan and sourceType tests proving imports/bank API/broker credentials, SMS/push/notification interception and raw SMS/push storage are absent/rejected; screenshot OCR capture draft lifecycle and dedup evidence are covered if enabled.
+- [ ] Out-of-scope evidence: API route inventory, schema/config scan and sourceType tests proving imports/bank API/broker credentials, SMS/push/notification interception and raw SMS/push storage are absent/rejected; screenshot OCR capture draft lifecycle, temporary-upload behavior, hash-only category mappings and dedup evidence are covered if enabled.
 - [ ] Security sign-off note listing all P2 follow-ups, accepted residual risks and explicit owner/date for each.
 
 ## Триггеры эскалации
@@ -240,7 +241,7 @@ The following are out of scope and must not ship in MVP:
 - File imports, import jobs, uploaded bank statements, CSV/Excel import parsing and import preview flows.
 - Bank API, broker API, bank connections, broker connections, external payment integrations and automatic synchronization.
 - Storage or processing of bank tokens, bank passwords, broker credentials, bank/API keys, SMS codes, push secrets, card numbers, IBAN/account requisites or raw bank statements.
-- Full SMS import, push import, push token storage, SMS/push/notification interception and notification credential storage. The only allowed capture-draft flow is user-initiated OCR from a selected screenshot into pending drafts without raw body server-side storage.
+- Full SMS import, push import, push token storage, SMS/push/notification interception and notification credential storage. The only allowed capture-draft flow is user-initiated OCR from a selected screenshot into pending drafts: Android on-device without upload; PWA/iOS browser temporary self-hosted backend OCR without persistent screenshot/raw OCR/raw body server-side storage.
 - Any endpoint, table, config field, environment secret, mobile/frontend bundle value, audit field, backup content or hidden feature flag created for the above.
 
 If any out-of-scope item appears in implementation, schema, API inventory, config, logs or backup, classify as P0 and escalate before further release work.
@@ -252,5 +253,5 @@ If any out-of-scope item appears in implementation, schema, API inventory, confi
 - [ ] API surface mapping has evidence for each covered route group.
 - [ ] QA/backend evidence is attached for RG-01..RG-12 and TR-RG-01..10 where transfer API is present.
 - [ ] Logs, secrets, backups and restore gates have concrete scan/test/runbook evidence.
-- [ ] Out-of-scope imports/bank API/SMS/push credentials, SMS/push/notification interception and raw SMS/push/notification server-side storage are absent and verified; screenshot OCR capture, if enabled, is draft-only and user-confirmed.
+- [ ] Out-of-scope imports/bank API/SMS/push credentials, SMS/push/notification interception and raw SMS/push/notification server-side storage are absent and verified; screenshot OCR capture, if enabled, is draft-only, user-confirmed, temporary-upload only for PWA/iOS browser, and no screenshot/raw OCR persistence is present.
 - [ ] Any remaining P2 risks are documented with owner and post-MVP target.
