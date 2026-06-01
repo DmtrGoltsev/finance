@@ -22,6 +22,7 @@ _OPERATION_COUNT_RE = re.compile(r"(?i)(\d{1,4})\s+(?:операци\w*|operatio
 _SUMMARY_RE = re.compile(r"(?i)^(?:еще|ещё|more)\s+\d{1,4}\s+(?:категори\w*|categories)\s+")
 _NON_LABEL_CHARS_RE = re.compile(r"[^\w]+", re.UNICODE)
 _WHITESPACE_RE = re.compile(r"\s+")
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 
 _AGGREGATE_HEADER_LINES = {
     "анализ финансов",
@@ -217,6 +218,7 @@ def _parse_category_aggregate_layout_ocr(
             continue
 
         label_parts: list[str] = []
+        label_parts.extend(_previous_layout_label_parts(lines, index, right_column_left))
         same_line_label = _layout_left_text(line, right_column_left)
         if _is_label_line(same_line_label):
             label_parts.append(same_line_label)
@@ -317,6 +319,8 @@ def _amount_match_in(text: str) -> ParsedAmountMatch | None:
 
 
 def _layout_amount_match(line: _LayoutLine, right_column_left: float) -> ParsedAmountMatch | None:
+    if _operation_count(line.text) is not None:
+        return None
     right_text = _layout_right_text(line, right_column_left)
     match = _layout_amount_match_in(right_text)
     if match is not None:
@@ -327,7 +331,10 @@ def _layout_amount_match(line: _LayoutLine, right_column_left: float) -> ParsedA
 def _layout_amount_match_in(text: str) -> ParsedAmountMatch | None:
     matches: list[ParsedAmountMatch] = []
     for match in _LAYOUT_AMOUNT_RE.finditer(text):
-        amount = _normalize_amount(match.group(1), match.group(2) or "RUB")
+        raw_amount = match.group(1)
+        if match.group(2):
+            raw_amount = _clean_layout_amount(raw_amount)
+        amount = _normalize_amount(raw_amount, match.group(2) or "RUB")
         if amount is None:
             continue
         has_currency = bool(match.group(2))
@@ -422,6 +429,30 @@ def _next_operation_count_line_index(
     return None
 
 
+def _previous_layout_label_parts(
+    lines: Sequence[_LayoutLine],
+    amount_line_index: int,
+    right_column_left: float,
+) -> list[str]:
+    parts: list[str] = []
+    previous_bottom = lines[amount_line_index].top
+    for index in range(amount_line_index - 1, -1, -1):
+        line = lines[index]
+        if previous_bottom - line.bottom > 72:
+            break
+        if line.left >= right_column_left:
+            break
+        if _layout_amount_match(line, right_column_left) is not None:
+            break
+        if _operation_count(line.text) is not None:
+            break
+        if not _is_label_line(line.text):
+            break
+        parts.insert(0, line.text)
+        previous_bottom = line.top
+    return parts
+
+
 def _word_center_x(word: OcrWordLike) -> float:
     return word.left + (word.width / 2)
 
@@ -444,6 +475,27 @@ def _normalize_amount(raw_amount: str, raw_currency: str) -> ParsedAmount | None
         amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         currency=_normalize_currency(raw_currency),
     )
+
+
+def _clean_layout_amount(raw_amount: str) -> str:
+    if re.search(r"[,.]", raw_amount):
+        return raw_amount
+    groups = raw_amount.split()
+    if len(groups) < 2:
+        return raw_amount
+    if not all(group.isdigit() for group in groups):
+        return raw_amount
+    if len(groups[-1]) != 1:
+        return raw_amount
+    prefix_groups = groups[:-1]
+    if not (1 <= len(prefix_groups[0]) <= 3):
+        return raw_amount
+    if not all(len(group) == 3 for group in prefix_groups[1:]):
+        return raw_amount
+    prefix_value = Decimal("".join(prefix_groups))
+    if prefix_value < Decimal("1000"):
+        return raw_amount
+    return " ".join(prefix_groups)
 
 
 def _normalize_currency(raw: str) -> str:
@@ -478,7 +530,24 @@ def _is_label_line(text: str) -> bool:
 
 
 def _clean_label(value: str) -> str:
-    return _WHITESPACE_RE.sub(" ", value.strip(" .,;:-"))[:80]
+    label = _WHITESPACE_RE.sub(" ", value.strip(" .,;:-`+")).strip()
+    tokens = label.split()
+    while len(tokens) > 1 and _is_edge_label_noise(tokens[0], neighbor=tokens[1]):
+        tokens.pop(0)
+    while len(tokens) > 1 and _is_edge_label_noise(tokens[-1], neighbor=tokens[-2]):
+        tokens.pop()
+    return _WHITESPACE_RE.sub(" ", " ".join(tokens).strip(" .,;:-`+"))[:80]
+
+
+def _is_edge_label_noise(token: str, *, neighbor: str) -> bool:
+    normalized = normalize_aggregate_label(token)
+    if not normalized:
+        return True
+    if not _CYRILLIC_RE.search(neighbor):
+        return False
+    if not _CYRILLIC_RE.search(token):
+        return len(normalized) <= 4
+    return len(normalized) <= 1
 
 
 def _evidence_hash(
