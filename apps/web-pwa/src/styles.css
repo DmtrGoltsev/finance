@@ -416,6 +416,54 @@ button {
   min-width: 0;
 }
 
+.pendingDraftList {
+  display: grid;
+  gap: 10px;
+}
+
+.pendingDraftRow {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.pendingDraftMeta {
+  display: grid;
+  grid-template-columns: minmax(104px, auto) auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pendingDraftMeta strong {
+  color: var(--ink);
+  font-size: 17px;
+  white-space: nowrap;
+}
+
+.pendingDraftMeta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pendingDraftFields {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.7fr) minmax(126px, 0.8fr) minmax(160px, 1.4fr) minmax(130px, 1fr) minmax(130px, 1fr);
+  gap: 10px;
+}
+
+.draftActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .listRow,
 .operationRow,
 .assetTile,
@@ -679,7 +727,8 @@ button {
 }
 
 .submitButton:disabled,
-.primaryButton:disabled {
+.primaryButton:disabled,
+.ghostButton:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
@@ -697,6 +746,7 @@ button {
   .categoryGrid,
   .categoryFormGrid,
   .captureReviewRow,
+  .pendingDraftFields,
   .recognitionGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -739,7 +789,13 @@ button {
   .categoryGrid,
   .categoryFormGrid,
   .captureReviewRow,
+  .pendingDraftFields,
   .recognitionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pendingDraftMeta,
+  .draftActions {
     grid-template-columns: 1fr;
   }
 

@@ -612,9 +612,122 @@ describe("LiveFinanceApiClient", () => {
     expect(JSON.stringify(bodies[0])).not.toMatch(/ocrText|rawOcrText|body|text|image/i);
     expect(draft).toMatchObject({
       id: "draft-1",
+      occurredAt: null,
       categoryId: "category-1",
       amount: { value: 123.45, currency: "RUB" }
     });
+  });
+
+  it("lists, updates, confirms and discards pending capture drafts", async () => {
+    document.cookie = "finance_csrf=csrf-drafts; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      if (path === "/api/v1/capture-drafts?status=pending&limit=50" && init?.method === "GET") {
+        return jsonResponse({
+          items: [
+            {
+              id: "draft-1",
+              status: "pending",
+              idempotencyKey: "ocr-1",
+              captureSource: "screenshot",
+              capturedAt: "2026-05-31T10:00:00.000Z",
+              occurredAt: "2026-05-31T12:00:00.000Z",
+              amount: "123.4500",
+              currency: "RUB",
+              description: "Products",
+              accountId: null,
+              categoryId: "category-1",
+              confidence: "0.9000"
+            }
+          ],
+          page: { limit: 50 }
+        });
+      }
+
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-drafts");
+      if (path === "/api/v1/capture-drafts/draft-1" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          amount: "140.0000",
+          currency: "RUB",
+          description: "Products reviewed",
+          occurredAt: "2026-06-01T12:00:00.000Z",
+          accountId: "account-1",
+          categoryId: "category-1",
+          confidence: "0.8000"
+        });
+        expect(Object.keys(parsed)).not.toEqual(
+          expect.arrayContaining(["ocrText", "rawOcrText", "body", "text", "image"])
+        );
+        return jsonResponse({
+          data: captureDraftDto({
+            id: "draft-1",
+            status: "pending",
+            amount: "140.0000",
+            occurredAt: "2026-06-01T12:00:00.000Z",
+            description: "Products reviewed",
+            accountId: "account-1"
+          })
+        });
+      }
+
+      if (path === "/api/v1/capture-drafts/draft-1/confirm" && init?.method === "POST") {
+        return jsonResponse({
+          data: captureDraftDto({
+            id: "draft-1",
+            status: "confirmed",
+            amount: "140.0000",
+            occurredAt: "2026-06-01T12:00:00.000Z",
+            description: "Products reviewed",
+            accountId: "account-1"
+          })
+        });
+      }
+
+      if (path === "/api/v1/capture-drafts/draft-2/discard" && init?.method === "POST") {
+        return jsonResponse({
+          data: captureDraftDto({
+            id: "draft-2",
+            status: "discarded",
+            amount: "25.0000",
+            occurredAt: null,
+            description: "Duplicate",
+            accountId: null
+          })
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const drafts = await client.listCaptureDrafts({ status: "pending", limit: 50 });
+    const updated = await client.updateCaptureDraft({
+      draftId: "draft-1",
+      amount: 140,
+      currency: "RUB",
+      description: "Products reviewed",
+      occurredAt: "2026-06-01T12:00:00.000Z",
+      accountId: "account-1",
+      categoryId: "category-1",
+      confidence: 0.8
+    });
+    const confirmed = await client.confirmCaptureDraft("draft-1");
+    const discarded = await client.discardCaptureDraft("draft-2");
+
+    expect(drafts[0]).toMatchObject({
+      id: "draft-1",
+      occurredAt: "2026-05-31T12:00:00.000Z",
+      amount: { value: 123.45, currency: "RUB" }
+    });
+    expect(updated).toMatchObject({ status: "pending", accountId: "account-1" });
+    expect(confirmed.status).toBe("confirmed");
+    expect(discarded.status).toBe("discarded");
   });
 
   it("logs out the current PWA cookie session and clears readable csrf state", async () => {
@@ -672,5 +785,29 @@ function categoryDto(input: {
     color: input.color,
     status: "active",
     version: input.version
+  };
+}
+
+function captureDraftDto(input: {
+  id: string;
+  status: "pending" | "confirmed" | "discarded";
+  amount: string;
+  occurredAt: string | null;
+  description: string;
+  accountId: string | null;
+}) {
+  return {
+    id: input.id,
+    status: input.status,
+    idempotencyKey: `ocr-${input.id}`,
+    captureSource: "screenshot",
+    capturedAt: "2026-05-31T10:00:00.000Z",
+    occurredAt: input.occurredAt,
+    amount: input.amount,
+    currency: "RUB",
+    description: input.description,
+    accountId: input.accountId,
+    categoryId: "category-1",
+    confidence: "0.8000"
   };
 }

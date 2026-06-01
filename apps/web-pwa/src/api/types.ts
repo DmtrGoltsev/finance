@@ -97,12 +97,24 @@ export type CaptureDraftCreateInput = {
   evidenceHash?: string | null;
 };
 
+export type CaptureDraftUpdateInput = {
+  draftId: string;
+  amount?: number;
+  currency?: CurrencyCode;
+  description?: string;
+  occurredAt?: string | null;
+  accountId?: string | null;
+  categoryId?: string | null;
+  confidence?: number | null;
+};
+
 export type CaptureDraftSummary = {
   id: string;
   status: "pending" | "confirmed" | "discarded";
   idempotencyKey: string;
   captureSource: "screenshot";
   capturedAt: string;
+  occurredAt: string | null;
   amount: MoneyAmount;
   description: string;
   accountId: string | null;

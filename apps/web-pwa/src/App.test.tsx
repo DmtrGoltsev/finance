@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiRequestError } from "./api/client";
-import type { CaptureDraftCreateInput, DashboardSnapshot, ScreenshotOcrResult } from "./api/types";
+import type {
+  CaptureDraftCreateInput,
+  CaptureDraftSummary,
+  CaptureDraftUpdateInput,
+  DashboardSnapshot,
+  ScreenshotOcrResult
+} from "./api/types";
 
 const financeSnapshot: DashboardSnapshot = {
   session: {
@@ -162,6 +168,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       idempotencyKey: "ocr-1",
       captureSource: "screenshot" as const,
       capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredAt: null,
       amount: { value: 123.45, currency: "USD" as const },
       description: "РџСЂРѕРґСѓРєС‚С‹ В· 3 РѕРїРµСЂР°С†РёРё",
       accountId: "account-1",
@@ -172,12 +179,52 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     deleteCategory: vi.fn(async () => undefined),
     getDashboardSnapshot: vi.fn(async () => snapshot),
     loginWithPassword: vi.fn(async () => undefined),
+    listCaptureDrafts: vi.fn(async () => [] as CaptureDraftSummary[]),
     logout: vi.fn(async () => undefined),
     restoreAccount: vi.fn(async () => snapshot.accounts[0]),
     restoreCategory: vi.fn(async () => snapshot.categories[0]),
     restoreOperation: vi.fn(async () => snapshot.operations[0]),
     restoreTransfer: vi.fn(async () => snapshot.transfers[0]),
     saveCategoryMapping: vi.fn(async (_externalLabel: string, _categoryId: string, _householdId?: string | null) => undefined),
+    updateCaptureDraft: vi.fn(async (input: CaptureDraftUpdateInput): Promise<CaptureDraftSummary> => ({
+      id: input.draftId,
+      status: "pending" as const,
+      idempotencyKey: "ocr-1",
+      captureSource: "screenshot" as const,
+      capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredAt: input.occurredAt ?? null,
+      amount: { value: input.amount ?? 123.45, currency: "USD" as const },
+      description: input.description ?? "Продукты · 3 операции",
+      accountId: input.accountId ?? "account-1",
+      categoryId: input.categoryId ?? "category-1",
+      confidence: 0.9
+    })),
+    confirmCaptureDraft: vi.fn(async (draftId: string): Promise<CaptureDraftSummary> => ({
+      id: draftId,
+      status: "confirmed" as const,
+      idempotencyKey: "ocr-1",
+      captureSource: "screenshot" as const,
+      capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredAt: "2026-05-31T12:00:00.000Z",
+      amount: { value: 123.45, currency: "USD" as const },
+      description: "Продукты · 3 операции",
+      accountId: "account-1",
+      categoryId: "category-1",
+      confidence: 0.9
+    })),
+    discardCaptureDraft: vi.fn(async (draftId: string): Promise<CaptureDraftSummary> => ({
+      id: draftId,
+      status: "discarded" as const,
+      idempotencyKey: "ocr-1",
+      captureSource: "screenshot" as const,
+      capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredAt: null,
+      amount: { value: 123.45, currency: "USD" as const },
+      description: "Продукты · 3 операции",
+      accountId: "account-1",
+      categoryId: "category-1",
+      confidence: 0.9
+    })),
     updateAccount: vi.fn(async () => snapshot.accounts[0]),
     updateCategory: vi.fn(async () => snapshot.categories[0]),
     updateOperation: vi.fn(async () => snapshot.operations[0]),
@@ -189,6 +236,22 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       items: [],
       warnings: []
     }))
+  };
+}
+
+function pendingDraft(input: Partial<CaptureDraftSummary> & { id: string }): CaptureDraftSummary {
+  return {
+    id: input.id,
+    status: input.status ?? "pending",
+    idempotencyKey: `ocr-${input.id}`,
+    captureSource: "screenshot",
+    capturedAt: input.capturedAt ?? "2026-05-31T10:00:00.000Z",
+    occurredAt: input.occurredAt ?? null,
+    amount: input.amount ?? { value: 123.45, currency: "USD" },
+    description: input.description ?? "Market OCR",
+    accountId: input.accountId ?? null,
+    categoryId: input.categoryId ?? null,
+    confidence: input.confidence ?? 0.88
   };
 }
 
@@ -524,6 +587,113 @@ describe("PWA finance experience", () => {
     expect(payload.description).not.toContain("Products");
     expect(JSON.stringify(payload)).not.toMatch(/ocrText|rawOcrText|body|text|image/i);
     expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("Черновики готовы к подтверждению")).toBeInTheDocument();
+  });
+
+  it("edits, confirms and discards pending OCR capture drafts from operations", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let pendingDrafts: CaptureDraftSummary[] = [
+      pendingDraft({
+        id: "draft-1",
+        amount: { value: 123.45, currency: "USD" },
+        description: "Market OCR",
+        accountId: null,
+        categoryId: null
+      }),
+      pendingDraft({
+        id: "draft-2",
+        amount: { value: 25, currency: "USD" },
+        description: "Duplicate OCR",
+        accountId: "account-1",
+        categoryId: "category-1"
+      })
+    ];
+    client.listCaptureDrafts = vi.fn(async () =>
+      pendingDrafts.filter((draft) => draft.status === "pending")
+    );
+    client.updateCaptureDraft = vi.fn(async (input) => {
+      const current = pendingDrafts.find((draft) => draft.id === input.draftId);
+      const updated: CaptureDraftSummary = {
+        ...(current ?? pendingDraft({ id: input.draftId })),
+        amount: {
+          value: input.amount ?? current?.amount.value ?? 0,
+          currency: input.currency ?? current?.amount.currency ?? "USD"
+        },
+        description: input.description ?? current?.description ?? "",
+        occurredAt: input.occurredAt ?? current?.occurredAt ?? null,
+        accountId: input.accountId ?? current?.accountId ?? null,
+        categoryId: input.categoryId ?? current?.categoryId ?? null,
+        confidence: input.confidence ?? current?.confidence ?? null
+      };
+      pendingDrafts = pendingDrafts.map((draft) =>
+        draft.id === input.draftId ? updated : draft
+      );
+      return updated;
+    });
+    client.confirmCaptureDraft = vi.fn(async (draftId) => {
+      const current = pendingDrafts.find((draft) => draft.id === draftId) ?? pendingDraft({ id: draftId });
+      const confirmed = { ...current, status: "confirmed" as const };
+      pendingDrafts = pendingDrafts.map((draft) =>
+        draft.id === draftId ? confirmed : draft
+      );
+      return confirmed;
+    });
+    client.discardCaptureDraft = vi.fn(async (draftId) => {
+      const current = pendingDrafts.find((draft) => draft.id === draftId) ?? pendingDraft({ id: draftId });
+      const discarded = { ...current, status: "discarded" as const };
+      pendingDrafts = pendingDrafts.map((draft) =>
+        draft.id === draftId ? discarded : draft
+      );
+      return discarded;
+    });
+
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Операции/i }));
+
+    const firstDraft = await screen.findByTestId("pending-draft-draft-1");
+    await user.clear(within(firstDraft).getByLabelText("Сумма draft-1"));
+    await user.type(within(firstDraft).getByLabelText("Сумма draft-1"), "140");
+    fireEvent.change(within(firstDraft).getByLabelText("Дата draft-1"), {
+      target: { value: "2026-06-01" }
+    });
+    await user.clear(within(firstDraft).getByLabelText("Описание draft-1"));
+    await user.type(within(firstDraft).getByLabelText("Описание draft-1"), "Market reviewed");
+    await user.selectOptions(within(firstDraft).getByLabelText("Счет draft-1"), "account-1");
+    await user.selectOptions(within(firstDraft).getByLabelText("Категория draft-1"), "category-1");
+    await user.click(within(firstDraft).getByRole("button", { name: /Подтвердить/i }));
+
+    await waitFor(() => {
+      expect(client.updateCaptureDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draftId: "draft-1",
+          amount: 140,
+          currency: "USD",
+          description: "Market reviewed",
+          accountId: "account-1",
+          categoryId: "category-1",
+          confidence: 0.88
+        })
+      );
+      expect(client.confirmCaptureDraft).toHaveBeenCalledWith("draft-1");
+    });
+    expect(client.updateCaptureDraft.mock.calls[0][0].occurredAt).toContain("2026-06-01T");
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("pending-draft-draft-1")).not.toBeInTheDocument();
+    });
+
+    const secondDraft = await screen.findByTestId("pending-draft-draft-2");
+    await user.click(within(secondDraft).getByRole("button", { name: /Отклонить/i }));
+
+    await waitFor(() => {
+      expect(client.discardCaptureDraft).toHaveBeenCalledWith("draft-2");
+      expect(screen.queryByTestId("pending-draft-draft-2")).not.toBeInTheDocument();
+    });
+    expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(3);
   });
 
   it("shows warnings-only OCR results without rendering create candidates", async () => {

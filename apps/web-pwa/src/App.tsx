@@ -34,6 +34,7 @@ import { financeApiClient, isApiRequestError, type FinanceApiClient } from "./ap
 import type {
   AccountKind,
   AccountSummary,
+  CaptureDraftSummary,
   CategoryDirection,
   CategoryScope,
   CategorySummary,
@@ -675,9 +676,17 @@ function OperationsPage({
   const operations = visibleOperations(snapshot.operations, accounts);
   const transfers = visibleTransfers(snapshot.transfers, accounts);
   const timeline = recentTimeline(operations, transfers);
-  const categories = visibleCategories(snapshot.categories, viewMode).filter(
+  const categories = visibleCategories(snapshot.categories, viewMode);
+  const expenseCategories = categories.filter(
     (category) => category.direction === "expense"
   );
+  const [draftsRefreshKey, setDraftsRefreshKey] = useState(0);
+
+  const refreshAfterDraftChange = useCallback(async () => {
+    const nextSnapshot = await onCaptureDraftsSaved();
+    setDraftsRefreshKey((current) => current + 1);
+    return nextSnapshot;
+  }, [onCaptureDraftsSaved]);
 
   return (
     <section className="screenStack" aria-labelledby="operations-title">
@@ -688,10 +697,17 @@ function OperationsPage({
       <ScreenshotOcrCapture
         accounts={accounts}
         canUseHousehold={Boolean(snapshot.session.householdId)}
-        categories={categories}
+        categories={expenseCategories}
         client={client}
         householdId={viewMode === "shared" ? snapshot.session.householdId : null}
-        onSaved={onCaptureDraftsSaved}
+        onSaved={refreshAfterDraftChange}
+      />
+      <PendingCaptureDraftsPanel
+        accounts={accounts}
+        categories={expenseCategories}
+        client={client}
+        onChanged={refreshAfterDraftChange}
+        refreshKey={draftsRefreshKey}
       />
       <TimelineList items={timeline} />
     </section>
@@ -708,6 +724,315 @@ const screenshotMimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 function captureDraftDescriptionForAggregate(candidate: ScreenshotOcrCandidate): string {
   return `Скрин: агрегированные расходы, ${candidate.operationCount} операций`;
+}
+
+type PendingDraftFormState = {
+  amount: string;
+  description: string;
+  accountId: string;
+  categoryId: string;
+  date: string;
+};
+
+function PendingCaptureDraftsPanel({
+  accounts,
+  categories,
+  client,
+  onChanged,
+  refreshKey
+}: {
+  accounts: AccountSummary[];
+  categories: CategorySummary[];
+  client: FinanceApiClient;
+  onChanged: () => Promise<DashboardSnapshot>;
+  refreshKey: number;
+}) {
+  const [drafts, setDrafts] = useState<CaptureDraftSummary[]>([]);
+  const [draftForms, setDraftForms] = useState<Record<string, PendingDraftFormState>>({});
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [isLoading, setLoading] = useState(false);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+
+  const loadDrafts = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const nextDrafts = await client.listCaptureDrafts({ status: "pending", limit: 50 });
+      setDrafts(nextDrafts);
+      setDraftForms(
+        Object.fromEntries(
+          nextDrafts.map((draft) => [draft.id, draftFormFromDraft(draft)])
+        )
+      );
+    } catch {
+      setError("Не удалось загрузить черновики");
+    } finally {
+      setLoading(false);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void loadDrafts();
+  }, [loadDrafts, refreshKey]);
+
+  const updateDraftForm = (draftId: string, patch: Partial<PendingDraftFormState>) => {
+    setDraftForms((current) => ({
+      ...current,
+      [draftId]: {
+        ...(current[draftId] ?? emptyDraftForm()),
+        ...patch
+      }
+    }));
+  };
+
+  const saveDraftEdits = async (draft: CaptureDraftSummary) => {
+    const form = draftForms[draft.id] ?? draftFormFromDraft(draft);
+    const amount = Number(form.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || !form.description.trim()) {
+      throw new Error("invalid draft form");
+    }
+
+    return client.updateCaptureDraft({
+      draftId: draft.id,
+      amount,
+      currency: draft.amount.currency,
+      description: form.description,
+      occurredAt: draftOccurredAtFromInput(form.date),
+      accountId: form.accountId || null,
+      categoryId: form.categoryId || null,
+      confidence: draft.confidence
+    });
+  };
+
+  const runDraftAction = async (
+    draft: CaptureDraftSummary,
+    action: "save" | "confirm" | "discard"
+  ) => {
+    setActiveAction(`${action}:${draft.id}`);
+    setError("");
+    setStatus("");
+    try {
+      if (action === "discard") {
+        await client.discardCaptureDraft(draft.id);
+        setStatus("Черновик отклонен");
+      } else {
+        const updatedDraft = await saveDraftEdits(draft);
+        if (action === "confirm") {
+          await client.confirmCaptureDraft(updatedDraft.id);
+          setStatus("Черновик подтвержден");
+        } else {
+          setStatus("Изменения сохранены");
+        }
+      }
+      await onChanged();
+    } catch {
+      setError(
+        action === "confirm"
+          ? "Не удалось подтвердить черновик"
+          : action === "discard"
+            ? "Не удалось отклонить черновик"
+            : "Не удалось сохранить черновик"
+      );
+    } finally {
+      setActiveAction(null);
+    }
+  };
+
+  return (
+    <section className="plainSection" aria-labelledby="pending-drafts-title">
+      <div className="sectionHead compact">
+        <h3 id="pending-drafts-title">Черновики OCR</h3>
+        <button
+          className="ghostButton"
+          disabled={isLoading || Boolean(activeAction)}
+          type="button"
+          onClick={() => void loadDrafts()}
+        >
+          {isLoading ? "Обновляем" : "Обновить"}
+        </button>
+      </div>
+
+      {error && <p className="formError">{error}</p>}
+      {status && <p className="formHint">{status}</p>}
+
+      <div className="pendingDraftList">
+        {drafts.map((draft) => {
+          const form = draftForms[draft.id] ?? draftFormFromDraft(draft);
+          const isBusy = activeAction?.endsWith(`:${draft.id}`) ?? false;
+          const canConfirm =
+            Number(form.amount) > 0 &&
+            Boolean(form.description.trim()) &&
+            Boolean(form.accountId) &&
+            Boolean(form.categoryId) &&
+            Boolean(form.date) &&
+            !isBusy;
+
+          return (
+            <article
+              className="pendingDraftRow"
+              data-testid={`pending-draft-${draft.id}`}
+              key={draft.id}
+            >
+              <div className="pendingDraftMeta">
+                <strong>{formatMoney(draft.amount)}</strong>
+                <span>{draft.amount.currency}</span>
+                <span>{formatDate(draft.occurredAt ?? draft.capturedAt)}</span>
+                <span>
+                  {draft.confidence === null
+                    ? "Уверенность не задана"
+                    : `${Math.round(draft.confidence * 100)}%`}
+                </span>
+              </div>
+
+              <div className="pendingDraftFields">
+                <label className="field compactField">
+                  <span>Сумма</span>
+                  <input
+                    aria-label={`Сумма ${draft.id}`}
+                    inputMode="decimal"
+                    min="0"
+                    type="number"
+                    value={form.amount}
+                    onChange={(event) =>
+                      updateDraftForm(draft.id, { amount: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="field compactField">
+                  <span>Дата</span>
+                  <input
+                    aria-label={`Дата ${draft.id}`}
+                    type="date"
+                    value={form.date}
+                    onChange={(event) =>
+                      updateDraftForm(draft.id, { date: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="field compactField">
+                  <span>Описание</span>
+                  <input
+                    aria-label={`Описание ${draft.id}`}
+                    value={form.description}
+                    onChange={(event) =>
+                      updateDraftForm(draft.id, { description: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="field compactField">
+                  <span>Счет</span>
+                  <select
+                    aria-label={`Счет ${draft.id}`}
+                    value={form.accountId}
+                    onChange={(event) =>
+                      updateDraftForm(draft.id, { accountId: event.target.value })
+                    }
+                  >
+                    <option value="">Выберите</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field compactField">
+                  <span>Категория</span>
+                  <select
+                    aria-label={`Категория ${draft.id}`}
+                    value={form.categoryId}
+                    onChange={(event) =>
+                      updateDraftForm(draft.id, { categoryId: event.target.value })
+                    }
+                  >
+                    <option value="">Выберите</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="draftActions">
+                <button
+                  className="ghostButton"
+                  disabled={isBusy}
+                  type="button"
+                  onClick={() => void runDraftAction(draft, "save")}
+                >
+                  Сохранить
+                </button>
+                <button
+                  className="submitButton"
+                  disabled={!canConfirm}
+                  type="button"
+                  onClick={() => void runDraftAction(draft, "confirm")}
+                >
+                  <Check size={18} aria-hidden="true" />
+                  Подтвердить
+                </button>
+                <button
+                  className="ghostButton"
+                  disabled={isBusy}
+                  type="button"
+                  onClick={() => void runDraftAction(draft, "discard")}
+                >
+                  <X size={17} aria-hidden="true" />
+                  Отклонить
+                </button>
+              </div>
+            </article>
+          );
+        })}
+        {!isLoading && drafts.length === 0 && (
+          <EmptyState text="Нет черновиков для подтверждения" />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function draftFormFromDraft(draft: CaptureDraftSummary): PendingDraftFormState {
+  return {
+    amount: String(draft.amount.value),
+    description: draft.description,
+    accountId: draft.accountId ?? "",
+    categoryId: draft.categoryId ?? "",
+    date: dateInputValue(draft.occurredAt ?? draft.capturedAt)
+  };
+}
+
+function emptyDraftForm(): PendingDraftFormState {
+  return {
+    amount: "",
+    description: "",
+    accountId: "",
+    categoryId: "",
+    date: todayInputValue()
+  };
+}
+
+function dateInputValue(value: string): string {
+  if (!value) {
+    return todayInputValue();
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return todayInputValue();
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function draftOccurredAtFromInput(value: string): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return new Date(`${value}T12:00:00`).toISOString();
 }
 
 function ScreenshotOcrCapture({
@@ -836,7 +1161,7 @@ function ScreenshotOcrCapture({
       await onSaved();
       setRows([]);
       setWarnings([]);
-      setStatus("Черновики расходов сохранены");
+      setStatus("Черновики готовы к подтверждению");
     } catch {
       setError("Не удалось сохранить черновики. Проверьте категории и счет.");
     } finally {

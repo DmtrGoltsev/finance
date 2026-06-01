@@ -3,6 +3,7 @@ import type {
   AccountSummary,
   CaptureDraftCreateInput,
   CaptureDraftSummary,
+  CaptureDraftUpdateInput,
   CategoryDirection,
   CategoryScope,
   CategorySummary,
@@ -122,6 +123,7 @@ type CaptureDraftDto = {
   idempotencyKey: string;
   captureSource: "screenshot";
   capturedAt: string;
+  occurredAt?: string | null;
   amount: string | number;
   currency: string;
   description: string;
@@ -266,6 +268,13 @@ export interface FinanceApiClient {
     householdId?: string | null
   ): Promise<void>;
   createCaptureDraft(input: CaptureDraftCreateInput): Promise<CaptureDraftSummary>;
+  listCaptureDrafts(input?: {
+    status?: "pending" | "confirmed" | "discarded";
+    limit?: number;
+  }): Promise<CaptureDraftSummary[]>;
+  updateCaptureDraft(input: CaptureDraftUpdateInput): Promise<CaptureDraftSummary>;
+  confirmCaptureDraft(draftId: string): Promise<CaptureDraftSummary>;
+  discardCaptureDraft(draftId: string): Promise<CaptureDraftSummary>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -681,6 +690,66 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapCaptureDraft(envelope.data);
   }
 
+  async listCaptureDrafts(
+    input: { status?: "pending" | "confirmed" | "discarded"; limit?: number } = {}
+  ): Promise<CaptureDraftSummary[]> {
+    const params = new URLSearchParams();
+    if (input.status) {
+      params.set("status", input.status);
+    }
+    params.set("limit", String(input.limit ?? 50));
+
+    const envelope = await this.get<PageEnvelope<CaptureDraftDto>>(
+      `/api/v1/capture-drafts?${params.toString()}`
+    );
+
+    return envelope.items.map(mapCaptureDraft);
+  }
+
+  async updateCaptureDraft(input: CaptureDraftUpdateInput): Promise<CaptureDraftSummary> {
+    const envelope = await this.request<DataEnvelope<CaptureDraftDto>>(
+      `/api/v1/capture-drafts/${input.draftId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...(input.amount !== undefined ? { amount: input.amount.toFixed(4) } : {}),
+          ...(input.currency !== undefined ? { currency: input.currency } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description.trim() }
+            : {}),
+          ...(input.occurredAt !== undefined ? { occurredAt: input.occurredAt } : {}),
+          ...(input.accountId !== undefined ? { accountId: input.accountId } : {}),
+          ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+          ...(input.confidence !== undefined && input.confidence !== null
+            ? { confidence: input.confidence.toFixed(4) }
+            : input.confidence === null
+              ? { confidence: null }
+              : {})
+        })
+      }
+    );
+
+    return mapCaptureDraft(envelope.data);
+  }
+
+  async confirmCaptureDraft(draftId: string): Promise<CaptureDraftSummary> {
+    const envelope = await this.request<DataEnvelope<CaptureDraftDto>>(
+      `/api/v1/capture-drafts/${draftId}/confirm`,
+      { method: "POST" }
+    );
+
+    return mapCaptureDraft(envelope.data);
+  }
+
+  async discardCaptureDraft(draftId: string): Promise<CaptureDraftSummary> {
+    const envelope = await this.request<DataEnvelope<CaptureDraftDto>>(
+      `/api/v1/capture-drafts/${draftId}/discard`,
+      { method: "POST" }
+    );
+
+    return mapCaptureDraft(envelope.data);
+  }
+
   private async getReports(
     householdId: string | null,
     currency: CurrencyCode
@@ -918,6 +987,7 @@ function mapCaptureDraft(draft: CaptureDraftDto): CaptureDraftSummary {
     idempotencyKey: draft.idempotencyKey,
     captureSource: draft.captureSource,
     capturedAt: draft.capturedAt,
+    occurredAt: draft.occurredAt ?? null,
     amount: money(draft.amount, draft.currency),
     description: draft.description,
     accountId: draft.accountId,
