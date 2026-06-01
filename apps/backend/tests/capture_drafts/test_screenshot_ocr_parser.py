@@ -7,6 +7,7 @@ from app.capture_drafts.aggregate_parser import (
     normalize_aggregate_label,
     parse_category_aggregate_screenshot_ocr,
 )
+from app.capture_drafts.ocr_engine import ScreenshotOcrWord
 
 FIXED_TIME = datetime(2026, 5, 17, 14, 0, tzinfo=UTC)
 
@@ -68,9 +69,135 @@ def test_category_aggregate_parser_supports_multiline_labels_and_inline_count() 
     assert len(candidate.evidence_hash) == 64
 
 
+def test_category_aggregate_parser_extracts_dense_bank_layout_fixture() -> None:
+    candidates = parse_category_aggregate_screenshot_ocr(
+        "layout fixture intentionally omits parseable aggregate text",
+        captured_at=FIXED_TIME,
+        ocr_words=_dense_bank_layout_words(),
+    )
+
+    assert [
+        (candidate.external_label, str(candidate.amount), candidate.operation_count)
+        for candidate in candidates
+    ] == [
+        ("Переводы людям", "685674.00", 28),
+        ("Супермаркеты", "224584.00", 34),
+        ("Кафе, рестораны, фастфуд", "222129.00", 80),
+        ("Погашение кредитов", "104621.00", 1),
+        ("Медицинские услуги", "100636.00", 1),
+        ("Ювелирные изделия", "74976.00", 3),
+        ("Такси и каршеринг", "59866.00", 64),
+        ("Табачные магазины", "27756.00", 6),
+    ]
+    assert all(candidate.currency == "RUB" for candidate in candidates)
+
+
 def test_category_mapping_hash_normalization_is_stable_and_hash_only() -> None:
     assert normalize_aggregate_label("  Кафе, рестораны,\nфастфуд  ") == (
         "кафе рестораны фастфуд"
     )
     assert external_label_hash("Супермаркеты") == external_label_hash("супермаркеты")
     assert external_label_hash("Супермаркеты") != "Супермаркеты"
+
+
+def _dense_bank_layout_words() -> tuple[ScreenshotOcrWord, ...]:
+    words: list[ScreenshotOcrWord] = []
+
+    def add_text_line(parts: list[str], *, left: int, top: int) -> None:
+        x = left
+        for part in parts:
+            width = max(24, len(part) * 17)
+            words.append(_word(part, x, top, width))
+            x += width + 14
+
+    def add_amount(amount: str, *, top: int) -> None:
+        x = 700
+        for part in [*amount.split(), "₽"]:
+            width = 50 if part != "₽" else 24
+            words.append(_word(part, x, top, width))
+            x += width + 13
+
+    def add_row(
+        label_lines: list[list[str]],
+        *,
+        amount: str,
+        count: int,
+        count_word: str,
+        top: int,
+    ) -> None:
+        add_text_line(label_lines[0], left=180, top=top)
+        add_amount(amount, top=top)
+        for offset, label_line in enumerate(label_lines[1:], start=1):
+            add_text_line(label_line, left=180, top=top + (offset * 46))
+        add_text_line([str(count), count_word], left=180, top=top + (len(label_lines) * 46))
+
+    add_text_line(["Анализ", "финансов"], left=185, top=145)
+    add_text_line(["Расходы"], left=215, top=270)
+    add_row(
+        [["Переводы", "людям"]],
+        amount="685 674",
+        count=28,
+        count_word="операций",
+        top=420,
+    )
+    add_row(
+        [["Супермаркеты"]],
+        amount="224 584",
+        count=34,
+        count_word="операции",
+        top=600,
+    )
+    add_row(
+        [["Кафе,", "рестораны,"], ["фастфуд"]],
+        amount="222 129",
+        count=80,
+        count_word="операций",
+        top=780,
+    )
+    add_row(
+        [["Погашение", "кредитов"]],
+        amount="104 621",
+        count=1,
+        count_word="операция",
+        top=1010,
+    )
+    add_row(
+        [["Медицинские", "услуги"]],
+        amount="100 636",
+        count=1,
+        count_word="операция",
+        top=1190,
+    )
+    add_row(
+        [["Ювелирные", "изделия"]],
+        amount="74 976",
+        count=3,
+        count_word="операции",
+        top=1370,
+    )
+    add_row(
+        [["Такси", "и", "каршеринг"]],
+        amount="59 866",
+        count=64,
+        count_word="операции",
+        top=1550,
+    )
+    add_row(
+        [["Табачные", "магазины"]],
+        amount="27 756",
+        count=6,
+        count_word="операций",
+        top=1730,
+    )
+    return tuple(words)
+
+
+def _word(text: str, left: int, top: int, width: int) -> ScreenshotOcrWord:
+    return ScreenshotOcrWord(
+        text=text,
+        left=left,
+        top=top,
+        width=width,
+        height=34,
+        confidence=96.0,
+    )

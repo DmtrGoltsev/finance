@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from hashlib import sha256
+from statistics import median
+from typing import Protocol
 
 PARSE_VERSION = "category-aggregate-v1"
 CAPTURE_SOURCE = "screenshot"
 
-_AMOUNT_AFTER_RE = re.compile(
-    r"(?i)(\d[\d\s.,]*\d|\d)(?:\s*)(₽|руб\.?|rub|rur|usd|\$|eur|€|в‚Ѕ)"
-)
+_CURRENCY_RE_PART = r"(₽|руб\.?|р\.?|rub|rur|usd|\$|eur|€|в‚Ѕ|p)"
+_AMOUNT_AFTER_RE = re.compile(rf"(?i)(\d[\d\s.,]*\d|\d)(?:\s*){_CURRENCY_RE_PART}")
 _AMOUNT_BEFORE_RE = re.compile(
-    r"(?i)(₽|руб\.?|rub|rur|usd|\$|eur|€|в‚Ѕ)(?:\s*)(\d[\d\s.,]*\d|\d)"
+    rf"(?i){_CURRENCY_RE_PART}(?:\s*)(\d[\d\s.,]*\d|\d)"
 )
+_LAYOUT_AMOUNT_RE = re.compile(rf"(?i)(\d[\d\s.,]*\d|\d)(?:\s*)({_CURRENCY_RE_PART})?")
 _OPERATION_COUNT_RE = re.compile(r"(?i)(\d{1,4})\s+(?:операци\w*|operations?)")
 _SUMMARY_RE = re.compile(r"(?i)^(?:еще|ещё|more)\s+\d{1,4}\s+(?:категори\w*|categories)\s+")
 _NON_LABEL_CHARS_RE = re.compile(r"[^\w]+", re.UNICODE)
@@ -48,6 +51,29 @@ class ParsedAmountMatch:
     end: int
 
 
+class OcrWordLike(Protocol):
+    text: str
+    left: int
+    top: int
+    width: int
+    height: int
+    confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _LayoutLine:
+    text: str
+    words: tuple[OcrWordLike, ...]
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def center_y(self) -> float:
+        return (self.top + self.bottom) / 2
+
+
 @dataclass(frozen=True, slots=True)
 class CategoryAggregateCandidate:
     external_label: str
@@ -69,18 +95,24 @@ def parse_category_aggregate_screenshot_ocr(
     text: str,
     *,
     captured_at: datetime,
+    ocr_words: Sequence[OcrWordLike] = (),
 ) -> list[CategoryAggregateCandidate]:
+    effective_captured_at = _utc(captured_at)
+    time_bucket = str(int(effective_captured_at.timestamp()) // 60)
+    candidates = _parse_category_aggregate_layout_ocr(
+        ocr_words,
+        captured_at=effective_captured_at,
+        time_bucket=time_bucket,
+    )
+
     lines = [
         _WHITESPACE_RE.sub(" ", line).strip()
         for line in text.splitlines()
         if line.strip()
     ]
     if not lines:
-        return []
+        return _dedupe_candidates(candidates)
 
-    effective_captured_at = _utc(captured_at)
-    time_bucket = str(int(effective_captured_at.timestamp()) // 60)
-    candidates: list[CategoryAggregateCandidate] = []
     label_buffer: list[str] = []
     skip_line_index: int | None = None
 
@@ -121,41 +153,24 @@ def parse_category_aggregate_screenshot_ocr(
         if not label or next_line_operation_count is None:
             continue
 
-        evidence_hash = _evidence_hash(
-            label=label,
-            amount=amount_match.amount.amount,
-            currency=amount_match.amount.currency,
-            operation_count=next_line_operation_count,
-            time_bucket=time_bucket,
-        )
-        normalized_label = normalize_aggregate_label(label)
-        label_key = _sha256_hex(normalized_label)[:16]
-        idempotency_key = ":".join(
-            (
-                "capture-v1",
-                CAPTURE_SOURCE,
-                "category-aggregate",
-                time_bucket,
-                _idempotency_amount_key(amount_match.amount.amount),
-                amount_match.amount.currency,
-                label_key,
-                evidence_hash[:16],
-            )
-        )
         candidates.append(
-            CategoryAggregateCandidate(
-                external_label=label,
+            _candidate(
+                label=label,
                 amount=amount_match.amount.amount,
                 currency=amount_match.amount.currency,
                 operation_count=next_line_operation_count,
                 captured_at=effective_captured_at,
-                occurred_at=effective_captured_at,
-                idempotency_key=idempotency_key,
+                time_bucket=time_bucket,
                 confidence=Decimal("0.82"),
-                evidence_hash=evidence_hash,
             )
         )
 
+    return _dedupe_candidates(candidates)
+
+
+def _dedupe_candidates(
+    candidates: list[CategoryAggregateCandidate],
+) -> list[CategoryAggregateCandidate]:
     seen: set[tuple[str, str, int]] = set()
     deduped: list[CategoryAggregateCandidate] = []
     for candidate in candidates:
@@ -169,6 +184,110 @@ def parse_category_aggregate_screenshot_ocr(
         seen.add(key)
         deduped.append(candidate)
     return deduped
+
+
+def _parse_category_aggregate_layout_ocr(
+    words: Sequence[OcrWordLike],
+    *,
+    captured_at: datetime,
+    time_bucket: str,
+) -> list[CategoryAggregateCandidate]:
+    lines = _layout_lines(words)
+    if not lines:
+        return []
+
+    right_column_left = _right_column_left(lines)
+    amount_line_indexes = {
+        index
+        for index, line in enumerate(lines)
+        if _layout_amount_match(line, right_column_left) is not None
+    }
+    candidates: list[CategoryAggregateCandidate] = []
+
+    for index, line in enumerate(lines):
+        amount_match = _layout_amount_match(line, right_column_left)
+        if amount_match is None:
+            continue
+
+        count_index = _next_operation_count_line_index(lines, index, amount_line_indexes)
+        if count_index is None:
+            continue
+        operation_count = _operation_count(lines[count_index].text)
+        if operation_count is None:
+            continue
+
+        label_parts: list[str] = []
+        same_line_label = _layout_left_text(line, right_column_left)
+        if _is_label_line(same_line_label):
+            label_parts.append(same_line_label)
+
+        for continuation in lines[index + 1 : count_index]:
+            if continuation.left >= right_column_left:
+                continue
+            if _is_label_line(continuation.text):
+                label_parts.append(continuation.text)
+
+        label = _clean_label(" ".join(label_parts))
+        if not label:
+            continue
+
+        candidates.append(
+            _candidate(
+                label=label,
+                amount=amount_match.amount.amount,
+                currency=amount_match.amount.currency,
+                operation_count=operation_count,
+                captured_at=captured_at,
+                time_bucket=time_bucket,
+                confidence=Decimal("0.9"),
+            )
+        )
+
+    return candidates
+
+
+def _candidate(
+    *,
+    label: str,
+    amount: Decimal,
+    currency: str,
+    operation_count: int,
+    captured_at: datetime,
+    time_bucket: str,
+    confidence: Decimal,
+) -> CategoryAggregateCandidate:
+    evidence_hash = _evidence_hash(
+        label=label,
+        amount=amount,
+        currency=currency,
+        operation_count=operation_count,
+        time_bucket=time_bucket,
+    )
+    normalized_label = normalize_aggregate_label(label)
+    label_key = _sha256_hex(normalized_label)[:16]
+    idempotency_key = ":".join(
+        (
+            "capture-v1",
+            CAPTURE_SOURCE,
+            "category-aggregate",
+            time_bucket,
+            _idempotency_amount_key(amount),
+            currency,
+            label_key,
+            evidence_hash[:16],
+        )
+    )
+    return CategoryAggregateCandidate(
+        external_label=label,
+        amount=amount,
+        currency=currency,
+        operation_count=operation_count,
+        captured_at=captured_at,
+        occurred_at=captured_at,
+        idempotency_key=idempotency_key,
+        confidence=confidence,
+        evidence_hash=evidence_hash,
+    )
 
 
 def external_label_hash(external_label: str) -> str:
@@ -195,6 +314,120 @@ def _amount_match_in(text: str) -> ParsedAmountMatch | None:
         if amount is not None:
             matches.append(ParsedAmountMatch(amount, before_match.start(), before_match.end()))
     return min(matches, key=lambda match: match.start) if matches else None
+
+
+def _layout_amount_match(line: _LayoutLine, right_column_left: float) -> ParsedAmountMatch | None:
+    right_text = _layout_right_text(line, right_column_left)
+    match = _layout_amount_match_in(right_text)
+    if match is not None:
+        return match
+    return _layout_amount_match_in(line.text)
+
+
+def _layout_amount_match_in(text: str) -> ParsedAmountMatch | None:
+    matches: list[ParsedAmountMatch] = []
+    for match in _LAYOUT_AMOUNT_RE.finditer(text):
+        amount = _normalize_amount(match.group(1), match.group(2) or "RUB")
+        if amount is None:
+            continue
+        has_currency = bool(match.group(2))
+        if not has_currency and amount.amount < Decimal("1000"):
+            continue
+        matches.append(ParsedAmountMatch(amount, match.start(), match.end()))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: (item.amount.amount, item.start))
+
+
+def _layout_lines(words: Sequence[OcrWordLike]) -> list[_LayoutLine]:
+    clean_words = [
+        word
+        for word in words
+        if (
+            word.text.strip()
+            and word.width > 0
+            and word.height > 0
+            and (word.confidence is None or word.confidence >= 15)
+        )
+    ]
+    if not clean_words:
+        return []
+
+    sorted_words = sorted(clean_words, key=lambda word: (_word_center_y(word), word.left))
+    median_height = median(word.height for word in sorted_words)
+    y_tolerance = max(8.0, float(median_height) * 0.75)
+    grouped: list[list[OcrWordLike]] = []
+
+    for word in sorted_words:
+        if not grouped:
+            grouped.append([word])
+            continue
+        current = grouped[-1]
+        current_center = sum(_word_center_y(item) for item in current) / len(current)
+        if abs(_word_center_y(word) - current_center) <= y_tolerance:
+            current.append(word)
+        else:
+            grouped.append([word])
+
+    lines: list[_LayoutLine] = []
+    for group in grouped:
+        line_words = tuple(sorted(group, key=lambda word: word.left))
+        text = " ".join(word.text.strip() for word in line_words if word.text.strip())
+        if not text:
+            continue
+        left = min(word.left for word in line_words)
+        top = min(word.top for word in line_words)
+        right = max(word.left + word.width for word in line_words)
+        bottom = max(word.top + word.height for word in line_words)
+        lines.append(
+            _LayoutLine(
+                text=text,
+                words=line_words,
+                left=left,
+                top=top,
+                right=right,
+                bottom=bottom,
+            )
+        )
+    return lines
+
+
+def _right_column_left(lines: Sequence[_LayoutLine]) -> float:
+    min_left = min(line.left for line in lines)
+    max_right = max(line.right for line in lines)
+    return min_left + ((max_right - min_left) * 0.58)
+
+
+def _layout_left_text(line: _LayoutLine, right_column_left: float) -> str:
+    words = [word.text for word in line.words if _word_center_x(word) < right_column_left]
+    return _WHITESPACE_RE.sub(" ", " ".join(words)).strip()
+
+
+def _layout_right_text(line: _LayoutLine, right_column_left: float) -> str:
+    words = [word.text for word in line.words if _word_center_x(word) >= right_column_left]
+    return _WHITESPACE_RE.sub(" ", " ".join(words)).strip()
+
+
+def _next_operation_count_line_index(
+    lines: Sequence[_LayoutLine],
+    amount_line_index: int,
+    amount_line_indexes: set[int],
+) -> int | None:
+    max_lookahead = min(len(lines), amount_line_index + 4)
+    for index in range(amount_line_index + 1, max_lookahead):
+        if index in amount_line_indexes:
+            return None
+        if _operation_count(lines[index].text) is not None:
+            return index
+    return None
+
+
+def _word_center_x(word: OcrWordLike) -> float:
+    return word.left + (word.width / 2)
+
+
+def _word_center_y(word: OcrWordLike) -> float:
+    return word.top + (word.height / 2)
 
 
 def _normalize_amount(raw_amount: str, raw_currency: str) -> ParsedAmount | None:

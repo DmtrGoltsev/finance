@@ -9,6 +9,7 @@ from .aggregate_parser import PARSE_VERSION, parse_category_aggregate_screenshot
 from .category_mapping_service import CaptureCategoryMappingService
 from .ocr_engine import (
     ScreenshotOcrEngine,
+    ScreenshotOcrResult,
     validate_screenshot_upload,
 )
 from .schemas import (
@@ -53,10 +54,15 @@ class ScreenshotOcrService:
             content_type=content_type,
             settings=self._settings,
         )
-        ocr_text = self._ocr_engine.extract_text(image_bytes, content_type=content_type)
+        ocr_result = _extract_ocr_result(
+            self._ocr_engine,
+            image_bytes=image_bytes,
+            content_type=content_type,
+        )
         parsed_candidates = parse_category_aggregate_screenshot_ocr(
-            ocr_text,
+            ocr_result.text,
             captured_at=effective_captured_at,
+            ocr_words=ocr_result.words,
         )
         warnings: list[ScreenshotOcrWarningDto] = []
         if not parsed_candidates:
@@ -99,3 +105,19 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _extract_ocr_result(
+    ocr_engine: ScreenshotOcrEngine,
+    *,
+    image_bytes: bytes,
+    content_type: str | None,
+) -> ScreenshotOcrResult:
+    extract_result = getattr(ocr_engine, "extract_result", None)
+    if callable(extract_result):
+        result = extract_result(image_bytes, content_type=content_type)
+        if isinstance(result, ScreenshotOcrResult):
+            return result
+    return ScreenshotOcrResult(
+        text=ocr_engine.extract_text(image_bytes, content_type=content_type),
+    )

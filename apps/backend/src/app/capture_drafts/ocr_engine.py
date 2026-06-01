@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import BytesIO
 from typing import Protocol
 
@@ -62,6 +63,22 @@ class ScreenshotOcrEngine(Protocol):
         """Return OCR text for a validated screenshot image."""
 
 
+@dataclass(frozen=True, slots=True)
+class ScreenshotOcrWord:
+    text: str
+    left: int
+    top: int
+    width: int
+    height: int
+    confidence: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenshotOcrResult:
+    text: str
+    words: tuple[ScreenshotOcrWord, ...] = ()
+
+
 def validate_screenshot_upload(
     image_bytes: bytes,
     *,
@@ -101,13 +118,21 @@ class TesseractScreenshotOcrEngine:
         self._settings = settings
 
     def extract_text(self, image_bytes: bytes, *, content_type: str | None) -> str:
+        return self.extract_result(image_bytes, content_type=content_type).text
+
+    def extract_result(
+        self,
+        image_bytes: bytes,
+        *,
+        content_type: str | None,
+    ) -> ScreenshotOcrResult:
         del content_type
         if not self._settings.capture_screenshot_ocr_enabled:
             raise ScreenshotOcrDisabledError()
 
         try:
             import pytesseract
-            from PIL import Image
+            from PIL import Image, ImageOps
             from pytesseract import TesseractError, TesseractNotFoundError
         except ModuleNotFoundError as exc:  # pragma: no cover - covered by deployment smoke
             raise ScreenshotOcrUnavailableError() from exc
@@ -119,13 +144,15 @@ class TesseractScreenshotOcrEngine:
 
         try:
             with Image.open(BytesIO(image_bytes)) as image:
-                return str(
-                    pytesseract.image_to_string(
-                        image,
-                        lang=self._settings.capture_screenshot_ocr_lang,
-                        timeout=self._settings.capture_screenshot_ocr_timeout_seconds,
-                    )
+                prepared_image = _prepare_tesseract_image(image, image_ops=ImageOps)
+                data = pytesseract.image_to_data(
+                    prepared_image,
+                    lang=self._settings.capture_screenshot_ocr_lang,
+                    timeout=self._settings.capture_screenshot_ocr_timeout_seconds,
+                    output_type=pytesseract.Output.DICT,
                 )
+                words = _tesseract_words(data)
+                return ScreenshotOcrResult(text=_text_from_words(words), words=words)
         except TesseractNotFoundError as exc:
             raise ScreenshotOcrUnavailableError() from exc
         except TesseractError as exc:
@@ -141,3 +168,71 @@ class TesseractScreenshotOcrEngine:
 
 def _normalized_content_type(content_type: str | None) -> str:
     return (content_type or "").split(";", 1)[0].strip().casefold()
+
+
+def _prepare_tesseract_image(image, *, image_ops):
+    prepared = image.convert("L")
+    prepared = image_ops.autocontrast(prepared)
+    if prepared.width < 1400:
+        scale = 2
+        prepared = prepared.resize((prepared.width * scale, prepared.height * scale))
+    return prepared
+
+
+def _tesseract_words(data: dict[str, list[object]]) -> tuple[ScreenshotOcrWord, ...]:
+    texts = data.get("text", [])
+    words: list[ScreenshotOcrWord] = []
+    for index, raw_text in enumerate(texts):
+        text = str(raw_text).strip()
+        if not text:
+            continue
+        confidence = _ocr_confidence(data.get("conf", []), index)
+        if confidence is not None and confidence < 0:
+            continue
+        try:
+            left = int(data["left"][index])
+            top = int(data["top"][index])
+            width = int(data["width"][index])
+            height = int(data["height"][index])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        words.append(
+            ScreenshotOcrWord(
+                text=text,
+                left=left,
+                top=top,
+                width=width,
+                height=height,
+                confidence=confidence,
+            )
+        )
+    return tuple(words)
+
+
+def _ocr_confidence(values: list[object], index: int) -> float | None:
+    try:
+        return float(values[index])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _text_from_words(words: tuple[ScreenshotOcrWord, ...]) -> str:
+    if not words:
+        return ""
+
+    grouped: dict[int, dict[int, list[ScreenshotOcrWord]]] = {}
+    for word in words:
+        block_key = max(0, word.top // max(1, word.height * 3))
+        line_key = max(0, (word.top + word.height // 2) // max(1, word.height * 2))
+        grouped.setdefault(block_key, {}).setdefault(line_key, []).append(word)
+
+    lines: list[str] = []
+    for block in sorted(grouped):
+        for line in sorted(grouped[block]):
+            line_words = sorted(grouped[block][line], key=lambda item: item.left)
+            line_text = " ".join(word.text for word in line_words).strip()
+            if line_text:
+                lines.append(line_text)
+    return "\n".join(lines)
