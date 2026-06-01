@@ -6,19 +6,25 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
+    "build:ios": "node ./scripts/build-ios.mjs",
+    "cap:sync:ios": "npm run build:ios && cap sync ios",
+    "cap:open:ios": "cap open ios",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/ios": "^8.3.4",
     "@vitejs/plugin-react": "^5.1.1",
-    "vite": "^7.2.7",
-    "typescript": "^5.9.3",
+    "lucide-react": "^0.561.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "lucide-react": "^0.561.0"
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
     "@testing-library/user-event": "^14.6.1",
