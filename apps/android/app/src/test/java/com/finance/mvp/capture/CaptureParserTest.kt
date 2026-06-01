@@ -228,6 +228,23 @@ class CaptureParserTest {
     }
 
     @Test
+    fun categoryAggregateScreenshotInitializesAndroidSafeAmountRegex() {
+        val candidates = CaptureParser.parseCategoryAggregateScreenshotOcr(
+            text = """
+                Супермаркеты
+                224 584 ₽
+                34 операции
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertEquals(1, candidates.size)
+        assertEquals("Супермаркеты", candidates.single().externalLabel)
+        assertEquals("224584.00", candidates.single().amount)
+        assertEquals(34, candidates.single().operationCount)
+    }
+
+    @Test
     fun categoryAggregateMappingNormalizationIsStable() {
         assertEquals(
             "кафе рестораны фастфуд",

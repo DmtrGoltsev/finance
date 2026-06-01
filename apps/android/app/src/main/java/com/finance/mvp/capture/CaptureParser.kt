@@ -73,7 +73,7 @@ object CaptureParser {
         "cashback",
     )
     private val amountAfterRegex = Regex(
-        "(?i)(\\d[\\d\\s.,]*\\d|\\d)(?:\\s*)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)\\b?",
+        "(?i)(\\d[\\d\\s.,]*\\d|\\d)(?:\\s*)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)(?=$|[^\\p{L}\\p{Nd}_])",
     )
     private val amountBeforeRegex = Regex(
         "(?i)(\\u20BD|rub|rur|usd|\\$|eur|\\u20AC)(?:\\s*)(\\d[\\d\\s.,]*\\d|\\d)\\b",
