@@ -211,6 +211,18 @@ def _parse_category_aggregate_layout_ocr(
             continue
 
         count_index = _next_operation_count_line_index(lines, index, amount_line_indexes)
+        label_anchor_index = index
+        use_same_line_label = True
+        if count_index is None and not _is_label_line(
+            _layout_left_text(line, right_column_left)
+        ):
+            count_index = _previous_operation_count_line_index(
+                lines,
+                index,
+                amount_line_indexes,
+            )
+            label_anchor_index = count_index if count_index is not None else index
+            use_same_line_label = False
         if count_index is None:
             continue
         operation_count = _operation_count(lines[count_index].text)
@@ -218,16 +230,19 @@ def _parse_category_aggregate_layout_ocr(
             continue
 
         label_parts: list[str] = []
-        label_parts.extend(_previous_layout_label_parts(lines, index, right_column_left))
+        label_parts.extend(
+            _previous_layout_label_parts(lines, label_anchor_index, right_column_left)
+        )
         same_line_label = _layout_left_text(line, right_column_left)
-        if _is_label_line(same_line_label):
+        if use_same_line_label and _is_label_line(same_line_label):
             label_parts.append(same_line_label)
 
-        for continuation in lines[index + 1 : count_index]:
-            if continuation.left >= right_column_left:
-                continue
-            if _is_label_line(continuation.text):
-                label_parts.append(continuation.text)
+        if use_same_line_label:
+            for continuation in lines[index + 1 : count_index]:
+                if continuation.left >= right_column_left:
+                    continue
+                if _is_label_line(continuation.text):
+                    label_parts.append(continuation.text)
 
         label = _clean_label(" ".join(label_parts))
         if not label:
@@ -331,9 +346,7 @@ def _layout_amount_match(line: _LayoutLine, right_column_left: float) -> ParsedA
 def _layout_amount_match_in(text: str) -> ParsedAmountMatch | None:
     matches: list[ParsedAmountMatch] = []
     for match in _LAYOUT_AMOUNT_RE.finditer(text):
-        raw_amount = match.group(1)
-        if match.group(2):
-            raw_amount = _clean_layout_amount(raw_amount)
+        raw_amount = _clean_layout_amount(match.group(1))
         amount = _normalize_amount(raw_amount, match.group(2) or "RUB")
         if amount is None:
             continue
@@ -425,6 +438,24 @@ def _next_operation_count_line_index(
         if index in amount_line_indexes:
             return None
         if _operation_count(lines[index].text) is not None:
+            return index
+    return None
+
+
+def _previous_operation_count_line_index(
+    lines: Sequence[_LayoutLine],
+    amount_line_index: int,
+    amount_line_indexes: set[int],
+) -> int | None:
+    min_lookbehind = max(-1, amount_line_index - 4)
+    amount_line_top = lines[amount_line_index].top
+    for index in range(amount_line_index - 1, min_lookbehind, -1):
+        if index in amount_line_indexes:
+            return None
+        line = lines[index]
+        if amount_line_top - line.bottom > 120:
+            break
+        if _operation_count(line.text) is not None:
             return index
     return None
 
