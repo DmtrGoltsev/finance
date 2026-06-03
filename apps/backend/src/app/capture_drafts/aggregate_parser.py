@@ -373,7 +373,11 @@ def _layout_lines(words: Sequence[OcrWordLike]) -> list[_LayoutLine]:
             word.text.strip()
             and word.width > 0
             and word.height > 0
-            and (word.confidence is None or word.confidence >= 15)
+            and (
+                word.confidence is None
+                or word.confidence >= 15
+                or _contains_digit(word.text)
+            )
         )
     ]
     if not clean_words:
@@ -520,6 +524,10 @@ def _word_center_x(word: OcrWordLike) -> float:
 
 def _word_center_y(word: OcrWordLike) -> float:
     return word.top + (word.height / 2)
+
+
+def _contains_digit(text: str) -> bool:
+    return any(character.isdigit() for character in text)
 
 
 def _normalize_amount(raw_amount: str, raw_currency: str) -> ParsedAmount | None:

@@ -166,6 +166,30 @@ def test_category_aggregate_parser_recovers_operation_word_on_amount_line() -> N
     ]
 
 
+def test_category_aggregate_parser_retains_low_confidence_digits_in_layout_amount() -> None:
+    candidates = parse_category_aggregate_screenshot_ocr(
+        "layout fixture intentionally omits parseable aggregate text",
+        captured_at=FIXED_TIME,
+        ocr_words=(
+            _word("Кафе,", 180, 780, 80),
+            _word("рестораны,", 274, 780, 175),
+            _word("фастфуд", 180, 826, 119),
+            _word("222", 700, 826, 50, confidence=4.0),
+            _word("129", 763, 826, 50, confidence=6.0),
+            _word("₽", 826, 826, 24, confidence=3.0),
+            _word("80", 180, 872, 40),
+            _word("операций", 236, 872, 128),
+        ),
+    )
+
+    assert [
+        (candidate.external_label, str(candidate.amount), candidate.operation_count)
+        for candidate in candidates
+    ] == [
+        ("Кафе, рестораны, фастфуд", "222129.00", 80),
+    ]
+
+
 def test_category_mapping_hash_normalization_is_stable_and_hash_only() -> None:
     assert normalize_aggregate_label("  Кафе, рестораны,\nфастфуд  ") == (
         "кафе рестораны фастфуд"
@@ -467,12 +491,19 @@ def _operation_word_on_amount_line_layout_words() -> tuple[ScreenshotOcrWord, ..
     )
 
 
-def _word(text: str, left: int, top: int, width: int) -> ScreenshotOcrWord:
+def _word(
+    text: str,
+    left: int,
+    top: int,
+    width: int,
+    *,
+    confidence: float = 96.0,
+) -> ScreenshotOcrWord:
     return ScreenshotOcrWord(
         text=text,
         left=left,
         top=top,
         width=width,
         height=34,
-        confidence=96.0,
+        confidence=confidence,
     )
