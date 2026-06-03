@@ -20,6 +20,7 @@ _AMOUNT_BEFORE_RE = re.compile(
 _LAYOUT_AMOUNT_RE = re.compile(rf"(?i)(\d[\d\s.,]*\d|\d)(?:\s*)({_CURRENCY_RE_PART})?")
 _OPERATION_COUNT_RE = re.compile(r"(?i)(\d{1,4})\s+(?:операци\w*|operations?)")
 _OPERATION_WORD_RE = re.compile(r"(?i)^(?:операци\w*|operations?)\b")
+_OPERATION_WORD_ONLY_RE = re.compile(r"(?i)^(?:операци\w*|operations?)$")
 _SUMMARY_RE = re.compile(r"(?i)^(?:еще|ещё|more)\s+\d{1,4}\s+(?:категори\w*|categories)\s+")
 _NON_LABEL_CHARS_RE = re.compile(r"[^\w]+", re.UNICODE)
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -583,6 +584,8 @@ def _is_label_line(text: str) -> bool:
     if _AMOUNT_AFTER_RE.search(text) is not None or _AMOUNT_BEFORE_RE.search(text) is not None:
         return False
     if _OPERATION_COUNT_RE.search(normalized) is not None:
+        return False
+    if _OPERATION_WORD_ONLY_RE.search(normalized) is not None:
         return False
     if _is_summary_line(text):
         return False

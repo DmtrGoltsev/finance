@@ -151,6 +151,21 @@ def test_category_aggregate_parser_recovers_split_count_before_right_only_amount
     ]
 
 
+def test_category_aggregate_parser_recovers_operation_word_on_amount_line() -> None:
+    candidates = parse_category_aggregate_screenshot_ocr(
+        "layout fixture intentionally omits parseable aggregate text",
+        captured_at=FIXED_TIME,
+        ocr_words=_operation_word_on_amount_line_layout_words(),
+    )
+
+    assert [
+        (candidate.external_label, str(candidate.amount), candidate.operation_count)
+        for candidate in candidates
+    ] == [
+        ("Кафе, рестораны, фастфуд", "222129.00", 80),
+    ]
+
+
 def test_category_mapping_hash_normalization_is_stable_and_hash_only() -> None:
     assert normalize_aggregate_label("  Кафе, рестораны,\nфастфуд  ") == (
         "кафе рестораны фастфуд"
@@ -437,6 +452,18 @@ def _split_count_before_amount_layout_words() -> tuple[ScreenshotOcrWord, ...]:
         _word("операций", 236, 918, 128),
         _word("222", 700, 964, 50),
         _word("129", 763, 964, 50),
+    )
+
+
+def _operation_word_on_amount_line_layout_words() -> tuple[ScreenshotOcrWord, ...]:
+    return (
+        _word("Кафе,", 180, 780, 80),
+        _word("рестораны,", 274, 780, 175),
+        _word("фастфуд", 180, 826, 119),
+        _word("80", 180, 872, 40),
+        _word("операций", 180, 918, 128),
+        _word("222", 700, 918, 50),
+        _word("129", 763, 918, 50),
     )
 
 
