@@ -19,6 +19,7 @@ _AMOUNT_BEFORE_RE = re.compile(
 )
 _LAYOUT_AMOUNT_RE = re.compile(rf"(?i)(\d[\d\s.,]*\d|\d)(?:\s*)({_CURRENCY_RE_PART})?")
 _OPERATION_COUNT_RE = re.compile(r"(?i)(\d{1,4})\s+(?:операци\w*|operations?)")
+_OPERATION_WORD_RE = re.compile(r"(?i)^(?:операци\w*|operations?)\b")
 _SUMMARY_RE = re.compile(r"(?i)^(?:еще|ещё|more)\s+\d{1,4}\s+(?:категори\w*|categories)\s+")
 _NON_LABEL_CHARS_RE = re.compile(r"[^\w]+", re.UNICODE)
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -73,6 +74,12 @@ class _LayoutLine:
     @property
     def center_y(self) -> float:
         return (self.top + self.bottom) / 2
+
+
+@dataclass(frozen=True, slots=True)
+class _OperationCountLine:
+    index: int
+    count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,24 +217,22 @@ def _parse_category_aggregate_layout_ocr(
         if amount_match is None:
             continue
 
-        count_index = _next_operation_count_line_index(lines, index, amount_line_indexes)
+        count_line = _next_operation_count_line(lines, index, amount_line_indexes)
         label_anchor_index = index
         use_same_line_label = True
-        if count_index is None and not _is_label_line(
+        if count_line is None and not _is_label_line(
             _layout_left_text(line, right_column_left)
         ):
-            count_index = _previous_operation_count_line_index(
+            count_line = _previous_operation_count_line(
                 lines,
                 index,
                 amount_line_indexes,
             )
-            label_anchor_index = count_index if count_index is not None else index
+            label_anchor_index = count_line.index if count_line is not None else index
             use_same_line_label = False
-        if count_index is None:
+        if count_line is None:
             continue
-        operation_count = _operation_count(lines[count_index].text)
-        if operation_count is None:
-            continue
+        operation_count = count_line.count
 
         label_parts: list[str] = []
         label_parts.extend(
@@ -238,7 +243,7 @@ def _parse_category_aggregate_layout_ocr(
             label_parts.append(same_line_label)
 
         if use_same_line_label:
-            for continuation in lines[index + 1 : count_index]:
+            for continuation in lines[index + 1 : count_line.index]:
                 if continuation.left >= right_column_left:
                     continue
                 if _is_label_line(continuation.text):
@@ -428,25 +433,26 @@ def _layout_right_text(line: _LayoutLine, right_column_left: float) -> str:
     return _WHITESPACE_RE.sub(" ", " ".join(words)).strip()
 
 
-def _next_operation_count_line_index(
+def _next_operation_count_line(
     lines: Sequence[_LayoutLine],
     amount_line_index: int,
     amount_line_indexes: set[int],
-) -> int | None:
+) -> _OperationCountLine | None:
     max_lookahead = min(len(lines), amount_line_index + 4)
     for index in range(amount_line_index + 1, max_lookahead):
         if index in amount_line_indexes:
             return None
-        if _operation_count(lines[index].text) is not None:
-            return index
+        operation_count = _layout_operation_count_at(lines, index)
+        if operation_count is not None:
+            return _OperationCountLine(index=index, count=operation_count)
     return None
 
 
-def _previous_operation_count_line_index(
+def _previous_operation_count_line(
     lines: Sequence[_LayoutLine],
     amount_line_index: int,
     amount_line_indexes: set[int],
-) -> int | None:
+) -> _OperationCountLine | None:
     min_lookbehind = max(-1, amount_line_index - 4)
     amount_line_top = lines[amount_line_index].top
     for index in range(amount_line_index - 1, min_lookbehind, -1):
@@ -455,9 +461,32 @@ def _previous_operation_count_line_index(
         line = lines[index]
         if amount_line_top - line.bottom > 120:
             break
-        if _operation_count(line.text) is not None:
-            return index
+        operation_count = _layout_operation_count_at(lines, index)
+        if operation_count is not None:
+            return _OperationCountLine(index=index, count=operation_count)
     return None
+
+
+def _layout_operation_count_at(
+    lines: Sequence[_LayoutLine],
+    index: int,
+) -> int | None:
+    direct_count = _operation_count(lines[index].text)
+    if direct_count is not None:
+        return direct_count
+    if index + 1 >= len(lines):
+        return None
+    return _split_operation_count(lines[index].text, lines[index + 1].text)
+
+
+def _split_operation_count(count_text: str, operation_text: str) -> int | None:
+    normalized_count = normalize_aggregate_label(count_text)
+    if re.fullmatch(r"\d{1,4}", normalized_count) is None:
+        return None
+    normalized_operation = normalize_aggregate_label(operation_text)
+    if _OPERATION_WORD_RE.search(normalized_operation) is None:
+        return None
+    return int(normalized_count)
 
 
 def _previous_layout_label_parts(
