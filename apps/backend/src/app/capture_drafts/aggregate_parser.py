@@ -40,6 +40,17 @@ _AGGREGATE_HEADER_LINES = {
     "categories",
 }
 
+_AGGREGATE_HEADER_PREFIXES = (
+    "анализ финансов",
+)
+
+_AGGREGATE_SECTION_HEADERS = frozenset({
+    "зачисления",
+    "переводы",
+    "deposits",
+    "transfers",
+})
+
 
 @dataclass(frozen=True, slots=True)
 class ParsedAmount:
@@ -126,8 +137,7 @@ def parse_category_aggregate_screenshot_ocr(
     skip_line_index: int | None = None
 
     for index, line in enumerate(lines):
-        if skip_line_index == index:
-            skip_line_index = None
+        if skip_line_index is not None and index <= skip_line_index:
             continue
         if _is_summary_line(line):
             label_buffer.clear()
@@ -149,11 +159,35 @@ def parse_category_aggregate_screenshot_ocr(
                 next_line_operation_count = int(next_match.group(1))
                 skip_line_index = index + 1
 
+        continuation_lines: list[str] = []
+        if next_line_operation_count is None:
+            scan_start = index + 2
+            scan_index = scan_start
+            while scan_index < len(lines):
+                scan_line = lines[scan_index]
+                if _is_summary_line(scan_line):
+                    break
+                if _amount_match_in(scan_line) is not None:
+                    break
+                scan_op = _operation_count(scan_line)
+                if scan_op is not None:
+                    next_line_operation_count = scan_op
+                    skip_line_index = scan_index
+                    break
+                if _is_label_line(scan_line):
+                    continuation_lines.append(scan_line)
+                scan_index += 1
+            if continuation_lines:
+                skip_line_index = max(
+                    skip_line_index or 0,
+                    scan_start + len(continuation_lines) - 1,
+                )
+
         label_before_amount = line[: amount_match.start].strip()
         label = _clean_label(
             " ".join(
                 item
-                for item in [*label_buffer, label_before_amount]
+                for item in [*label_buffer, label_before_amount, *continuation_lines]
                 if _is_label_line(item)
             ).strip()
         )
@@ -585,6 +619,19 @@ def _is_summary_line(text: str) -> bool:
     return _SUMMARY_RE.search(normalize_aggregate_label(text)) is not None
 
 
+_NOISE_TOKENS = frozenset({
+    "устройство",
+    "device",
+    "nll",
+    "te",
+})
+
+_NOISE_PATTERNS = (
+    re.compile(r"\d{1,2}:\d{2}"),
+    re.compile(r"[&$<>=|\\/]"),
+)
+
+
 def _is_label_line(text: str) -> bool:
     normalized = normalize_aggregate_label(text)
     if not normalized or normalized in _AGGREGATE_HEADER_LINES:
@@ -597,7 +644,26 @@ def _is_label_line(text: str) -> bool:
         return False
     if _is_summary_line(text):
         return False
-    return any(character.isalpha() for character in text)
+    if not any(character.isalpha() for character in text):
+        return False
+    stripped = normalized.strip()
+    tokens = stripped.split()
+    alpha_tokens = [t for t in tokens if any(c.isalpha() for c in t)]
+    if not alpha_tokens:
+        return False
+    if normalized in _AGGREGATE_SECTION_HEADERS:
+        return False
+    for pattern in _NOISE_PATTERNS:
+        if pattern.search(text):
+            return False
+    lower_tokens = set(t.casefold() for t in alpha_tokens)
+    if lower_tokens & _NOISE_TOKENS:
+        return False
+    alpha_text = " ".join(alpha_tokens)
+    for header in _AGGREGATE_HEADER_PREFIXES:
+        if alpha_text.casefold().startswith(header):
+            return False
+    return True
 
 
 def _clean_label(value: str) -> str:
