@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.annotation.DrawableRes
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -108,8 +109,8 @@ fun FinanceApp(
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
     var authMode by rememberSaveable { mutableStateOf(AuthMode.Login) }
     var loginEmail by rememberSaveable { mutableStateOf("") }
-    var loginPassword by rememberSaveable { mutableStateOf("") }
-    var registerConfirmPassword by rememberSaveable { mutableStateOf("") }
+    var loginPassword by remember { mutableStateOf("") }
+    var registerConfirmPassword by remember { mutableStateOf("") }
     var registerDisplayName by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
     var captureDrafts by remember { mutableStateOf<List<CaptureDraft>>(emptyList()) }
@@ -123,7 +124,7 @@ fun FinanceApp(
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
-            screenshotOcrStatus = "Sending screenshot to server for recognition"
+            screenshotOcrStatus = "Отправляем скриншот на распознавание"
             screenshotAggregateDrafts = emptyList()
             val capturedAtMillis = System.currentTimeMillis()
             val capturedAt = java.time.Instant.ofEpochMilli(capturedAtMillis).toString()
@@ -145,9 +146,9 @@ fun FinanceApp(
             if (ocrResult.isFailure || result == null) {
                 val errorMsg = (result as? ApiResult.Failure)?.message
                     ?: ocrResult.exceptionOrNull()?.message
-                    ?: "Unknown error"
-                screenshotOcrStatus = "Could not recognize a payment from this screenshot"
-                captureMessage = "$errorMsg. Choose another screenshot or add the operation manually"
+                    ?: "Неизвестная ошибка"
+                screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
+                captureMessage = "$errorMsg. Выберите другой скриншот или добавьте операцию вручную"
                 captureIsLoading = false
                 return@launch
             }
@@ -156,8 +157,8 @@ fun FinanceApp(
                 is ApiResult.Success -> {
                     val items = result.value.items
                     if (items.isEmpty()) {
-                        screenshotOcrStatus = "Could not recognize a payment from this screenshot"
-                        captureMessage = "Choose another screenshot or add the operation manually"
+                        screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
+                        captureMessage = "Выберите другой скриншот или добавьте операцию вручную"
                         captureIsLoading = false
                         return@launch
                     }
@@ -191,12 +192,12 @@ fun FinanceApp(
                         )
                     }
                     screenshotAggregateDrafts = drafts
-                    screenshotOcrStatus = "Found ${drafts.size} category rows. Review before creating drafts."
-                    captureMessage = "Choose categories and confirm screenshot drafts"
+                    screenshotOcrStatus = "Найдено ${drafts.size} категорий. Проверьте перед созданием."
+                    captureMessage = "Выберите категории и подтвердите черновики"
                     captureIsLoading = false
                 }
                 is ApiResult.Failure -> {
-                    screenshotOcrStatus = "Could not recognize a payment from this screenshot"
+                    screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
                 }
@@ -228,12 +229,12 @@ fun FinanceApp(
         val selectedDrafts = screenshotAggregateDrafts
             .filter { it.include && it.selectedCategoryId.isNotBlank() }
         if (selectedDrafts.isEmpty()) {
-            captureMessage = "Choose at least one category row before creating drafts"
+            captureMessage = "Выберите хотя бы одну категорию"
             return
         }
         scope.launch {
             captureIsLoading = true
-            screenshotOcrStatus = "Creating ${selectedDrafts.size} screenshot drafts"
+            screenshotOcrStatus = "Создаём ${selectedDrafts.size} черновиков"
             val mappingContext = aggregateMappingContext(uiState.session)
             val result = withContext(Dispatchers.IO) {
                 var failure: ApiResult.Failure? = null
@@ -265,12 +266,12 @@ fun FinanceApp(
                         captureDrafts = refreshResult.value
                     }
                     screenshotAggregateDrafts = emptyList()
-                    screenshotOcrStatus = "Screenshot drafts created: ${selectedDrafts.size}"
-                    captureMessage = "Review and confirm created drafts"
+                    screenshotOcrStatus = "Черновики созданы: ${selectedDrafts.size}"
+                    captureMessage = "Проверьте и подтвердите созданные черновики"
                     captureIsLoading = false
                 }
                 is ApiResult.Failure -> {
-                    screenshotOcrStatus = "Could not create screenshot drafts"
+                    screenshotOcrStatus = "Не удалось создать черновики"
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
                 }
@@ -282,7 +283,7 @@ fun FinanceApp(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri == null) {
-            screenshotOcrStatus = "Screenshot selection cancelled"
+            screenshotOcrStatus = "Выбор скриншота отменён"
             return@rememberLauncherForActivityResult
         }
         processScreenshotCapture(uri)
@@ -295,7 +296,7 @@ fun FinanceApp(
             when (result) {
                 is ApiResult.Success -> {
                     captureDrafts = result.value
-                    captureMessage = successMessage ?: "Capture drafts refreshed"
+                    captureMessage = successMessage ?: "Черновики обновлены"
                 }
                 is ApiResult.Failure -> {
                     captureMessage = result.userFacingMessage()
@@ -316,7 +317,7 @@ fun FinanceApp(
                 )
                 is ApiResult.Failure -> {
                     if (result.isAuthenticationFailure()) {
-                        FinanceUiState(message = "Войдите, чтобы увидеть финансы")
+                        FinanceUiState(message = "Сессия истекла. Войдите снова.")
                     } else {
                         uiState.copy(
                             isLoading = false,
@@ -332,7 +333,7 @@ fun FinanceApp(
         val selectedAccountId = accountId.takeIf { it.isNotBlank() }
         val selectedCategoryId = categoryId.takeIf { it.isNotBlank() }
         if (selectedAccountId == null || selectedCategoryId == null) {
-            captureMessage = "Choose an account and category before confirming"
+            captureMessage = "Выберите счёт и категорию перед подтверждением"
             return
         }
         scope.launch {
@@ -358,8 +359,8 @@ fun FinanceApp(
             }
             when (result) {
                 is ApiResult.Success -> {
-                    captureMessage = "Draft confirmed"
-                    loadDashboard("Capture draft confirmed")
+                    captureMessage = "Черновик подтверждён"
+                    loadDashboard("Черновик подтверждён")
                     loadCaptureDrafts()
                 }
                 is ApiResult.Failure -> {
@@ -374,7 +375,7 @@ fun FinanceApp(
         scope.launch {
             captureIsLoading = true
             when (val result = withContext(Dispatchers.IO) { apiClient.discardCaptureDraft(draft.id) }) {
-                is ApiResult.Success -> loadCaptureDrafts("Draft discarded")
+                is ApiResult.Success -> loadCaptureDrafts("Черновик отклонён")
                 is ApiResult.Failure -> {
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
@@ -515,7 +516,7 @@ fun FinanceApp(
                         }
                     }
                     QuickEntryType.Asset -> {
-                        val currency = dashboard.accounts.firstOrNull()?.currency ?: "USD"
+                        val currency = dashboard.accounts.firstOrNull()?.currency ?: "RUB"
                         val ownershipType = if (draft.visibility == FinanceMode.Shared) "shared" else "personal"
                         apiClient.createDemoAccount(
                             householdId = if (ownershipType == "shared") uiState.session?.householdId else null,
@@ -557,7 +558,7 @@ fun FinanceApp(
             when (val result = withContext(Dispatchers.IO) { apiClient.listCaptureDrafts(status = "pending") }) {
                 is ApiResult.Success -> {
                     captureDrafts = result.value
-                    captureMessage = "Capture drafts refreshed"
+                    captureMessage = "Черновики обновлены"
                 }
                 is ApiResult.Failure -> {
                     captureMessage = result.userFacingMessage()
@@ -611,15 +612,17 @@ fun FinanceApp(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(
-                modifier = Modifier.testTag("quick-add-fab"),
-                onClick = {
-                    quickAddError = null
-                    quickAddOpenKey += 1
-                    showQuickAdd = true
-                },
-            ) {
-                Icon(painterResource(R.drawable.ic_add_24), contentDescription = "Добавить")
+            if (uiState.session?.isAuthenticated == true) {
+                FloatingActionButton(
+                    modifier = Modifier.testTag("quick-add-fab"),
+                    onClick = {
+                        quickAddError = null
+                        quickAddOpenKey += 1
+                        showQuickAdd = true
+                    },
+                ) {
+                    Icon(painterResource(R.drawable.ic_add_24), contentDescription = "Добавить")
+                }
             }
         },
     ) { innerPadding ->
@@ -631,7 +634,7 @@ fun FinanceApp(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (uiState.session?.isAuthenticated != true || dashboard == null) {
+            if (uiState.session?.isAuthenticated != true) {
                 item {
                     SignInCard(
                         state = uiState,
@@ -658,6 +661,17 @@ fun FinanceApp(
                             )
                         },
                     )
+                }
+            }
+
+            if (uiState.session?.isAuthenticated == true && dashboard == null && uiState.isLoading) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
 
@@ -998,7 +1012,7 @@ private fun SignInCard(
                     .testTag("login-email-field"),
                 value = email,
                 onValueChange = onEmailChange,
-                label = { Text("Email") },
+                label = { Text("Электронная почта") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 enabled = !state.isLoading,
@@ -1161,8 +1175,8 @@ private fun CaptureDraftReviewCard(
                 IconBubble(R.drawable.ic_receipt_24, Color(0xFF227C9D), size = 36)
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Capture drafts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Review screenshot OCR drafts before sending", style = MaterialTheme.typography.bodySmall)
+                    Text("Черновики операций", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Проверьте распознанные данные перед созданием", style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -1171,7 +1185,7 @@ private fun CaptureDraftReviewCard(
                 enabled = isAuthenticated && !isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Choose screenshot")
+                Text("Выбрать скриншот")
             }
 
             screenshotOcrStatus?.takeIf { it.isNotBlank() }?.let {
@@ -1184,7 +1198,7 @@ private fun CaptureDraftReviewCard(
                     enabled = isAuthenticated && !isLoading,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Refresh")
+                    Text("Обновить")
                 }
             }
 
@@ -1206,9 +1220,9 @@ private fun CaptureDraftReviewCard(
             }
 
             if (!isAuthenticated) {
-                Text("Sign in to sync capture drafts.", style = MaterialTheme.typography.bodySmall)
+                Text("Войдите, чтобы синхронизировать черновики.", style = MaterialTheme.typography.bodySmall)
             } else if (drafts.isEmpty() && screenshotAggregateDrafts.isEmpty()) {
-                Text("No pending capture drafts.", style = MaterialTheme.typography.bodySmall)
+                Text("Нет ожидающих черновиков.", style = MaterialTheme.typography.bodySmall)
             } else {
                 drafts.forEach { draft ->
                     CaptureDraftRow(
@@ -1250,7 +1264,7 @@ private fun ScreenshotAggregateDraftList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            "Screenshot categories",
+            "Категории на скриншоте",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
@@ -1266,7 +1280,7 @@ private fun ScreenshotAggregateDraftList(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            "${draft.candidate.operationCount} operations",
+                            "${draft.candidate.operationCount} операций",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -1282,7 +1296,7 @@ private fun ScreenshotAggregateDraftList(
                         selected = draft.include,
                         onClick = { onIncludedChanged(draft.key, !draft.include) },
                         enabled = !isLoading,
-                        label = { Text(if (draft.include) "Include" else "Skip") },
+                        label = { Text(if (draft.include) "Включено" else "Пропустить") },
                     )
                     val matchedCategory = expenseCategories.firstOrNull { it.id == draft.selectedCategoryId }
                     if (matchedCategory == null) {
@@ -1291,12 +1305,12 @@ private fun ScreenshotAggregateDraftList(
                             enabled = !isLoading,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         ) {
-                            Text("New", style = MaterialTheme.typography.labelLarge)
+                            Text("Новая", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
                 if (expenseCategories.isEmpty()) {
-                    Text("No active expense categories available", style = MaterialTheme.typography.bodySmall)
+                    Text("Нет активных категорий расходов", style = MaterialTheme.typography.bodySmall)
                 } else {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(expenseCategories) { category ->
@@ -1330,14 +1344,14 @@ private fun ScreenshotAggregateDraftList(
                 enabled = !isLoading,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Cancel")
+                Text("Отмена")
             }
             Button(
                 onClick = onConfirm,
                 enabled = !isLoading && selectedCount > 0,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Create $selectedCount")
+                Text("Создать $selectedCount")
             }
         }
     }
@@ -1372,14 +1386,14 @@ private fun CaptureDraftRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = draft.merchantName ?: draft.description ?: "Captured payment",
+                    text = draft.merchantName ?: draft.description ?: "Распознанный платёж",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${draft.captureSource} ${draft.occurredAt.take(10)}",
+                    text = "${draft.captureSource.localizedCaptureSource()} ${draft.occurredAt.take(10)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1391,12 +1405,12 @@ private fun CaptureDraftRow(
             )
         }
         Text(
-            text = "Confidence ${(draft.confidence * 100).toInt()}% | Evidence ${draft.evidenceHash.take(12)}",
+            text = "Точность ${(draft.confidence * 100).toInt()}% | След ${draft.evidenceHash.take(12)}",
             style = MaterialTheme.typography.bodySmall,
         )
-        Text("Account", style = MaterialTheme.typography.labelLarge)
+        Text("Счёт", style = MaterialTheme.typography.labelLarge)
         if (activeAccounts.isEmpty()) {
-            Text("No active accounts available", style = MaterialTheme.typography.bodySmall)
+            Text("Нет активных счетов", style = MaterialTheme.typography.bodySmall)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(activeAccounts) { account ->
@@ -1414,9 +1428,9 @@ private fun CaptureDraftRow(
                 }
             }
         }
-        Text("Category", style = MaterialTheme.typography.labelLarge)
+        Text("Категория", style = MaterialTheme.typography.labelLarge)
         if (expenseCategories.isEmpty()) {
-            Text("No active expense categories available", style = MaterialTheme.typography.bodySmall)
+            Text("Нет активных категорий расходов", style = MaterialTheme.typography.bodySmall)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(expenseCategories) { category ->
@@ -1440,14 +1454,14 @@ private fun CaptureDraftRow(
                 enabled = !isLoading && draft.id.isNotBlank(),
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Discard")
+                Text("Отклонить")
             }
             Button(
                 onClick = { onConfirm(draft, selectedAccountId, selectedCategoryId) },
-                enabled = !isLoading && draft.id.isNotBlank(),
+                enabled = !isLoading && draft.id.isNotBlank() && selectedAccountId.isNotBlank() && selectedCategoryId.isNotBlank(),
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Confirm")
+                Text("Подтвердить")
             }
         }
     }
@@ -1853,10 +1867,10 @@ private fun AccountRow(
                 },
                 enabled = editName.isNotBlank(),
             ) {
-                Text("OK")
+                Text("ОК")
             }
             IconButton(
-                onClick = { isEditing = false },
+                onClick = { isEditing = false; editName = account.name },
                 modifier = Modifier.size(32.dp),
             ) {
                 Icon(
@@ -2047,7 +2061,10 @@ private fun CategoryManagementRow(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            TextButton(onClick = { isEditing = !isEditing }) {
+            TextButton(onClick = {
+                if (isEditing) editName = category.displayName()
+                isEditing = !isEditing
+            }) {
                 Text(if (isEditing) "Отмена" else "Изменить")
             }
         }
@@ -2282,8 +2299,8 @@ private fun QuickAddSheet(
     var categoryId by rememberSaveable(sheetKey) { mutableStateOf("") }
     var assetKind by rememberSaveable(sheetKey) { mutableStateOf(AssetKind.Bank) }
     var visibility by rememberSaveable(sheetKey) { mutableStateOf(FinanceMode.Personal) }
-    val accounts = dashboard?.accounts.orEmpty()
-    val categories = dashboard?.categories.orEmpty().filter { it.type == type.apiValue }
+    val accounts = dashboard?.accounts.orEmpty().filter { it.status == "active" }
+    val categories = dashboard?.categories.orEmpty().filter { it.type == type.apiValue && it.status == "active" }
     val firstAccountId = accounts.firstOrNull()?.id.orEmpty()
     val firstCategoryId = categories.firstOrNull()?.id.orEmpty()
 
@@ -2867,13 +2884,18 @@ private fun TransactionSummary.displayDescription(): String {
     return userFacingSeedText(description).ifBlank { localizedType() }
 }
 
+private fun String.localizedCaptureSource(): String = when (this) {
+    "screenshot_ocr" -> "Скриншот"
+    "manual" -> "Ручной ввод"
+    else -> this
+}
+
 private fun ApiResult.Failure.userFacingMessage(): String {
     return when {
-        message.contains("счет", ignoreCase = true) -> message
-        message.contains("сумм", ignoreCase = true) -> message
-        message.contains("перевод", ignoreCase = true) -> message
-        message.contains("валют", ignoreCase = true) -> message
-        message.contains("режим", ignoreCase = true) -> message
+        message.isNotBlank() -> message
+        statusCode == 401 -> "Сессия истекла. Войдите снова."
+        statusCode == 403 -> "Нет доступа."
+        statusCode != null && statusCode >= 500 -> "Ошибка сервера. Попробуйте позже."
         else -> "Не удалось выполнить действие"
     }
 }

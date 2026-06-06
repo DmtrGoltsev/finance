@@ -500,8 +500,8 @@ class LiveFinanceApiClient(
             path = "/api/v1/transactions/${transaction.id.urlEncodePath()}",
             method = "PATCH",
             body = JSONObject()
-                .put("amount", "18.0000")
-                .put("description", "Операция обновлена")
+                .put("amount", transaction.amount)
+                .put("description", transaction.description)
                 .apply { transaction.version?.let { put("version", it) } }
                 .toString(),
         ).dataObject().let(::parseTransaction)
@@ -728,7 +728,8 @@ private fun parseSession(json: JSONObject): SessionStatus {
         ?.takeIf { it.isNotBlank() }
     return SessionStatus(
         isAuthenticated = actor != null || json.has("accessToken"),
-        displayName = userId?.take(8)?.let { "Пользователь $it" },
+        displayName = actor?.optString("displayName")?.takeIf { it.isNotBlank() }
+            ?: userId?.take(8)?.let { "Пользователь $it" },
         householdId = householdId,
     )
 }
