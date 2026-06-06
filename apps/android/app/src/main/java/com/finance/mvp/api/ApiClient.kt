@@ -91,6 +91,42 @@ interface FinanceApiClient {
         householdId: String?,
     ): ApiResult<ScreenshotOcrResponse> =
         ApiResult.Failure("Screenshot OCR is not supported by this client")
+    suspend fun listPlanningPlans(scope: String, month: String, householdId: String? = null): ApiResult<PlanningPlan?> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun listPlanningPlanHistory(scope: String, householdId: String? = null): ApiResult<List<PlanningPlan>> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun createPlanningPlan(request: PlanningPlanCreateRequest): ApiResult<PlanningPlan> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun getPlanningPlan(planId: String): ApiResult<PlanningPlan> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun createPlanningIncomeSource(
+        planId: String,
+        request: PlanningIncomeSourceCreateRequest,
+    ): ApiResult<PlanningIncomeSource> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun updatePlanningIncomeSource(
+        incomeSourceId: String,
+        request: PlanningIncomeSourceUpdateRequest,
+    ): ApiResult<PlanningIncomeSource> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun confirmPlanningIncomeSource(incomeSourceId: String): ApiResult<PlanningIncomeSource> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun deletePlanningIncomeSource(incomeSourceId: String): ApiResult<Unit> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun createPlanningAllocation(
+        planId: String,
+        request: PlanningAllocationCreateRequest,
+    ): ApiResult<PlanningAllocation> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun updatePlanningAllocation(
+        allocationId: String,
+        request: PlanningAllocationUpdateRequest,
+    ): ApiResult<PlanningAllocation> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun deletePlanningAllocation(allocationId: String): ApiResult<Unit> =
+        ApiResult.Failure("Planning is not supported by this client")
+    suspend fun copyPlanningPlan(planId: String, request: PlanningPlanCopyRequest): ApiResult<PlanningPlan> =
+        ApiResult.Failure("Planning is not supported by this client")
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -221,6 +257,100 @@ data class CaptureDraft(
     val idempotencyKey: String,
     val accountId: String? = null,
     val categoryId: String? = null,
+    val version: Int? = null,
+)
+
+data class PlanningPlan(
+    val id: String,
+    val scope: String,
+    val month: String,
+    val currency: String,
+    val householdId: String? = null,
+    val totalPlannedIncome: String = "0",
+    val allocatedTotal: String = "0",
+    val remainingAmount: String = "0",
+    val overallocatedAmount: String = "0",
+    val isUnderallocated: Boolean = false,
+    val isOverallocated: Boolean = false,
+    val incomeSources: List<PlanningIncomeSource> = emptyList(),
+    val allocations: List<PlanningAllocation> = emptyList(),
+    val version: Int? = null,
+)
+
+data class PlanningIncomeSource(
+    val id: String,
+    val planId: String,
+    val amount: String,
+    val source: String,
+    val description: String?,
+    val dayOfMonth: Int?,
+    val confirmed: Boolean,
+    val effectiveDate: String?,
+    val version: Int? = null,
+)
+
+data class PlanningAllocation(
+    val id: String,
+    val planId: String,
+    val targetType: String,
+    val targetId: String?,
+    val targetSnapshot: String?,
+    val requiresAttention: Boolean,
+    val attentionReason: String?,
+    val comment: String?,
+    val allocationMode: String,
+    val allocationValue: String,
+    val calculatedAmount: String,
+    val version: Int? = null,
+)
+
+data class PlanningPlanCreateRequest(
+    val scope: String,
+    val month: String,
+    val currency: String,
+    val householdId: String? = null,
+)
+
+data class PlanningPlanCopyRequest(
+    val targetMonth: String,
+)
+
+data class PlanningIncomeSourceCreateRequest(
+    val amount: String,
+    val source: String,
+    val description: String? = null,
+    val dayOfMonth: Int,
+    val effectiveDate: String? = null,
+)
+
+data class PlanningIncomeSourceUpdateRequest(
+    val amount: String? = null,
+    val source: String? = null,
+    val description: String? = null,
+    val dayOfMonth: Int? = null,
+    val confirmed: Boolean? = null,
+    val effectiveDate: String? = null,
+    val version: Int? = null,
+)
+
+data class PlanningAllocationCreateRequest(
+    val targetType: String,
+    val targetId: String,
+    val targetSnapshot: String? = null,
+    val comment: String? = null,
+    val allocationMode: String,
+    val allocationValue: String,
+)
+
+data class PlanningAllocationUpdateRequest(
+    val targetType: String? = null,
+    val targetId: String? = null,
+    val targetSnapshot: String? = null,
+    val requiresAttention: Boolean? = null,
+    val attentionReason: String? = null,
+    val comment: String? = null,
+    val allocationMode: String? = null,
+    val allocationValue: String? = null,
     val version: Int? = null,
 )
 
@@ -634,6 +764,126 @@ class LiveFinanceApiClient(
         parseScreenshotOcrResponse(JSONObject(text))
     }
 
+    override suspend fun listPlanningPlans(
+        scope: String,
+        month: String,
+        householdId: String?,
+    ): ApiResult<PlanningPlan?> = safeCall {
+        request(
+            path = "/api/v1/planning/plans",
+            method = "GET",
+            query = planningScopeQuery(scope, householdId) + mapOf("month" to month),
+        ).planningPlanObjectOrNull()?.let(::parsePlanningPlan)
+    }
+
+    override suspend fun listPlanningPlanHistory(
+        scope: String,
+        householdId: String?,
+    ): ApiResult<List<PlanningPlan>> = safeCall {
+        request(
+            path = "/api/v1/planning/plans/history",
+            method = "GET",
+            query = planningScopeQuery(scope, householdId),
+        ).planningPlanItems().map(::parsePlanningPlan)
+    }
+
+    override suspend fun createPlanningPlan(request: PlanningPlanCreateRequest): ApiResult<PlanningPlan> = safeCall {
+        request(
+            path = "/api/v1/planning/plans",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).planningPlanObject().let(::parsePlanningPlan)
+    }
+
+    override suspend fun getPlanningPlan(planId: String): ApiResult<PlanningPlan> = safeCall {
+        request(
+            path = "/api/v1/planning/plans/${planId.urlEncodePath()}",
+            method = "GET",
+        ).planningPlanObject().let(::parsePlanningPlan)
+    }
+
+    override suspend fun createPlanningIncomeSource(
+        planId: String,
+        request: PlanningIncomeSourceCreateRequest,
+    ): ApiResult<PlanningIncomeSource> = safeCall {
+        this.request(
+            path = "/api/v1/planning/plans/${planId.urlEncodePath()}/income-sources",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).planningIncomeSourceObject().let(::parsePlanningIncomeSource)
+    }
+
+    override suspend fun updatePlanningIncomeSource(
+        incomeSourceId: String,
+        request: PlanningIncomeSourceUpdateRequest,
+    ): ApiResult<PlanningIncomeSource> = safeCall {
+        this.request(
+            path = "/api/v1/planning/income-sources/${incomeSourceId.urlEncodePath()}",
+            method = "PATCH",
+            body = request.toJsonForApi().toString(),
+        ).planningIncomeSourceObject().let(::parsePlanningIncomeSource)
+    }
+
+    override suspend fun confirmPlanningIncomeSource(incomeSourceId: String): ApiResult<PlanningIncomeSource> = safeCall {
+        request(
+            path = "/api/v1/planning/income-sources/${incomeSourceId.urlEncodePath()}/confirm",
+            method = "POST",
+            expectedCodes = setOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_CREATED),
+        ).planningIncomeSourceObject().let(::parsePlanningIncomeSource)
+    }
+
+    override suspend fun deletePlanningIncomeSource(incomeSourceId: String): ApiResult<Unit> = safeCall {
+        request(
+            path = "/api/v1/planning/income-sources/${incomeSourceId.urlEncodePath()}",
+            method = "DELETE",
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT, HttpURLConnection.HTTP_OK),
+        )
+        Unit
+    }
+
+    override suspend fun createPlanningAllocation(
+        planId: String,
+        request: PlanningAllocationCreateRequest,
+    ): ApiResult<PlanningAllocation> = safeCall {
+        this.request(
+            path = "/api/v1/planning/plans/${planId.urlEncodePath()}/allocations",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).planningAllocationObject().let(::parsePlanningAllocation)
+    }
+
+    override suspend fun updatePlanningAllocation(
+        allocationId: String,
+        request: PlanningAllocationUpdateRequest,
+    ): ApiResult<PlanningAllocation> = safeCall {
+        this.request(
+            path = "/api/v1/planning/allocations/${allocationId.urlEncodePath()}",
+            method = "PATCH",
+            body = request.toJsonForApi().toString(),
+        ).planningAllocationObject().let(::parsePlanningAllocation)
+    }
+
+    override suspend fun deletePlanningAllocation(allocationId: String): ApiResult<Unit> = safeCall {
+        request(
+            path = "/api/v1/planning/allocations/${allocationId.urlEncodePath()}",
+            method = "DELETE",
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT, HttpURLConnection.HTTP_OK),
+        )
+        Unit
+    }
+
+    override suspend fun copyPlanningPlan(planId: String, request: PlanningPlanCopyRequest): ApiResult<PlanningPlan> = safeCall {
+        this.request(
+            path = "/api/v1/planning/plans/${planId.urlEncodePath()}/copy",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).planningPlanObject().let(::parsePlanningPlan)
+    }
+
     override suspend fun logout(): ApiResult<Unit> = safeCall {
         request(
             path = "/api/v1/sessions/current",
@@ -819,6 +1069,73 @@ private fun parseCaptureDraft(json: JSONObject): CaptureDraft {
     )
 }
 
+private fun parsePlanningPlan(json: JSONObject): PlanningPlan {
+    val summary = json.optJSONObject("summary")
+    return PlanningPlan(
+        id = json.optString("id").ifBlank { json.optString("planId") },
+        scope = json.optString("scope"),
+        month = json.optString("month"),
+        currency = json.optString("currency"),
+        householdId = json.optNullableString("householdId"),
+        totalPlannedIncome = summary?.optString("totalPlannedIncome", "0")
+            ?: json.optString("totalPlannedIncome", "0"),
+        allocatedTotal = summary?.optString("totalAllocatedAmount", "0")
+            ?: json.optString("allocatedTotal", "0"),
+        remainingAmount = summary?.optString("unallocatedAmount", "0")
+            ?: json.optString("remainingAmount", "0"),
+        overallocatedAmount = json.optString(
+            "overallocatedAmount",
+            if (summary?.optBoolean("overallocated", false) == true) {
+                summary.optString("unallocatedAmount", "0").planningAbsoluteAmount()
+            } else {
+                "0"
+            },
+        ),
+        isUnderallocated = summary?.optBoolean("underallocated", false)
+            ?: json.optBoolean("isUnderallocated", false),
+        isOverallocated = summary?.optBoolean("overallocated", false)
+            ?: json.optBoolean("isOverallocated", false),
+        incomeSources = json.optJSONArray("incomeSources")?.toObjectList()?.map(::parsePlanningIncomeSource)
+            ?: emptyList(),
+        allocations = json.optJSONArray("allocations")?.toObjectList()?.map(::parsePlanningAllocation)
+            ?: emptyList(),
+        version = json.optIntOrNull("version"),
+    )
+}
+
+private fun parsePlanningIncomeSource(json: JSONObject): PlanningIncomeSource {
+    return PlanningIncomeSource(
+        id = json.optString("id").ifBlank { json.optString("incomeSourceId") },
+        planId = json.optString("planId"),
+        amount = json.optString("amount"),
+        source = json.optString("source"),
+        description = json.optNullableString("description"),
+        dayOfMonth = json.optIntOrNull("dayOfMonth"),
+        confirmed = json.optString("confirmationState").ifBlank {
+            if (json.optBoolean("confirmed", false)) "confirmed" else "planned"
+        } == "confirmed",
+        effectiveDate = json.optNullableString("effectiveDate"),
+        version = json.optIntOrNull("version"),
+    )
+}
+
+private fun parsePlanningAllocation(json: JSONObject): PlanningAllocation {
+    return PlanningAllocation(
+        id = json.optString("id").ifBlank { json.optString("allocationId") },
+        planId = json.optString("planId"),
+        targetType = json.optString("targetType"),
+        targetId = json.optNullableString("targetId"),
+        targetSnapshot = json.optNullableJsonString("targetSnapshot"),
+        requiresAttention = json.optBoolean("requiresAttention", false),
+        attentionReason = json.optNullableString("attentionReason"),
+        comment = json.optNullableString("comment"),
+        allocationMode = json.optString("allocationMode"),
+        allocationValue = json.optString("allocationValue"),
+        calculatedAmount = json.optString("calculatedAmount"),
+        version = json.optIntOrNull("version"),
+    )
+}
+
 private fun CaptureDraftCreateRequest.toJson(): JSONObject {
     return JSONObject()
         .put("amount", amount)
@@ -834,6 +1151,68 @@ private fun CaptureDraftCreateRequest.toJson(): JSONObject {
         .put("sourceAppLabel", sourceAppLabel)
         .put("evidenceHash", evidenceHash)
         .apply { categoryId?.takeIf { it.isNotBlank() }?.let { put("categoryId", it) } }
+}
+
+private fun PlanningPlanCreateRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("scope", scope)
+        .put("month", month)
+        .put("currency", currency)
+        .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
+}
+
+private fun PlanningPlanCopyRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("targetMonth", targetMonth)
+}
+
+private fun PlanningIncomeSourceCreateRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("amount", amount)
+        .put("source", source)
+        .put("dayOfMonth", dayOfMonth)
+        .apply {
+            description?.let { put("description", it) }
+            effectiveDate?.let { put("effectiveDate", it) }
+        }
+}
+
+internal fun PlanningIncomeSourceUpdateRequest.toJsonForApi(): JSONObject {
+    return JSONObject().apply {
+        amount?.let { put("amount", it) }
+        source?.let { put("source", it) }
+        description?.let { put("description", it) }
+        dayOfMonth?.let { put("dayOfMonth", it) }
+        confirmed?.let { put("confirmed", it) }
+        effectiveDate?.let { put("effectiveDate", it) }
+        version?.let { put("version", it) }
+    }
+}
+
+private fun PlanningAllocationCreateRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("targetType", targetType)
+        .put("targetId", targetId)
+        .put("allocationMode", allocationMode)
+        .put("allocationValue", allocationValue)
+        .apply {
+            targetSnapshot?.let { put("targetSnapshot", it) }
+            comment?.let { put("comment", it) }
+        }
+}
+
+internal fun PlanningAllocationUpdateRequest.toJsonForApi(): JSONObject {
+    return JSONObject().apply {
+        targetType?.let { put("targetType", it) }
+        targetId?.let { put("targetId", it) }
+        targetSnapshot?.let { put("targetSnapshot", it) }
+        requiresAttention?.let { put("requiresAttention", it) }
+        attentionReason?.let { put("attentionReason", it) }
+        comment?.let { put("comment", it) }
+        allocationMode?.let { put("allocationMode", it) }
+        allocationValue?.let { put("allocationValue", it) }
+        version?.let { put("version", it) }
+    }
 }
 
 internal fun CaptureDraftUpdateRequest.toJsonForApi(): JSONObject {
@@ -902,7 +1281,25 @@ private fun JSONObject.captureDraftItems(): List<JSONObject> {
         ?: emptyList()
 }
 
+private fun JSONObject.planningPlanItems(): List<JSONObject> {
+    return optJSONArray("items")?.toObjectList()
+        ?: optJSONObject("data")?.optJSONArray("items")?.toObjectList()
+        ?: optJSONObject("data")?.optJSONArray("plans")?.toObjectList()
+        ?: optJSONArray("plans")?.toObjectList()
+        ?: optJSONArray("data")?.toObjectList()
+        ?: emptyList()
+}
+
 private fun JSONObject.dataObject(): JSONObject = optJSONObject("data") ?: this
+
+private fun JSONObject.planningPlanObjectOrNull(): JSONObject? {
+    return optJSONObject("plan")
+        ?: optJSONObject("planningPlan")
+        ?: optJSONObject("data")?.optJSONObject("plan")
+        ?: optJSONObject("data")?.optJSONObject("planningPlan")
+        ?: optJSONObject("data")
+        ?: takeUnless { has("data") && isNull("data") }
+}
 
 private fun JSONObject.captureDraftObject(): JSONObject {
     return optJSONObject("captureDraft")
@@ -910,7 +1307,46 @@ private fun JSONObject.captureDraftObject(): JSONObject {
         ?: dataObject()
 }
 
+private fun JSONObject.planningPlanObject(): JSONObject {
+    return optJSONObject("plan")
+        ?: optJSONObject("planningPlan")
+        ?: optJSONObject("data")?.optJSONObject("plan")
+        ?: optJSONObject("data")?.optJSONObject("planningPlan")
+        ?: dataObject()
+}
+
+private fun JSONObject.planningIncomeSourceObject(): JSONObject {
+    return optJSONObject("incomeSource")
+        ?: optJSONObject("planningIncomeSource")
+        ?: optJSONObject("data")?.optJSONObject("incomeSource")
+        ?: optJSONObject("data")?.optJSONObject("planningIncomeSource")
+        ?: dataObject()
+}
+
+private fun JSONObject.planningAllocationObject(): JSONObject {
+    return optJSONObject("allocation")
+        ?: optJSONObject("planningAllocation")
+        ?: optJSONObject("data")?.optJSONObject("allocation")
+        ?: optJSONObject("data")?.optJSONObject("planningAllocation")
+        ?: dataObject()
+}
+
 private fun JSONObject.optIntOrNull(name: String): Int? = if (has(name) && !isNull(name)) optInt(name) else null
+
+private fun JSONObject.optNullableString(name: String): String? {
+    return optString(name).takeIf { has(name) && !isNull(name) && it.isNotBlank() && it != "null" }
+}
+
+private fun JSONObject.optNullableJsonString(name: String): String? {
+    if (!has(name) || isNull(name)) return null
+    val value = opt(name) ?: return null
+    return when (value) {
+        is JSONObject, is JSONArray -> value.toString()
+        else -> value.toString().takeIf { it.isNotBlank() && it != "null" }
+    }
+}
+
+private fun String.planningAbsoluteAmount(): String = trim().removePrefix("-")
 
 private fun JSONArray.toObjectList(): List<JSONObject> {
     return (0 until length()).mapNotNull { index -> optJSONObject(index) }
@@ -919,6 +1355,15 @@ private fun JSONArray.toObjectList(): List<JSONObject> {
 private fun String.urlEncode(): String = URLEncoder.encode(this, Charsets.UTF_8.name())
 
 private fun String.urlEncodePath(): String = urlEncode().replace("+", "%20")
+
+private fun planningScopeQuery(scope: String, householdId: String?): Map<String, String> {
+    return mapOf("scope" to scope) + (
+        householdId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { mapOf("householdId" to it) }
+            ?: emptyMap()
+        )
+}
 
 private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse {
     val data = json.optJSONObject("data") ?: json

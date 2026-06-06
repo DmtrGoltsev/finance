@@ -140,6 +140,15 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/reports/account-balances",
         "/reports/cash-flow",
         "/reports/transactions",
+        "/planning/plans",
+        "/planning/plans/history",
+        "/planning/plans/{planId}",
+        "/planning/plans/{planId}/income-sources",
+        "/planning/plans/{planId}/allocations",
+        "/planning/plans/{planId}/copy",
+        "/planning/income-sources/{incomeSourceId}",
+        "/planning/income-sources/{incomeSourceId}/confirm",
+        "/planning/allocations/{allocationId}",
     }
 
     assert paths == required_paths

@@ -91,6 +91,7 @@ import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
 import com.finance.mvp.capture.AndroidCategoryAggregateMappingStore
 import com.finance.mvp.capture.CategoryAggregateCandidate
+import com.finance.mvp.notifications.PlanningReminderNotifications
 import com.finance.mvp.ui.theme.FinanceTheme
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -106,11 +107,18 @@ import kotlinx.coroutines.withContext
 fun FinanceApp(
     apiClient: FinanceApiClient,
     modifier: Modifier = Modifier,
+    initialOpenPlanning: Boolean = false,
+    openPlanningRequestKey: Int = if (initialOpenPlanning) 1 else 0,
 ) {
     val context = LocalContext.current
     val categoryAggregateMappingStore = remember(context) { AndroidCategoryAggregateMappingStore(context) }
-    var selectedSection by rememberSaveable { mutableStateOf(AppSection.Home) }
+    var selectedSection by rememberSaveable {
+        mutableStateOf(if (initialOpenPlanning) AppSection.Analytics else AppSection.Home)
+    }
     var selectedMode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    var selectedAnalyticsSubsection by rememberSaveable {
+        mutableStateOf(if (initialOpenPlanning) AnalyticsSubsection.Planning else AnalyticsSubsection.Summary)
+    }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
     var quickAddOpenKey by rememberSaveable { mutableStateOf(0) }
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -129,6 +137,14 @@ fun FinanceApp(
     var addAccountKind by rememberSaveable { mutableStateOf<AssetKind?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
+
+    LaunchedEffect(openPlanningRequestKey) {
+        if (openPlanningRequestKey > 0) {
+            selectedSection = AppSection.Analytics
+            selectedAnalyticsSubsection = AnalyticsSubsection.Planning
+        }
+    }
+
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
@@ -855,7 +871,45 @@ fun FinanceApp(
                         }
                     },
                 )
-                AppSection.Analytics -> analyticsContent(dashboard, selectedMode) { selectedMode = it }
+                AppSection.Analytics -> analyticsContent(
+                    apiClient = apiClient,
+                    dashboard = dashboard,
+                    selectedMode = selectedMode,
+                    selectedSubsection = selectedAnalyticsSubsection,
+                    onModeSelected = { selectedMode = it },
+                    onSubsectionSelected = { selectedAnalyticsSubsection = it },
+                    onCreatePlanningCategory = { name, mode ->
+                        val result = withContext(Dispatchers.IO) {
+                            apiClient.createCategory(
+                                name = name,
+                                householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                                categoryType = "expense",
+                            )
+                        }
+                        if (result is ApiResult.Success) {
+                            loadDashboard("Категория добавлена")
+                        }
+                        result
+                    },
+                    onCreatePlanningAccount = { name, currency, mode ->
+                        val result = withContext(Dispatchers.IO) {
+                            apiClient.createAccount(
+                                name = name,
+                                currency = currency,
+                                initialBalance = "0",
+                                accountType = "bank",
+                                householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                            )
+                        }
+                        if (result is ApiResult.Success) {
+                            loadDashboard("Счёт добавлен")
+                        }
+                        result
+                    },
+                    onPlanningNotificationCandidate = { candidate ->
+                        PlanningReminderNotifications.applyCandidate(context.applicationContext, candidate)
+                    },
+                )
             }
 
             item { Spacer(modifier = Modifier.height(72.dp)) }
@@ -1548,9 +1602,15 @@ private fun LazyListScope.categoriesContent(
 }
 
 private fun LazyListScope.analyticsContent(
+    apiClient: FinanceApiClient,
     dashboard: FinanceDashboard?,
     selectedMode: FinanceMode,
+    selectedSubsection: AnalyticsSubsection,
     onModeSelected: (FinanceMode) -> Unit,
+    onSubsectionSelected: (AnalyticsSubsection) -> Unit,
+    onCreatePlanningCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
+    onCreatePlanningAccount: suspend (String, String, FinanceMode) -> ApiResult<AccountSummary>,
+    onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
 ) {
     val view = dashboard.viewFor(selectedMode)
     item {
@@ -1559,9 +1619,32 @@ private fun LazyListScope.analyticsContent(
             onModeSelected = onModeSelected,
         )
     }
-    item { AnalyticsSummaryCard(view) }
-    item { CategoryBreakdownCard(view.topCategories) }
-    item { CapitalBreakdownCard(view.assetSummaries) }
+    item {
+        AnalyticsSubsectionTabs(
+            selected = selectedSubsection,
+            onSelected = onSubsectionSelected,
+        )
+    }
+    when (selectedSubsection) {
+        AnalyticsSubsection.Summary -> {
+            item { AnalyticsSummaryCard(view) }
+            item { CategoryBreakdownCard(view.topCategories) }
+            item { CapitalBreakdownCard(view.assetSummaries) }
+        }
+        AnalyticsSubsection.Planning -> {
+            item {
+                PlanningUi(
+                    apiClient = apiClient,
+                    dashboard = dashboard,
+                    selectedMode = selectedMode,
+                    onModeSelected = onModeSelected,
+                    onCreateCategory = onCreatePlanningCategory,
+                    onCreateAccount = onCreatePlanningAccount,
+                    onPlanningNotificationCandidate = onPlanningNotificationCandidate,
+                )
+            }
+        }
+    }
 }
 
 @Composable

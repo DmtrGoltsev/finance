@@ -10,6 +10,8 @@ from app.dev_seed import (
     DEV_DEMO_INTEREST_TRANSACTION_ID,
     DEV_DEMO_METAL_ACCOUNT_ID,
     DEV_DEMO_PASSWORD,
+    DEV_DEMO_PLANNING_MONTH,
+    DEV_DEMO_PLANNING_PLAN_ID,
     DEV_DEMO_SHARED_ACCOUNT_ID,
     DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID,
     DEV_DEMO_TRANSFER_TRANSACTION_ID,
@@ -105,6 +107,16 @@ def test_seeded_dev_app_supports_login_and_minimal_data_smoke() -> None:
             },
             headers=headers,
         )
+        planning_plan = client.get(
+            "/api/v1/planning/plans",
+            params={"scope": "personal", "month": DEV_DEMO_PLANNING_MONTH},
+            headers=headers,
+        )
+        planning_history = client.get(
+            "/api/v1/planning/plans/history",
+            params={"scope": "personal"},
+            headers=headers,
+        )
 
     assert login.status_code == 201
     assert accounts.status_code == 200
@@ -112,6 +124,8 @@ def test_seeded_dev_app_supports_login_and_minimal_data_smoke() -> None:
     assert transactions.status_code == 200
     assert transfers.status_code == 200
     assert summary.status_code == 200
+    assert planning_plan.status_code == 200, planning_plan.text
+    assert planning_history.status_code == 200, planning_history.text
     assert len(accounts.json()["items"]) == 5
     assert len(categories.json()["items"]) == 3
     assert len(transactions.json()["items"]) == 6
@@ -136,3 +150,8 @@ def test_seeded_dev_app_supports_login_and_minimal_data_smoke() -> None:
     assert transfer_items[0]["transferScope"] == "household_same_household"
     assert transfer_items[0]["transferStatus"] == "posted"
     assert summary.json()["data"]["totalsByCurrency"]
+    assert planning_plan.json()["data"]["id"] == DEV_DEMO_PLANNING_PLAN_ID
+    assert planning_plan.json()["data"]["month"] == DEV_DEMO_PLANNING_MONTH
+    assert [item["id"] for item in planning_history.json()["items"]] == [
+        DEV_DEMO_PLANNING_PLAN_ID
+    ]

@@ -48,3 +48,7 @@ DELETION_REQUEST_STATUSES = ("pending", "approved", "completed", "cancelled", "r
 AUDIT_SCOPE_TYPES = ("personal", "household", "system")
 AUDIT_RESULTS = ("allow", "deny", "state-deny", "error")
 OUTBOX_STATUSES = ("pending", "processing", "processed", "failed", "dead")
+PLANNING_SCOPE_TYPES = ("personal", "household")
+PLANNING_INCOME_CONFIRMATION_STATES = ("planned", "confirmed")
+PLANNING_ALLOCATION_TARGET_TYPES = ("expense_category", "account")
+PLANNING_ALLOCATION_MODES = ("amount", "percent")

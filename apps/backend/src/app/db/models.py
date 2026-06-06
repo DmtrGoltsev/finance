@@ -8,16 +8,19 @@ services, triggers, and migration revisions are separate implementation work.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     text,
@@ -45,6 +48,10 @@ from app.db.model_enums import (
     MEMBERSHIP_STATUSES,
     OUTBOX_STATUSES,
     OWNERSHIP_TYPES,
+    PLANNING_ALLOCATION_MODES,
+    PLANNING_ALLOCATION_TARGET_TYPES,
+    PLANNING_INCOME_CONFIRMATION_STATES,
+    PLANNING_SCOPE_TYPES,
     RECORD_STATUSES,
     RESET_TOKEN_STATUSES,
     SESSION_STATUSES,
@@ -412,6 +419,128 @@ class CaptureCategoryMapping(TimestampMixin, VersionedMixin, Base):
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     category_id: Mapped[uuid.UUID] = uuid_fk("categories.id")
     external_label_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class PlanningPlan(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "planning_plans"
+    __table_args__ = (
+        CheckConstraint(enum_check("scope_type", PLANNING_SCOPE_TYPES), name="scope_type_valid"),
+        CheckConstraint(
+            "(scope_type = 'personal' AND owner_user_id IS NOT NULL AND household_id IS NULL) "
+            "OR (scope_type = 'household' AND household_id IS NOT NULL AND owner_user_id IS NULL)",
+            name="exactly_one_scope",
+        ),
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
+        Index(
+            "uq_planning_plans_personal_month",
+            "owner_user_id",
+            "plan_month",
+            unique=True,
+            postgresql_where=text("scope_type = 'personal'"),
+            sqlite_where=text("scope_type = 'personal'"),
+        ),
+        Index(
+            "uq_planning_plans_household_month",
+            "household_id",
+            "plan_month",
+            unique=True,
+            postgresql_where=text("scope_type = 'household'"),
+            sqlite_where=text("scope_type = 'household'"),
+        ),
+        Index("ix_planning_plans_owner_month", "owner_user_id", text("plan_month DESC")),
+        Index("ix_planning_plans_household_month", "household_id", text("plan_month DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    scope_type: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
+    household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
+    plan_month: Mapped[date] = mapped_column(Date, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+
+
+class PlanningIncomeSource(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "planning_income_sources"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="positive_amount"),
+        CheckConstraint("day_of_month >= 1 AND day_of_month <= 31", name="day_of_month_range"),
+        CheckConstraint(
+            enum_check("confirmation_state", PLANNING_INCOME_CONFIRMATION_STATES),
+            name="confirmation_state_valid",
+        ),
+        Index("ix_planning_income_sources_plan_id", "plan_id"),
+        Index(
+            "ix_planning_income_sources_plan_state",
+            "plan_id",
+            "confirmation_state",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    plan_id: Mapped[uuid.UUID] = uuid_fk("planning_plans.id")
+    amount: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    day_of_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    confirmation_state: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'planned'"),
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_by_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
+    created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+
+
+class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "planning_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            enum_check("target_type", PLANNING_ALLOCATION_TARGET_TYPES),
+            name="target_type_valid",
+        ),
+        CheckConstraint(
+            enum_check("allocation_mode", PLANNING_ALLOCATION_MODES),
+            name="allocation_mode_valid",
+        ),
+        CheckConstraint("allocation_value >= 0", name="non_negative_allocation_value"),
+        CheckConstraint(
+            "(target_id IS NOT NULL AND requires_attention = false) "
+            "OR (target_id IS NULL AND requires_attention = true)",
+            name="target_attention_shape",
+        ),
+        Index("ix_planning_allocations_plan_id", "plan_id"),
+        Index(
+            "ix_planning_allocations_plan_attention",
+            "plan_id",
+            "requires_attention",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    plan_id: Mapped[uuid.UUID] = uuid_fk("planning_plans.id")
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    target_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
+    requires_attention: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    attention_reason: Mapped[str | None] = mapped_column(Text)
+    comment: Mapped[str | None] = mapped_column(Text)
+    allocation_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    allocation_value: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
+    created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
 
 
 class Session(TimestampMixin, VersionedMixin, Base):

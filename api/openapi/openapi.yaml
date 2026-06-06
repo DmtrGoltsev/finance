@@ -42,6 +42,8 @@ tags:
     description: Personal and household category management for manual finance records.
   - name: Reports
     description: Privacy-filtered MVP reports over visible manual financial data.
+  - name: Planning
+    description: Monthly personal and household planning; confirmations never create transactions.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
@@ -918,6 +920,254 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /planning/plans:
+    get:
+      tags: [Planning]
+      operationId: getPlanningPlanForScopeMonth
+      summary: Get plan for scope and month.
+      description: Resolves personal owner-only or household active-membership scope before loading income sources, allocations, or totals. If month is omitted, the server uses the next calendar month.
+      parameters:
+        - $ref: '#/components/parameters/PlanningScopeRequired'
+        - $ref: '#/components/parameters/PlanningMonth'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Planning plan for the requested scope/month.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Planning]
+      operationId: createPlanningPlan
+      summary: Create personal or household monthly plan.
+      description: A plan has one currency and one scope. Duplicate scope/month plans return conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningPlanCreateRequest'
+      responses:
+        '201':
+          description: Created planning plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/history:
+    get:
+      tags: [Planning]
+      operationId: listPlanningPlanHistory
+      summary: List historical plans for a scope.
+      description: Returns visible plan summaries sorted by month descending; no hidden counts are exposed.
+      parameters:
+        - $ref: '#/components/parameters/PlanningScopeRequired'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Visible planning history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanSummaryListEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}:
+    get:
+      tags: [Planning]
+      operationId: getPlanningPlan
+      summary: Get visible planning plan.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      responses:
+        '200':
+          description: Planning plan detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/income-sources:
+    post:
+      tags: [Planning]
+      operationId: createPlanningIncomeSource
+      summary: Add planned income source.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningIncomeSourceCreateRequest'
+      responses:
+        '201':
+          description: Created income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/allocations:
+    post:
+      tags: [Planning]
+      operationId: createPlanningAllocation
+      summary: Add amount or percent allocation.
+      description: Target must be a visible same-scope expense category or same-currency account. Overallocated plans are allowed and surfaced through derived flags.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningAllocationCreateRequest'
+      responses:
+        '201':
+          description: Created allocation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningAllocationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/copy:
+    post:
+      tags: [Planning]
+      operationId: copyPlanningPlan
+      summary: Copy plan to another month.
+      description: Copies income sources and allocations, preserving allocation mode/value. Missing or inaccessible targets become requiresAttention rows with targetSnapshot; no category/account/transaction is auto-created.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningPlanCopyRequest'
+      responses:
+        '201':
+          description: Copied planning plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/income-sources/{incomeSourceId}:
+    patch:
+      tags: [Planning]
+      operationId: updatePlanningIncomeSource
+      summary: Update planned income source.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningIncomeSourceUpdateRequest'
+      responses:
+        '200':
+          description: Updated income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Planning]
+      operationId: deletePlanningIncomeSource
+      summary: Delete planned income source.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      responses:
+        '204':
+          description: Income source deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/income-sources/{incomeSourceId}/confirm:
+    post:
+      tags: [Planning]
+      operationId: confirmPlanningIncomeSource
+      summary: Confirm income source in planning only.
+      description: Sets confirmation state and audit-ish actor fields on the planning row only. It does not create transactions or mutate balances.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      responses:
+        '200':
+          description: Confirmed income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/allocations/{allocationId}:
+    patch:
+      tags: [Planning]
+      operationId: updatePlanningAllocation
+      summary: Update allocation.
+      parameters:
+        - $ref: '#/components/parameters/AllocationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningAllocationUpdateRequest'
+      responses:
+        '200':
+          description: Updated allocation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningAllocationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Planning]
+      operationId: deletePlanningAllocation
+      summary: Delete allocation.
+      parameters:
+        - $ref: '#/components/parameters/AllocationId'
+      responses:
+        '204':
+          description: Allocation deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     pwaCookieAuth:
@@ -960,6 +1210,21 @@ components:
       schema: { $ref: '#/components/schemas/ResourceId' }
     DraftId:
       name: draftId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    IncomeSourceId:
+      name: incomeSourceId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    AllocationId:
+      name: allocationId
       in: path
       required: true
       schema: { $ref: '#/components/schemas/ResourceId' }
@@ -1018,6 +1283,17 @@ components:
       in: query
       required: false
       schema: { $ref: '#/components/schemas/CurrencyCode' }
+    PlanningScopeRequired:
+      name: scope
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/PlanningScope' }
+    PlanningMonth:
+      name: month
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/PlanMonth' }
+      description: Calendar month in YYYY-MM form. Defaults to next month when omitted.
     HouseholdIdRequired:
       name: householdId
       in: query
@@ -1118,6 +1394,11 @@ components:
       type: string
       format: date
       examples: ['2026-05-17']
+    PlanMonth:
+      type: string
+      pattern: '^[0-9]{4}-[0-9]{2}$'
+      examples: ['2026-06']
+      description: Calendar month encoded as YYYY-MM. Server stores the first day of the month.
     DecimalString:
       type: string
       pattern: '^-?[0-9]+(\.[0-9]{1,6})?$'
@@ -1140,6 +1421,19 @@ components:
     CategoryType:
       type: string
       enum: [income, expense]
+    PlanningScope:
+      type: string
+      enum: [personal, household]
+    IncomeConfirmationState:
+      type: string
+      enum: [planned, confirmed]
+    AllocationTargetType:
+      type: string
+      enum: [expense_category, account]
+      description: "`expense_category` targets expense categories; `account` also covers asset/investment account targets."
+    AllocationMode:
+      type: string
+      enum: [amount, percent]
     TransactionType:
       type: string
       enum: [income, expense, transfer, brokerage, asset_buy, asset_sell, interest, dividend, adjustment]
@@ -1535,6 +1829,277 @@ components:
             - type: 'null'
         currency:
           $ref: '#/components/schemas/CurrencyCode'
+    PlanningSummaryDto:
+      type: object
+      additionalProperties: false
+      required: [totalPlannedIncome, totalConfirmedIncome, totalAllocatedAmount, unallocatedAmount, underallocated, overallocated]
+      properties:
+        totalPlannedIncome:
+          $ref: '#/components/schemas/DecimalString'
+        totalConfirmedIncome:
+          $ref: '#/components/schemas/DecimalString'
+        totalAllocatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+        unallocatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+        underallocated:
+          type: boolean
+          description: True when totalAllocatedAmount is less than totalPlannedIncome.
+        overallocated:
+          type: boolean
+          description: True when totalAllocatedAmount is greater than totalPlannedIncome. Saving overallocated plans is allowed.
+    PlanningIncomeSourceDto:
+      type: object
+      additionalProperties: false
+      required: [id, planId, amount, source, dayOfMonth, effectiveDate, confirmationState, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        planId:
+          $ref: '#/components/schemas/ResourceId'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+        effectiveDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Date used for this plan month; day 31 falls back to the last day in shorter months.
+        confirmationState:
+          $ref: '#/components/schemas/IncomeConfirmationState'
+        confirmedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        confirmedByUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningAllocationDto:
+      type: object
+      additionalProperties: false
+      required: [id, planId, targetType, targetSnapshot, requiresAttention, allocationMode, allocationValue, calculatedAmount, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        planId:
+          $ref: '#/components/schemas/ResourceId'
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Null when a copied allocation target is missing or inaccessible and requiresAttention is true.
+        targetSnapshot:
+          type: object
+          additionalProperties: true
+          description: Non-authoritative display snapshot of the category/account target at allocation creation or copy time.
+        requiresAttention:
+          type: boolean
+        attentionReason:
+          type: [string, 'null']
+          examples: [TARGET_MISSING_OR_INACCESSIBLE]
+        comment:
+          type: [string, 'null']
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+          description: Amount value or percentage value depending on allocationMode.
+        calculatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: Percent allocations are calculated from total planned income in the current plan response.
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanDto:
+      type: object
+      additionalProperties: false
+      required: [id, scope, month, currency, incomeSources, allocations, summary, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        incomeSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningIncomeSourceDto'
+        allocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningAllocationDto'
+        summary:
+          $ref: '#/components/schemas/PlanningSummaryDto'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanSummaryDto:
+      type: object
+      additionalProperties: false
+      required: [id, scope, month, currency, summary, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        summary:
+          $ref: '#/components/schemas/PlanningSummaryDto'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, month, currency]
+      properties:
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required when scope is household; forbidden for personal.
+    PlanningIncomeSourceCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [amount, source, dayOfMonth]
+      properties:
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+    PlanningIncomeSourceUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+        version:
+          type: integer
+          minimum: 1
+    PlanningAllocationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [targetType, targetId, allocationMode, allocationValue]
+      properties:
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          $ref: '#/components/schemas/ResourceId'
+        comment:
+          type: string
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+    PlanningAllocationUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          $ref: '#/components/schemas/ResourceId'
+        comment:
+          type: [string, 'null']
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanCopyRequest:
+      type: object
+      additionalProperties: false
+      required: [targetMonth]
+      properties:
+        targetMonth:
+          $ref: '#/components/schemas/PlanMonth'
     TransactionDto:
       type: object
       additionalProperties: false
@@ -2343,6 +2908,36 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CategoryAutocompleteDto'
+    PlanningPlanEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningPlanDto'
+    PlanningPlanSummaryListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningPlanSummaryDto'
+    PlanningIncomeSourceEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningIncomeSourceDto'
+    PlanningAllocationEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningAllocationDto'
     ReportSummaryEnvelope:
       type: object
       additionalProperties: false

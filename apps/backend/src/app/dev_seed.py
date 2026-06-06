@@ -2,22 +2,44 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID, uuid4
 
-from app.accounts.repository import AccountRecord, seed_accounts_for_tests
+from sqlalchemy.orm import Session
+
+from app.accounts.repository import (
+    AccountRecord,
+    SqlAlchemyAccountRepository,
+    seed_accounts_for_tests,
+)
 from app.auth.models import AuthMembershipRecord, AuthUserRecord
 from app.auth.runtime import AuthSessionService, InMemoryCredentialStore, get_auth_session_service
 from app.auth.security import HmacSha256TokenHashingBackend, Pbkdf2Sha256PasswordHashingBackend
 from app.auth.session_tokens import InMemorySessionTokenStore
 from app.authz import AccountOwnershipType, MembershipStatus, ResourceStatus
-from app.categories.repository import CategoryRecord
+from app.categories.repository import CategoryRecord, SqlAlchemyCategoryRepository
 from app.categories.repository import repository as category_repository
 from app.categories.schemas import CategoryScope, CategoryType, RecordStatus
 from app.config import Settings, get_settings
-from app.db.session import is_production_like_environment
+from app.db.base import Base
+from app.db.models import (
+    Account,
+    Category,
+    Household,
+    PlanningAllocation,
+    PlanningIncomeSource,
+    PlanningPlan,
+    User,
+)
+from app.db.models import Membership as DbMembership
+from app.db.session import is_production_like_environment, sync_engine_for_url, sync_session_scope
 from app.main import create_app
+from app.planning.repository import SqlAlchemyPlanningRepository
+from app.planning.router import planning_service_for_request
+from app.planning.service import PlanningService
 from app.transactions.repository import TransactionRecord, reset_transactions_for_tests
 
 DEV_DEMO_EMAIL = "demo.owner@example.test"
@@ -38,6 +60,21 @@ DEV_DEMO_TRANSFER_TRANSACTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 DEV_DEMO_ASSET_BUY_TRANSACTION_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 DEV_DEMO_INTEREST_TRANSACTION_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 DEV_DEMO_DIVIDEND_TRANSACTION_ID = "12121212-1212-4212-8212-121212121212"
+DEV_DEMO_PLANNING_PLAN_ID = "13131313-1313-4313-8313-131313131313"
+DEV_DEMO_PLANNING_INCOME_ID = "14141414-1414-4414-8414-141414141414"
+DEV_DEMO_PLANNING_ALLOCATION_ID = "15151515-1515-4515-8515-151515151515"
+DEV_DEMO_PLANNING_MONTH = "2026-07"
+
+_DEV_PLANNING_TABLES = [
+    User.__table__,
+    Household.__table__,
+    DbMembership.__table__,
+    Account.__table__,
+    Category.__table__,
+    PlanningPlan.__table__,
+    PlanningIncomeSource.__table__,
+    PlanningAllocation.__table__,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +104,11 @@ def create_seeded_dev_app(settings: Settings | None = None):
 
     application = create_app(app_settings)
     auth_service = seed_dev_surface()
+    planning_database_url = seed_dev_planning_surface()
     application.dependency_overrides[get_auth_session_service] = lambda: auth_service
+    application.dependency_overrides[planning_service_for_request] = (
+        _seeded_dev_planning_service(planning_database_url)
+    )
     application.state.dev_seed = DEV_SEED_INFO
     return application
 
@@ -368,6 +409,290 @@ def seed_dev_surface() -> AuthSessionService:
         ]
     )
     return auth_service
+
+
+def seed_dev_planning_surface() -> str:
+    """Seed a dev-only SQLite planning runtime independent from external PostgreSQL."""
+
+    database_url = (
+        f"sqlite+pysqlite:///file:finance_dev_seed_planning_{uuid4().hex}"
+        "?mode=memory&cache=shared&uri=true"
+    )
+    engine = sync_engine_for_url(database_url)
+    Base.metadata.create_all(engine, tables=_DEV_PLANNING_TABLES)
+
+    now = datetime(2026, 5, 18, 9, 0, tzinfo=UTC)
+    user_id = UUID(DEV_DEMO_USER_ID)
+    household_id = UUID(DEV_DEMO_HOUSEHOLD_ID)
+    personal_account_id = UUID(DEV_DEMO_PERSONAL_ACCOUNT_ID)
+    shared_account_id = UUID(DEV_DEMO_SHARED_ACCOUNT_ID)
+    shared_savings_account_id = UUID(DEV_DEMO_SHARED_SAVINGS_ACCOUNT_ID)
+    brokerage_account_id = UUID(DEV_DEMO_BROKERAGE_ACCOUNT_ID)
+    metal_account_id = UUID(DEV_DEMO_METAL_ACCOUNT_ID)
+    personal_category_id = UUID(DEV_DEMO_PERSONAL_CATEGORY_ID)
+    shared_category_id = UUID(DEV_DEMO_SHARED_CATEGORY_ID)
+    income_category_id = UUID(DEV_DEMO_INCOME_CATEGORY_ID)
+    plan_id = UUID(DEV_DEMO_PLANNING_PLAN_ID)
+
+    with engine.begin() as connection:
+        session = Session(bind=connection, expire_on_commit=False, future=True)
+        session.add(
+            User(
+                id=user_id,
+                email_normalized=DEV_DEMO_EMAIL,
+                password_hash="dev-seed-auth-is-process-local",
+                display_name="Demo Owner",
+                auth_status="active",
+                record_status="active",
+                session_version=1,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.add(
+            Household(
+                id=household_id,
+                name="Dev Household",
+                created_by_user_id=user_id,
+                status="active",
+                record_status="active",
+                membership_version=1,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.add(
+            DbMembership(
+                id=uuid4(),
+                household_id=household_id,
+                user_id=user_id,
+                membership_status="active",
+                joined_at=now,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.add_all(
+            [
+                _db_account(
+                    id=personal_account_id,
+                    name="Dev Personal Cash",
+                    account_type="cash",
+                    ownership_type="personal",
+                    owner_user_id=user_id,
+                    household_id=None,
+                    current_balance=Decimal("925.50"),
+                    created_at=now,
+                ),
+                _db_account(
+                    id=shared_account_id,
+                    name="Dev Household Card",
+                    account_type="card",
+                    ownership_type="shared",
+                    owner_user_id=None,
+                    household_id=household_id,
+                    current_balance=Decimal("430.25"),
+                    created_at=now,
+                ),
+                _db_account(
+                    id=shared_savings_account_id,
+                    name="Dev Household Deposit",
+                    account_type="deposit",
+                    ownership_type="shared",
+                    owner_user_id=None,
+                    household_id=household_id,
+                    current_balance=Decimal("125.00"),
+                    created_at=now,
+                ),
+                _db_account(
+                    id=brokerage_account_id,
+                    name="Dev Brokerage",
+                    account_type="brokerage",
+                    ownership_type="personal",
+                    owner_user_id=user_id,
+                    household_id=None,
+                    current_balance=Decimal("1042.00"),
+                    created_at=now,
+                ),
+                _db_account(
+                    id=metal_account_id,
+                    name="Dev Metal",
+                    account_type="metal",
+                    ownership_type="personal",
+                    owner_user_id=user_id,
+                    household_id=None,
+                    current_balance=Decimal("530.00"),
+                    created_at=now,
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                _db_category(
+                    id=personal_category_id,
+                    name="Dev Groceries",
+                    category_type="expense",
+                    category_scope="personal",
+                    owner_user_id=user_id,
+                    household_id=None,
+                    icon_key="shopping-bag",
+                    color="#2F855A",
+                    created_at=now,
+                ),
+                _db_category(
+                    id=shared_category_id,
+                    name="Dev Home",
+                    category_type="expense",
+                    category_scope="household",
+                    owner_user_id=None,
+                    household_id=household_id,
+                    icon_key="home",
+                    color="#2B6CB0",
+                    created_at=now,
+                ),
+                _db_category(
+                    id=income_category_id,
+                    name="Dev Salary",
+                    category_type="income",
+                    category_scope="personal",
+                    owner_user_id=user_id,
+                    household_id=None,
+                    icon_key="wallet",
+                    color="#805AD5",
+                    created_at=now,
+                ),
+            ]
+        )
+        session.add(
+            PlanningPlan(
+                id=plan_id,
+                scope_type="personal",
+                owner_user_id=user_id,
+                household_id=None,
+                plan_month=date(2026, 7, 1),
+                currency="USD",
+                created_by_user_id=user_id,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.add(
+            PlanningIncomeSource(
+                id=UUID(DEV_DEMO_PLANNING_INCOME_ID),
+                plan_id=plan_id,
+                amount=Decimal("3000.0000"),
+                source="Dev salary plan",
+                description="Seeded planning income",
+                day_of_month=5,
+                confirmation_state="planned",
+                created_by_user_id=user_id,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.add(
+            PlanningAllocation(
+                id=UUID(DEV_DEMO_PLANNING_ALLOCATION_ID),
+                plan_id=plan_id,
+                target_type="expense_category",
+                target_id=personal_category_id,
+                target_snapshot={
+                    "targetType": "expense_category",
+                    "id": DEV_DEMO_PERSONAL_CATEGORY_ID,
+                    "name": "Dev Groceries",
+                    "categoryType": "expense",
+                    "scope": "personal",
+                    "ownerUserId": DEV_DEMO_USER_ID,
+                    "householdId": None,
+                },
+                requires_attention=False,
+                allocation_mode="amount",
+                allocation_value=Decimal("450.0000"),
+                created_by_user_id=user_id,
+                created_at=now,
+                updated_at=now,
+                version=1,
+            )
+        )
+        session.flush()
+
+    return database_url
+
+
+def _seeded_dev_planning_service(database_url: str):
+    def override() -> Iterator[PlanningService]:
+        settings = get_settings().model_copy(update={"database_url": database_url})
+        with sync_session_scope(settings) as session:
+            yield PlanningService(
+                SqlAlchemyPlanningRepository(session),
+                SqlAlchemyAccountRepository(session),
+                SqlAlchemyCategoryRepository(session),
+            )
+
+    return override
+
+
+def _db_account(
+    *,
+    id: UUID,
+    name: str,
+    account_type: str,
+    ownership_type: str,
+    owner_user_id: UUID | None,
+    household_id: UUID | None,
+    current_balance: Decimal,
+    created_at: datetime,
+) -> Account:
+    return Account(
+        id=id,
+        name=name,
+        account_type=account_type,
+        ownership_type=ownership_type,
+        owner_user_id=owner_user_id,
+        household_id=household_id,
+        currency="USD",
+        initial_balance_amount=current_balance,
+        current_balance_amount=current_balance,
+        record_status="active",
+        created_by_user_id=UUID(DEV_DEMO_USER_ID),
+        created_at=created_at,
+        updated_at=created_at,
+        version=1,
+    )
+
+
+def _db_category(
+    *,
+    id: UUID,
+    name: str,
+    category_type: str,
+    category_scope: str,
+    owner_user_id: UUID | None,
+    household_id: UUID | None,
+    icon_key: str,
+    color: str,
+    created_at: datetime,
+) -> Category:
+    return Category(
+        id=id,
+        name=name,
+        category_type=category_type,
+        category_scope=category_scope,
+        owner_user_id=owner_user_id,
+        household_id=household_id,
+        icon_key=icon_key,
+        color=color,
+        record_status="active",
+        created_by_user_id=UUID(DEV_DEMO_USER_ID),
+        created_at=created_at,
+        updated_at=created_at,
+        version=1,
+    )
 
 
 DEV_SEED_INFO = DevSeedInfo(

@@ -48,6 +48,12 @@ EXPECTED_APPROVED_TRANSACTION_OPERATIONS = {
 EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS = {
     ("GET", "/api/v1/capture-drafts"): "listCaptureDrafts",
     ("POST", "/api/v1/capture-drafts"): "createCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/screenshot-ocr"): (
+        "recognizeCaptureDraftScreenshotOcr"
+    ),
+    ("PUT", "/api/v1/capture-drafts/category-mappings"): (
+        "putCaptureDraftCategoryMapping"
+    ),
     ("PATCH", "/api/v1/capture-drafts/{draftId}"): "updateCaptureDraft",
     ("POST", "/api/v1/capture-drafts/{draftId}/confirm"): "confirmCaptureDraft",
     ("POST", "/api/v1/capture-drafts/{draftId}/discard"): "discardCaptureDraft",
@@ -58,6 +64,28 @@ EXPECTED_APPROVED_REPORT_OPERATIONS = {
     ("GET", "/api/v1/reports/account-balances"): "getReportAccountBalances",
     ("GET", "/api/v1/reports/cash-flow"): "getReportCashFlow",
     ("GET", "/api/v1/reports/transactions"): "getReportTransactions",
+}
+EXPECTED_APPROVED_PLANNING_OPERATIONS = {
+    ("GET", "/api/v1/planning/plans"): "getPlanningPlanForScopeMonth",
+    ("POST", "/api/v1/planning/plans"): "createPlanningPlan",
+    ("GET", "/api/v1/planning/plans/history"): "listPlanningPlanHistory",
+    ("GET", "/api/v1/planning/plans/{planId}"): "getPlanningPlan",
+    ("POST", "/api/v1/planning/plans/{planId}/income-sources"): (
+        "createPlanningIncomeSource"
+    ),
+    ("POST", "/api/v1/planning/plans/{planId}/allocations"): "createPlanningAllocation",
+    ("POST", "/api/v1/planning/plans/{planId}/copy"): "copyPlanningPlan",
+    ("PATCH", "/api/v1/planning/income-sources/{incomeSourceId}"): (
+        "updatePlanningIncomeSource"
+    ),
+    ("POST", "/api/v1/planning/income-sources/{incomeSourceId}/confirm"): (
+        "confirmPlanningIncomeSource"
+    ),
+    ("DELETE", "/api/v1/planning/income-sources/{incomeSourceId}"): (
+        "deletePlanningIncomeSource"
+    ),
+    ("PATCH", "/api/v1/planning/allocations/{allocationId}"): "updatePlanningAllocation",
+    ("DELETE", "/api/v1/planning/allocations/{allocationId}"): "deletePlanningAllocation",
 }
 EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
     {
@@ -72,6 +100,7 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
     }
 )
 EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
@@ -82,6 +111,7 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
     }
 )
 
@@ -234,6 +264,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
             **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
+            **EXPECTED_APPROVED_PLANNING_OPERATIONS,
         }
     }
 
@@ -242,6 +273,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
         **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
+        **EXPECTED_APPROVED_PLANNING_OPERATIONS,
     }
 
 
@@ -254,6 +286,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
             **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
+            **EXPECTED_APPROVED_PLANNING_OPERATIONS,
         }
     }
 
@@ -262,6 +295,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
         **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
+        **EXPECTED_APPROVED_PLANNING_OPERATIONS,
     }
 
 

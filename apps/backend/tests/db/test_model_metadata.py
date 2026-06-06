@@ -29,6 +29,9 @@ EXPECTED_TABLES = {
     "transactions",
     "capture_drafts",
     "capture_category_mappings",
+    "planning_plans",
+    "planning_income_sources",
+    "planning_allocations",
     "sessions",
     "password_reset_tokens",
     "export_jobs",
@@ -49,6 +52,8 @@ class ModelMetadataTests(unittest.TestCase):
             ("accounts", "current_balance_amount"),
             ("transactions", "amount"),
             ("capture_drafts", "amount"),
+            ("planning_income_sources", "amount"),
+            ("planning_allocations", "allocation_value"),
         ):
             column_type = Base.metadata.tables[table_name].c[column_name].type
             self.assertIsInstance(column_type, Numeric)
@@ -77,6 +82,16 @@ class ModelMetadataTests(unittest.TestCase):
             "capture_source_valid",
             ["capture_source", "screenshot"],
         )
+        self.assertCheckContains(
+            "planning_plans",
+            "exactly_one_scope",
+            ["scope_type", "owner_user_id", "household_id"],
+        )
+        self.assertCheckContains(
+            "planning_allocations",
+            "target_attention_shape",
+            ["target_id", "requires_attention"],
+        )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:
         self.assertCheckContains(
@@ -104,6 +119,9 @@ class ModelMetadataTests(unittest.TestCase):
                 "capture_category_mappings",
                 "uq_capture_category_mappings_owner_personal_hash",
             ),
+            ("planning_plans", "uq_planning_plans_personal_month"),
+            ("planning_income_sources", "ix_planning_income_sources_plan_id"),
+            ("planning_allocations", "ix_planning_allocations_plan_attention"),
             ("export_jobs", "ix_export_jobs_requested_status_created"),
             ("outbox_events", "ix_outbox_events_status_available_created"),
         ):
