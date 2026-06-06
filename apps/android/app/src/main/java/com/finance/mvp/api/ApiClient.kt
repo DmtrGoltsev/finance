@@ -38,10 +38,22 @@ interface FinanceApiClient {
         accountType: String = "cash",
         ownershipType: String = if (householdId.isNullOrBlank()) "personal" else "shared",
     ): ApiResult<AccountSummary>
+    suspend fun createAccount(
+        name: String,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        householdId: String?,
+    ): ApiResult<AccountSummary>
     suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary>
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun createDemoCategory(
+        householdId: String?,
+        categoryType: String = "expense",
+    ): ApiResult<CategorySummary>
+    suspend fun createCategory(
+        name: String,
         householdId: String?,
         categoryType: String = "expense",
     ): ApiResult<CategorySummary>
@@ -72,6 +84,13 @@ interface FinanceApiClient {
         ApiResult.Failure("Capture drafts are not supported by this client")
     suspend fun discardCaptureDraft(draftId: String): ApiResult<Unit> =
         ApiResult.Failure("Capture drafts are not supported by this client")
+    suspend fun screenshotOcr(
+        imageBytes: ByteArray,
+        contentType: String,
+        capturedAt: String?,
+        householdId: String?,
+    ): ApiResult<ScreenshotOcrResponse> =
+        ApiResult.Failure("Screenshot OCR is not supported by this client")
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -167,6 +186,22 @@ data class CaptureDraftUpdateRequest(
     val confidence: Double? = null,
     val accountId: String? = null,
     val categoryId: String? = null,
+)
+
+data class ScreenshotOcrCandidate(
+    val candidateType: String,
+    val externalLabel: String,
+    val amount: String,
+    val currency: String,
+    val operationCount: Int,
+    val description: String,
+    val confidence: Double,
+    val idempotencyKey: String,
+    val evidenceHash: String,
+)
+
+data class ScreenshotOcrResponse(
+    val items: List<ScreenshotOcrCandidate>,
 )
 
 data class CaptureDraft(
@@ -326,14 +361,37 @@ class LiveFinanceApiClient(
         ).dataObject().let(::parseAccount)
     }
 
+    override suspend fun createAccount(
+        name: String,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        householdId: String?,
+    ): ApiResult<AccountSummary> = safeCall {
+        val ownershipType = if (householdId.isNullOrBlank()) "personal" else "shared"
+        request(
+            path = "/api/v1/accounts",
+            method = "POST",
+            body = JSONObject()
+                .put("name", name.trim().take(80))
+                .put("accountType", accountType)
+                .put("ownershipType", ownershipType)
+                .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
+                .put("currency", currency)
+                .put("initialBalance", initialBalance)
+                .toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
+        ).dataObject().let(::parseAccount)
+    }
+
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> = safeCall {
+        val body = JSONObject()
+            .put("name", account.name.take(80))
+        account.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/accounts/${account.id.urlEncodePath()}",
             method = "PATCH",
-            body = JSONObject()
-                .put("name", "${account.name.take(80)} upd")
-                .apply { account.version?.let { put("version", it) } }
-                .toString(),
+            body = body.toString(),
         ).dataObject().let(::parseAccount)
     }
 
@@ -370,15 +428,35 @@ class LiveFinanceApiClient(
         ).dataObject().let(::parseCategory)
     }
 
+    override suspend fun createCategory(
+        name: String,
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> = safeCall {
+        val type = normalizeTransactionCategoryType(categoryType)
+        request(
+            path = "/api/v1/categories",
+            method = "POST",
+            body = JSONObject()
+                .put("name", name.trim().take(80))
+                .put("type", type)
+                .put("scope", categoryScopeForHousehold(householdId))
+                .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
+                .put("iconKey", if (type == "income") "income" else "android")
+                .put("color", if (type == "income") "#2E7D62" else "#2E7D32")
+                .toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
+        ).dataObject().let(::parseCategory)
+    }
+
     override suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary> = safeCall {
+        val body = JSONObject()
+            .put("name", category.name.take(80))
+            .apply { category.version?.let { put("version", it) } }
         request(
             path = "/api/v1/categories/${category.id.urlEncodePath()}",
             method = "PATCH",
-            body = JSONObject()
-                .put("name", "${category.name.take(80)} upd")
-                .put("color", "#1565C0")
-                .apply { category.version?.let { put("version", it) } }
-                .toString(),
+            body = body.toString(),
         ).dataObject().let(::parseCategory)
     }
 
@@ -509,6 +587,49 @@ class LiveFinanceApiClient(
             expectedCodes = setOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_NO_CONTENT),
         )
         Unit
+    }
+
+    override suspend fun screenshotOcr(
+        imageBytes: ByteArray,
+        contentType: String,
+        capturedAt: String?,
+        householdId: String?,
+    ): ApiResult<ScreenshotOcrResponse> = safeCall {
+        val boundary = "Boundary-${System.currentTimeMillis()}"
+        val connection = (URL("${config.normalizedBaseUrl}/api/v1/capture-drafts/screenshot-ocr").openConnection() as HttpURLConnection)
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 30_000
+        connection.doOutput = true
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        tokenStore.readAccessToken()?.let {
+            connection.setRequestProperty("Authorization", "Bearer $it")
+        }
+        connection.outputStream.use { stream ->
+            val partBuilder = StringBuilder()
+            partBuilder.append("--$boundary\r\n")
+            partBuilder.append("Content-Disposition: form-data; name=\"image\"; filename=\"screenshot.jpg\"\r\n")
+            partBuilder.append("Content-Type: ${contentType.ifBlank { "image/jpeg" }}\r\n\r\n")
+            stream.write(partBuilder.toString().toByteArray(Charsets.UTF_8))
+            stream.write(imageBytes)
+            stream.write("\r\n".toByteArray(Charsets.UTF_8))
+            if (!capturedAt.isNullOrBlank()) {
+                val capPart = "--$boundary\r\nContent-Disposition: form-data; name=\"capturedAt\"\r\n\r\n$capturedAt\r\n"
+                stream.write(capPart.toByteArray(Charsets.UTF_8))
+            }
+            if (!householdId.isNullOrBlank()) {
+                val hhPart = "--$boundary\r\nContent-Disposition: form-data; name=\"householdId\"\r\n\r\n$householdId\r\n"
+                stream.write(hhPart.toByteArray(Charsets.UTF_8))
+            }
+            stream.write("--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+        }
+        val code = connection.responseCode
+        val text = connection.readText(code)
+        if (code !in setOf(HttpURLConnection.HTTP_OK)) {
+            throw ApiException(parseError(text, code), code)
+        }
+        parseScreenshotOcrResponse(JSONObject(text))
     }
 
     override suspend fun logout(): ApiResult<Unit> = safeCall {
@@ -790,5 +911,26 @@ private fun JSONArray.toObjectList(): List<JSONObject> {
 private fun String.urlEncode(): String = URLEncoder.encode(this, Charsets.UTF_8.name())
 
 private fun String.urlEncodePath(): String = urlEncode().replace("+", "%20")
+
+private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse {
+    val data = json.optJSONObject("data") ?: json
+    val itemsArray = data.optJSONArray("items") ?: return ScreenshotOcrResponse(emptyList())
+    val items = (0 until itemsArray.length()).mapNotNull { index ->
+        val item = itemsArray.optJSONObject(index) ?: return@mapNotNull null
+        val categoryAggregate = item.optJSONObject("categoryAggregate")
+        ScreenshotOcrCandidate(
+            candidateType = item.optString("candidateType", "categoryAggregate"),
+            externalLabel = categoryAggregate?.optString("externalLabel").orEmpty(),
+            amount = item.optString("amount"),
+            currency = item.optString("currency"),
+            operationCount = item.optInt("operationCount", 0),
+            description = item.optString("description"),
+            confidence = item.optDouble("confidence", 0.0),
+            idempotencyKey = item.optString("idempotencyKey"),
+            evidenceHash = item.optString("evidenceHash"),
+        )
+    }
+    return ScreenshotOcrResponse(items = items)
+}
 
 private fun nowIso(): String = java.time.Instant.now().toString()

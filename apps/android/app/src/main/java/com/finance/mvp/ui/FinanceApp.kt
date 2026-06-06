@@ -84,21 +84,13 @@ import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
 import com.finance.mvp.capture.AndroidCategoryAggregateMappingStore
 import com.finance.mvp.capture.CategoryAggregateCandidate
-import com.finance.mvp.capture.CaptureParser
 import com.finance.mvp.ui.theme.FinanceTheme
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.Text as MlKitText
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,84 +117,86 @@ fun FinanceApp(
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotAggregateDrafts by remember { mutableStateOf<List<ScreenshotAggregateDraftUi>>(emptyList()) }
+    var addAccountKind by rememberSaveable { mutableStateOf<AssetKind?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
-            screenshotOcrStatus = "Reading screenshot locally"
+            screenshotOcrStatus = "Sending screenshot to server for recognition"
             screenshotAggregateDrafts = emptyList()
             val capturedAtMillis = System.currentTimeMillis()
-            val parseResult = withContext(Dispatchers.IO) {
+            val capturedAt = java.time.Instant.ofEpochMilli(capturedAtMillis).toString()
+            val ocrResult = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ocrText = recognizeScreenshotText(context, uri)
-                    CaptureParser.parseScreenshotOcrResult(
-                        text = ocrText,
-                        capturedAtMillis = capturedAtMillis,
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException("Cannot open image")
+                    val imageBytes = inputStream.use { it.readBytes() }
+                    val contentType = context.contentResolver.getType(uri) ?: "image/jpeg"
+                    apiClient.screenshotOcr(
+                        imageBytes = imageBytes,
+                        contentType = contentType,
+                        capturedAt = capturedAt,
+                        householdId = uiState.session?.householdId,
                     )
                 }
             }
-            val parsed = parseResult.getOrNull()
-            if (parseResult.isFailure || parsed == null) {
+            val result = ocrResult.getOrNull()
+            if (ocrResult.isFailure || result == null) {
+                val errorMsg = (result as? ApiResult.Failure)?.message
+                    ?: ocrResult.exceptionOrNull()?.message
+                    ?: "Unknown error"
                 screenshotOcrStatus = "Could not recognize a payment from this screenshot"
-                captureMessage = "Choose another screenshot or add the operation manually"
+                captureMessage = "$errorMsg. Choose another screenshot or add the operation manually"
                 captureIsLoading = false
                 return@launch
             }
 
-            val aggregateCandidates = parsed.aggregateCandidates
-            if (aggregateCandidates.isNotEmpty()) {
-                val activeExpenseCategoryIds = uiState.dashboard
-                    ?.categories
-                    .orEmpty()
-                    .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
-                    .map { it.id }
-                    .toSet()
-                val mappingContext = aggregateMappingContext(uiState.session)
-                val drafts = aggregateCandidates.map { candidate ->
-                    val mappedCategoryId = withContext(Dispatchers.IO) {
-                        categoryAggregateMappingStore.readCategoryId(mappingContext, candidate.externalLabel)
-                    }?.takeIf { it in activeExpenseCategoryIds }
-                    ScreenshotAggregateDraftUi(
-                        candidate = candidate,
-                        selectedCategoryId = mappedCategoryId.orEmpty(),
-                        include = mappedCategoryId != null,
-                    )
-                }
-                screenshotAggregateDrafts = drafts
-                screenshotOcrStatus = "Found ${drafts.size} category rows. Review before creating drafts."
-                captureMessage = "Choose categories and confirm screenshot drafts"
-                captureIsLoading = false
-                return@launch
-            }
-
-            val candidate = parsed.singleCandidate
-            if (candidate == null) {
-                screenshotOcrStatus = "Could not recognize a payment from this screenshot"
-                captureMessage = "Choose another screenshot or add the operation manually"
-                captureIsLoading = false
-                return@launch
-            }
-
-            screenshotOcrStatus = "Creating draft from recognized fields"
-            when (
-                val result = withContext(Dispatchers.IO) {
-                    apiClient.createCaptureDraft(candidate.toCreateRequest())
-                }
-            ) {
+            when (result) {
                 is ApiResult.Success -> {
-                    val refreshResult = withContext(Dispatchers.IO) {
-                        apiClient.listCaptureDrafts(status = "pending")
+                    val items = result.value.items
+                    if (items.isEmpty()) {
+                        screenshotOcrStatus = "Could not recognize a payment from this screenshot"
+                        captureMessage = "Choose another screenshot or add the operation manually"
+                        captureIsLoading = false
+                        return@launch
                     }
-                    if (refreshResult is ApiResult.Success) {
-                        captureDrafts = refreshResult.value
+
+                    val activeExpenseCategoryIds = uiState.dashboard
+                        ?.categories
+                        .orEmpty()
+                        .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
+                        .map { it.id }
+                        .toSet()
+                    val mappingContext = aggregateMappingContext(uiState.session)
+                    val drafts = items.map { serverCandidate ->
+                        val candidate = CategoryAggregateCandidate(
+                            externalLabel = serverCandidate.externalLabel,
+                            amount = serverCandidate.amount,
+                            currency = serverCandidate.currency,
+                            operationCount = serverCandidate.operationCount,
+                            capturedAt = capturedAt,
+                            occurredAt = capturedAt,
+                            idempotencyKey = serverCandidate.idempotencyKey,
+                            confidence = serverCandidate.confidence,
+                            evidenceHash = serverCandidate.evidenceHash,
+                        )
+                        val mappedCategoryId = withContext(Dispatchers.IO) {
+                            categoryAggregateMappingStore.readCategoryId(mappingContext, candidate.externalLabel)
+                        }?.takeIf { it in activeExpenseCategoryIds }
+                        ScreenshotAggregateDraftUi(
+                            candidate = candidate,
+                            selectedCategoryId = mappedCategoryId.orEmpty(),
+                            include = mappedCategoryId != null,
+                        )
                     }
-                    screenshotOcrStatus = "Screenshot draft created: ${candidate.amount} ${candidate.currency}"
-                    captureMessage = "Screenshot draft created"
+                    screenshotAggregateDrafts = drafts
+                    screenshotOcrStatus = "Found ${drafts.size} category rows. Review before creating drafts."
+                    captureMessage = "Choose categories and confirm screenshot drafts"
                     captureIsLoading = false
                 }
                 is ApiResult.Failure -> {
-                    screenshotOcrStatus = "Could not create screenshot draft"
+                    screenshotOcrStatus = "Could not recognize a payment from this screenshot"
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
                 }
@@ -479,29 +473,34 @@ fun FinanceApp(
                     QuickEntryType.Income,
                     -> {
                         val account = dashboard.accounts.firstByIdOrFirst(draft.accountId)
+                            ?: when (
+                                val created = apiClient.createDemoAccount(
+                                    householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
+                                    currency = dashboard.accounts.firstOrNull()?.currency ?: "RUB",
+                                )
+                            ) {
+                                is ApiResult.Success -> created.value
+                                is ApiResult.Failure -> return@withContext created
+                            }
                         val category = dashboard.categories.quickAddCategoryFor(
                             categoryId = draft.categoryId,
                             transactionType = draft.type.apiValue,
                         )
-                        if (account == null) {
-                            ApiResult.Failure("Нужен счет")
-                        } else {
-                            val resolvedCategory = category ?: when (
-                                val createdCategory = apiClient.createDemoCategory(
-                                    householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
-                                    categoryType = draft.type.apiValue,
-                                )
-                            ) {
-                                is ApiResult.Success -> createdCategory.value
-                                is ApiResult.Failure -> return@withContext createdCategory
-                            }
-                            apiClient.createDemoTransaction(
-                                account = account,
-                                category = resolvedCategory,
-                                transactionType = draft.type.apiValue,
-                                amount = amount,
+                        val resolvedCategory = category ?: when (
+                            val createdCategory = apiClient.createDemoCategory(
+                                householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
+                                categoryType = draft.type.apiValue,
                             )
+                        ) {
+                            is ApiResult.Success -> createdCategory.value
+                            is ApiResult.Failure -> return@withContext createdCategory
                         }
+                        apiClient.createDemoTransaction(
+                            account = account,
+                            category = resolvedCategory,
+                            transactionType = draft.type.apiValue,
+                            amount = amount,
+                        )
                     }
                     QuickEntryType.Transfer -> {
                         val source = dashboard.accounts.firstByIdOrFirst(draft.accountId)
@@ -681,6 +680,30 @@ fun FinanceApp(
                     },
                     onAggregateCategorySelected = ::updateScreenshotAggregateCategory,
                     onAggregateIncludedChanged = ::updateScreenshotAggregateIncluded,
+                    onAggregateCreateCategory = { draftKey, categoryName ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Создаём категорию")
+                            val result = withContext(Dispatchers.IO) {
+                                apiClient.createCategory(
+                                    name = categoryName,
+                                    householdId = uiState.session?.householdId,
+                                    categoryType = "expense",
+                                )
+                            }
+                            when (result) {
+                                is ApiResult.Success -> {
+                                    val newCategoryId = result.value.id
+                                    updateScreenshotAggregateCategory(draftKey, newCategoryId)
+                                    updateScreenshotAggregateIncluded(draftKey, true)
+                                    loadDashboard("Категория «$categoryName» создана")
+                                }
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
                     onConfirmAggregateDrafts = ::createScreenshotAggregateDrafts,
                     onClearAggregateDrafts = {
                         screenshotAggregateDrafts = emptyList()
@@ -688,15 +711,61 @@ fun FinanceApp(
                     },
                     onConfirmCaptureDraft = ::confirmCaptureDraft,
                     onDiscardCaptureDraft = ::discardCaptureDraft,
+                    onDeleteTransaction = { transactionId ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Удаляем операцию")
+                            when (val result = withContext(Dispatchers.IO) { apiClient.deleteTransaction(transactionId) }) {
+                                is ApiResult.Success -> loadDashboard("Операция удалена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
                 )
-                AppSection.Assets -> assetsContent(dashboard)
+                AppSection.Assets -> assetsContent(
+                    dashboard = dashboard,
+                    onUpdateAccount = { account, newName ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Обновляем актив")
+                            val result = withContext(Dispatchers.IO) {
+                                apiClient.updateAccount(account.copy(name = newName))
+                            }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Актив обновлён")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                    onArchiveAccount = { accountId ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Удаляем актив")
+                            val result = withContext(Dispatchers.IO) { apiClient.archiveAccount(accountId) }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Актив удалён")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                    onAddAccount = { kind ->
+                        addAccountKind = kind
+                    },
+                )
                 AppSection.Categories -> categoriesContent(
                     dashboard = dashboard,
-                    onAddCategory = { type, mode ->
+                    onAddCategory = { name, type, mode ->
                         scope.launch {
                             uiState = uiState.copy(isLoading = true, message = "Добавляем категорию")
                             val result = withContext(Dispatchers.IO) {
-                                apiClient.createDemoCategory(
+                                apiClient.createCategory(
+                                    name = name,
                                     householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
                                     categoryType = type.apiValue,
                                 )
@@ -710,12 +779,27 @@ fun FinanceApp(
                             }
                         }
                     },
-                    onEditCategory = { category ->
+                    onUpdateCategory = { category, newName ->
                         scope.launch {
                             uiState = uiState.copy(isLoading = true, message = "Обновляем категорию")
-                            val result = withContext(Dispatchers.IO) { apiClient.updateCategory(category) }
+                            val result = withContext(Dispatchers.IO) {
+                                apiClient.updateCategory(category.copy(name = newName))
+                            }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Категория обновлена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                    onArchiveCategory = { categoryId ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Удаляем категорию")
+                            val result = withContext(Dispatchers.IO) { apiClient.archiveCategory(categoryId) }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Категория удалена")
                                 is ApiResult.Failure -> uiState = uiState.copy(
                                     isLoading = false,
                                     message = result.userFacingMessage(),
@@ -741,6 +825,38 @@ fun FinanceApp(
                 showQuickAdd = false
             },
             onSubmit = ::submitQuickAdd,
+        )
+    }
+
+    if (addAccountKind != null) {
+        val kind = addAccountKind!!
+        AddAccountSheet(
+            kind = kind,
+            onDismiss = { addAccountKind = null },
+            onSubmit = { name, balance, currency ->
+                scope.launch {
+                    uiState = uiState.copy(isLoading = true, message = "Добавляем актив")
+                    val result = withContext(Dispatchers.IO) {
+                        apiClient.createAccount(
+                            name = name,
+                            currency = currency,
+                            initialBalance = balance,
+                            accountType = kind.apiValue,
+                            householdId = uiState.session?.householdId,
+                        )
+                    }
+                    when (result) {
+                        is ApiResult.Success -> {
+                            addAccountKind = null
+                            loadDashboard("Актив добавлен")
+                        }
+                        is ApiResult.Failure -> uiState = uiState.copy(
+                            isLoading = false,
+                            message = result.userFacingMessage(),
+                        )
+                    }
+                }
+            },
         )
     }
 }
@@ -971,10 +1087,12 @@ private fun LazyListScope.operationsContent(
     onPickScreenshot: () -> Unit,
     onAggregateCategorySelected: (String, String) -> Unit,
     onAggregateIncludedChanged: (String, Boolean) -> Unit,
+    onAggregateCreateCategory: (String, String) -> Unit,
     onConfirmAggregateDrafts: () -> Unit,
     onClearAggregateDrafts: () -> Unit,
     onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
+    onDeleteTransaction: (String) -> Unit,
 ) {
     val items = dashboard?.transactions.orEmpty()
     item {
@@ -991,6 +1109,7 @@ private fun LazyListScope.operationsContent(
             onPickScreenshot = onPickScreenshot,
             onAggregateCategorySelected = onAggregateCategorySelected,
             onAggregateIncludedChanged = onAggregateIncludedChanged,
+            onAggregateCreateCategory = onAggregateCreateCategory,
             onConfirmAggregateDrafts = onConfirmAggregateDrafts,
             onClearAggregateDrafts = onClearAggregateDrafts,
             onConfirm = onConfirmCaptureDraft,
@@ -1003,7 +1122,9 @@ private fun LazyListScope.operationsContent(
     }
     item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
     items(items.sortedByDescending { it.occurredAt }) { transaction ->
-        TransactionRow(transaction, dashboard?.categories.orEmpty())
+        TransactionRow(transaction, dashboard?.categories.orEmpty()) {
+            onDeleteTransaction(transaction.id)
+        }
     }
 }
 
@@ -1021,6 +1142,7 @@ private fun CaptureDraftReviewCard(
     onPickScreenshot: () -> Unit,
     onAggregateCategorySelected: (String, String) -> Unit,
     onAggregateIncludedChanged: (String, Boolean) -> Unit,
+    onAggregateCreateCategory: (String, String) -> Unit,
     onConfirmAggregateDrafts: () -> Unit,
     onClearAggregateDrafts: () -> Unit,
     onConfirm: (CaptureDraft, String, String) -> Unit,
@@ -1077,6 +1199,7 @@ private fun CaptureDraftReviewCard(
                     isLoading = isLoading,
                     onCategorySelected = onAggregateCategorySelected,
                     onIncludedChanged = onAggregateIncludedChanged,
+                    onCreateCategory = onAggregateCreateCategory,
                     onConfirm = onConfirmAggregateDrafts,
                     onClear = onClearAggregateDrafts,
                 )
@@ -1109,6 +1232,7 @@ private fun ScreenshotAggregateDraftList(
     isLoading: Boolean,
     onCategorySelected: (String, String) -> Unit,
     onIncludedChanged: (String, Boolean) -> Unit,
+    onCreateCategory: (String, String) -> Unit,
     onConfirm: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -1153,12 +1277,24 @@ private fun ScreenshotAggregateDraftList(
                         color = Color(0xFFE35D4F),
                     )
                 }
-                FilterChip(
-                    selected = draft.include,
-                    onClick = { onIncludedChanged(draft.key, !draft.include) },
-                    enabled = !isLoading,
-                    label = { Text(if (draft.include) "Include" else "Skip") },
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = draft.include,
+                        onClick = { onIncludedChanged(draft.key, !draft.include) },
+                        enabled = !isLoading,
+                        label = { Text(if (draft.include) "Include" else "Skip") },
+                    )
+                    val matchedCategory = expenseCategories.firstOrNull { it.id == draft.selectedCategoryId }
+                    if (matchedCategory == null) {
+                        OutlinedButton(
+                            onClick = { onCreateCategory(draft.key, draft.candidate.externalLabel) },
+                            enabled = !isLoading,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            Text("New", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
                 if (expenseCategories.isEmpty()) {
                     Text("No active expense categories available", style = MaterialTheme.typography.bodySmall)
                 } else {
@@ -1317,28 +1453,43 @@ private fun CaptureDraftRow(
     }
 }
 
-private fun LazyListScope.assetsContent(dashboard: FinanceDashboard?) {
-    val summaries = assetSummaries(dashboard?.accounts.orEmpty())
+private fun LazyListScope.assetsContent(
+    dashboard: FinanceDashboard?,
+    onUpdateAccount: (AccountSummary, String) -> Unit,
+    onArchiveAccount: (String) -> Unit,
+    onAddAccount: (AssetKind) -> Unit,
+) {
+    val allAccounts = dashboard?.accounts.orEmpty()
+    val summaries = assetSummaries(allAccounts)
     item { Text("Активы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-    items(summaries) { summary ->
-        AssetKindRow(summary)
-    }
-    if (dashboard?.accounts.isNullOrEmpty()) {
+    if (allAccounts.filter { it.status == "active" }.isEmpty()) {
         item { EmptyState("Активов пока нет") }
     }
+    items(summaries) { summary ->
+        AssetCategoryCard(
+            summary = summary,
+            accounts = allAccounts.filter { it.status == "active" && it.assetKind() == summary.kind },
+            onUpdate = onUpdateAccount,
+            onArchive = onArchiveAccount,
+            onAdd = { onAddAccount(summary.kind) },
+        )
+    }
+    item { CapitalBreakdownCard(summaries) }
 }
 
 private fun LazyListScope.categoriesContent(
     dashboard: FinanceDashboard?,
-    onAddCategory: (QuickEntryType, FinanceMode) -> Unit,
-    onEditCategory: (CategorySummary) -> Unit,
+    onAddCategory: (String, QuickEntryType, FinanceMode) -> Unit,
+    onUpdateCategory: (CategorySummary, String) -> Unit,
+    onArchiveCategory: (String) -> Unit,
 ) {
     item {
         CategoryManagementCard(
             categories = dashboard?.categories.orEmpty(),
             isAuthenticated = dashboard?.session?.isAuthenticated == true,
             onAddCategory = onAddCategory,
-            onEditCategory = onEditCategory,
+            onUpdateCategory = onUpdateCategory,
+            onArchiveCategory = onArchiveCategory,
         )
     }
 }
@@ -1505,6 +1656,7 @@ private fun RecentOperationsCard(transactions: List<TransactionSummary>) {
 private fun TransactionRow(
     transaction: TransactionSummary,
     categories: List<CategorySummary>,
+    onDelete: () -> Unit,
 ) {
     val category = categories.firstOrNull { it.id == transaction.categoryId }
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
@@ -1534,6 +1686,18 @@ private fun TransactionRow(
                 color = transaction.tint(),
                 fontWeight = FontWeight.SemiBold,
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_24),
+                    contentDescription = "Удалить",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }
@@ -1565,20 +1729,189 @@ private fun CompactTransactionRow(transaction: TransactionSummary) {
 }
 
 @Composable
-private fun AssetKindRow(summary: AssetSummary) {
+private fun AssetCategoryCard(
+    summary: AssetSummary,
+    accounts: List<AccountSummary>,
+    onUpdate: (AccountSummary, String) -> Unit,
+    onArchive: (String) -> Unit,
+    onAdd: () -> Unit,
+) {
+    var isExpanded by rememberSaveable { mutableStateOf(false) }
+
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconBubble(summary.kind.icon, summary.kind.tint)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(summary.kind.title, fontWeight = FontWeight.SemiBold)
-                Text("${summary.count} шт.", style = MaterialTheme.typography.bodySmall)
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBubble(summary.kind.icon, summary.kind.tint)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(summary.kind.title, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = if (accounts.isEmpty()) "Нажмите чтобы добавить" else "${accounts.size} ${pluralItems(accounts.size)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    text = summary.balance.formatMoney(summary.currency),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = { isExpanded = !isExpanded },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (isExpanded) R.drawable.ic_refresh_24 else R.drawable.ic_edit_24
+                        ),
+                        contentDescription = if (isExpanded) "Свернуть" else "Открыть",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-            Text(summary.balance.formatMoney(summary.currency), fontWeight = FontWeight.SemiBold)
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                if (accounts.isEmpty()) {
+                    Text("Нет счетов в этой категории", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    accounts.forEach { account ->
+                        AccountRow(
+                            account = account,
+                            onUpdate = onUpdate,
+                            onArchive = onArchive,
+                        )
+                        if (account != accounts.last()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onAdd,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Добавить счёт")
+                    }
+                }
+            }
         }
+    }
+}
+
+private val CURRENCIES = listOf("RUB", "USD", "EUR", "XAU")
+
+@Composable
+private fun AccountRow(
+    account: AccountSummary,
+    onUpdate: (AccountSummary, String) -> Unit,
+    onArchive: (String) -> Unit,
+) {
+    var isEditing by rememberSaveable { mutableStateOf(false) }
+    var editName by rememberSaveable { mutableStateOf(account.name) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = account.displayName(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (isEditing) {
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = editName,
+                    onValueChange = { editName = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                text = account.currentBalance.toMoney().formatMoney(account.currency),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (isEditing) {
+            TextButton(
+                onClick = {
+                    if (editName.isNotBlank()) {
+                        onUpdate(account, editName.trim())
+                        isEditing = false
+                    }
+                },
+                enabled = editName.isNotBlank(),
+            ) {
+                Text("OK")
+            }
+            IconButton(
+                onClick = { isEditing = false },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_refresh_24),
+                    contentDescription = "Отмена",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(
+                onClick = {
+                    onArchive(account.id)
+                    isEditing = false
+                },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_24),
+                    contentDescription = "Удалить",
+                    tint = Color(0xFFE35D4F),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        } else {
+            IconButton(
+                onClick = { isEditing = true },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_edit_24),
+                    contentDescription = "Изменить",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(
+                onClick = { onArchive(account.id) },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_24),
+                    contentDescription = "Удалить",
+                    tint = Color(0xFFE35D4F),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun pluralItems(count: Int): String {
+    return when {
+        count % 10 == 1 && count % 100 != 11 -> "счёт"
+        count % 10 in 2..4 && count % 100 !in 12..14 -> "счёта"
+        else -> "счетов"
     }
 }
 
@@ -1620,11 +1953,13 @@ private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
 private fun CategoryManagementCard(
     categories: List<CategorySummary>,
     isAuthenticated: Boolean,
-    onAddCategory: (QuickEntryType, FinanceMode) -> Unit,
-    onEditCategory: (CategorySummary) -> Unit,
+    onAddCategory: (String, QuickEntryType, FinanceMode) -> Unit,
+    onUpdateCategory: (CategorySummary, String) -> Unit,
+    onArchiveCategory: (String) -> Unit,
 ) {
     var type by rememberSaveable { mutableStateOf(QuickEntryType.Expense) }
     var mode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
+    var newCategoryName by rememberSaveable { mutableStateOf("") }
     val categoryTypes = listOf(QuickEntryType.Expense, QuickEntryType.Income)
     val visibleCategories = categories
         .filter { it.status == "active" }
@@ -1653,9 +1988,20 @@ private fun CategoryManagementCard(
             Text("Режим", style = MaterialTheme.typography.labelLarge)
             ChipRow(listOf(FinanceMode.Personal, FinanceMode.Shared), mode, { mode = it }, { it.title }, { it.icon() })
 
+            OutlinedTextField(
+                value = newCategoryName,
+                onValueChange = { newCategoryName = it },
+                label = { Text("Название категории") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             Button(
-                onClick = { onAddCategory(type, mode) },
-                enabled = isAuthenticated,
+                onClick = {
+                    onAddCategory(newCategoryName.trim(), type, mode)
+                    newCategoryName = ""
+                },
+                enabled = isAuthenticated && newCategoryName.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Добавить категорию")
@@ -1665,7 +2011,7 @@ private fun CategoryManagementCard(
                 Text("Категорий пока нет", style = MaterialTheme.typography.bodySmall)
             } else {
                 visibleCategories.forEach { category ->
-                    CategoryManagementRow(category, onEditCategory)
+                    CategoryManagementRow(category, onUpdateCategory, onArchiveCategory)
                 }
             }
         }
@@ -1675,29 +2021,82 @@ private fun CategoryManagementCard(
 @Composable
 private fun CategoryManagementRow(
     category: CategorySummary,
-    onEditCategory: (CategorySummary) -> Unit,
+    onUpdateCategory: (CategorySummary, String) -> Unit,
+    onArchiveCategory: (String) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconBubble(category.icon(), category.colorOrFallback(), size = 34)
-        Spacer(modifier = Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = category.displayName(),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = "${category.localizedType()} • ${category.localizedScope()}",
-                style = MaterialTheme.typography.labelSmall,
-            )
+    var isEditing by rememberSaveable { mutableStateOf(false) }
+    var editName by rememberSaveable { mutableStateOf(category.displayName()) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBubble(category.icon(), category.colorOrFallback(), size = 34)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = category.displayName(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${category.localizedType()} • ${category.localizedScope()}",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            TextButton(onClick = { isEditing = !isEditing }) {
+                Text(if (isEditing) "Отмена" else "Изменить")
+            }
         }
-        TextButton(onClick = { onEditCategory(category) }) {
-            Text("Изменить")
+        if (isEditing) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = editName,
+                    onValueChange = { editName = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        if (editName.isNotBlank()) {
+                            onUpdateCategory(category, editName.trim())
+                            isEditing = false
+                        }
+                    },
+                    enabled = editName.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Сохранить")
+                }
+                IconButton(
+                    onClick = {
+                        onArchiveCategory(category.id)
+                        isEditing = false
+                    },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_delete_24),
+                        contentDescription = "Удалить",
+                        tint = Color(0xFFE35D4F),
+                    )
+                }
+            }
         }
     }
 }
@@ -1783,6 +2182,87 @@ private fun EmptyState(text: String) {
             modifier = Modifier.padding(18.dp),
             style = MaterialTheme.typography.bodyMedium,
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddAccountSheet(
+    kind: AssetKind,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String, String) -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var balance by rememberSaveable { mutableStateOf("") }
+    var currency by rememberSaveable { mutableStateOf("RUB") }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(kind.icon, kind.tint, size = 36)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Новый ${kind.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Название") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = balance,
+                onValueChange = { balance = it },
+                label = { Text("Начальный баланс") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Валюта", style = MaterialTheme.typography.labelLarge)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(CURRENCIES) { cur ->
+                    FilterChip(
+                        selected = currency == cur,
+                        onClick = { currency = cur },
+                        label = {
+                            Text(
+                                when (cur) {
+                                    "RUB" -> "₽ RUB"
+                                    "USD" -> "$ USD"
+                                    "EUR" -> "€ EUR"
+                                    "XAU" -> "🥇 XAU"
+                                    else -> cur
+                                }
+                            )
+                        },
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Отмена")
+                }
+                Button(
+                    onClick = {
+                        val cleanBalance = balance.trim().ifBlank { "0" }
+                        onSubmit(name.trim().ifBlank { kind.title }, cleanBalance, currency)
+                    },
+                    enabled = name.isNotBlank() || balance.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Создать")
+                }
+            }
+        }
     }
 }
 
@@ -1884,7 +2364,7 @@ private fun QuickAddSheet(
                             ),
                         )
                     },
-                    enabled = amount.normalizedAmount() != null && (type == QuickEntryType.Asset || accounts.isNotEmpty()),
+                    enabled = amount.normalizedAmount() != null,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text("Сохранить")
@@ -2411,31 +2891,6 @@ private fun ApiResult.Failure.isAuthenticationFailure(): Boolean {
     ).any { message.contains(it, ignoreCase = true) }
 }
 
-private suspend fun recognizeScreenshotText(context: Context, uri: Uri): String {
-    val image = InputImage.fromFilePath(context, uri)
-    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    return try {
-        recognizer.process(image).awaitMlKitText().text
-    } finally {
-        recognizer.close()
-    }
-}
-
-private suspend fun com.google.android.gms.tasks.Task<MlKitText>.awaitMlKitText(): MlKitText {
-    return suspendCancellableCoroutine { continuation ->
-        addOnSuccessListener { result ->
-            if (continuation.isActive) {
-                continuation.resume(result)
-            }
-        }
-        addOnFailureListener { error ->
-            if (continuation.isActive) {
-                continuation.resumeWithException(error)
-            }
-        }
-    }
-}
-
 @Preview(showBackground = true, widthDp = 390)
 @Composable
 private fun FinanceAppPreview() {
@@ -2470,6 +2925,16 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         return ApiResult.Success(AccountSummary("Новый актив", accountType, ownershipType, currency, initialBalance, id = "acc-created", householdId = householdId, version = 1))
     }
 
+    override suspend fun createAccount(
+        name: String,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        householdId: String?,
+    ): ApiResult<AccountSummary> {
+        return ApiResult.Success(AccountSummary(name, accountType, if (householdId.isNullOrBlank()) "personal" else "shared", currency, initialBalance, id = "acc-created", householdId = householdId, version = 1))
+    }
+
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> {
         return ApiResult.Success(account.copy(version = (account.version ?: 1) + 1))
     }
@@ -2487,6 +2952,14 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         categoryType: String,
     ): ApiResult<CategorySummary> {
         return ApiResult.Success(CategorySummary("Дом", categoryType, "personal", id = "cat-created", color = "#5B6EE1", version = 1))
+    }
+
+    override suspend fun createCategory(
+        name: String,
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> {
+        return ApiResult.Success(CategorySummary(name, categoryType, "personal", id = "cat-created", color = "#5B6EE1", version = 1))
     }
 
     override suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary> {
