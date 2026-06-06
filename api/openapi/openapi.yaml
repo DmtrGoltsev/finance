@@ -227,6 +227,7 @@ paths:
       tags: [Accounts]
       operationId: updateAccount
       summary: Update account mutable fields.
+      description: Updates the account snapshot fields `name`, `currentBalance`, and `currency` with optional optimistic `version`; `initialBalance` is immutable. Currency cannot be changed after any transaction references the account.
       parameters:
         - $ref: '#/components/parameters/AccountId'
       requestBody:
@@ -242,6 +243,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountEnvelope'
+        '409':
+          description: Conflict. Returned as `CONFLICTING_UPDATE` for stale `version`, or `ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS` when changing currency after transactions exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -1185,6 +1192,7 @@ components:
         - TRANSACTION_ACCOUNT_MISMATCH
         - ARCHIVED_RECORD_NOT_MUTABLE
         - CONFLICTING_UPDATE
+        - ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS
         - TRANSFER_SCOPE_NOT_SUPPORTED
         - TRANSFER_COUNTERPARTY_REQUIRED
         - TRANSFER_COUNTERPARTY_NOT_ACCESSIBLE
@@ -1494,6 +1502,12 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        currentBalance:
+          $ref: '#/components/schemas/DecimalString'
+          description: Snapshot balance override. Does not mutate initialBalance.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+          description: Allowed only while no transaction references the account.
         accountType:
           $ref: '#/components/schemas/AccountType'
         status:

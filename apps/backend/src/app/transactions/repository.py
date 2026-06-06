@@ -51,6 +51,9 @@ class TransactionFilters:
 
 
 class TransactionRepository(Protocol):
+    def has_for_account(self, account_id: str) -> bool:
+        """Return whether any transaction references the account."""
+
     def list_by_visible_accounts(
         self,
         visible_account_ids: Iterable[str],
@@ -92,6 +95,13 @@ class InMemoryTransactionRepository:
     def reset(self, records: Iterable[TransactionRecord] = ()) -> None:
         with self._lock:
             self._records = {record.id: deepcopy(record) for record in records}
+
+    def has_for_account(self, account_id: str) -> bool:
+        with self._lock:
+            return any(
+                row.account_id == account_id or row.counterparty_account_id == account_id
+                for row in self._records.values()
+            )
 
     def list_by_visible_accounts(
         self,
@@ -166,6 +176,23 @@ class SqlAlchemyTransactionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def has_for_account(self, account_id: str) -> bool:
+        parsed_id = _optional_uuid(account_id)
+        if parsed_id is None:
+            return False
+
+        statement = (
+            select(TransactionModel.id)
+            .where(
+                or_(
+                    TransactionModel.account_id == parsed_id,
+                    TransactionModel.counterparty_account_id == parsed_id,
+                )
+            )
+            .limit(1)
+        )
+        return self._session.execute(statement).first() is not None
+
     def list_by_visible_accounts(
         self,
         visible_account_ids: Iterable[str],
@@ -198,7 +225,9 @@ class SqlAlchemyTransactionRepository:
                 return []
             statement = statement.where(TransactionModel.category_id == category_id)
         if filters.transaction_type is not None:
-            statement = statement.where(TransactionModel.transaction_type == filters.transaction_type)
+            statement = statement.where(
+                TransactionModel.transaction_type == filters.transaction_type
+            )
         if filters.status is not None:
             statement = statement.where(TransactionModel.record_status == filters.status)
         if filters.start is not None:
@@ -238,7 +267,10 @@ class SqlAlchemyTransactionRepository:
             id=uuid4(),
             transaction_type=transaction_type,
             account_id=_required_uuid(account_id, "account_id"),
-            counterparty_account_id=_nullable_uuid(counterparty_account_id, "counterparty_account_id"),
+            counterparty_account_id=_nullable_uuid(
+                counterparty_account_id,
+                "counterparty_account_id",
+            ),
             category_id=_nullable_uuid(category_id, "category_id"),
             amount=amount,
             currency=currency,
@@ -339,7 +371,9 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
         transaction_type=model.transaction_type,
         account_id=str(model.account_id),
         counterparty_account_id=(
-            str(model.counterparty_account_id) if model.counterparty_account_id is not None else None
+            str(model.counterparty_account_id)
+            if model.counterparty_account_id is not None
+            else None
         ),
         category_id=str(model.category_id) if model.category_id is not None else None,
         amount=Decimal(model.amount),

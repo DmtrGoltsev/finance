@@ -387,6 +387,8 @@ class LiveFinanceApiClient(
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> = safeCall {
         val body = JSONObject()
             .put("name", account.name.take(80))
+            .put("currentBalance", account.currentBalance)
+            .put("currency", account.currency)
         account.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/accounts/${account.id.urlEncodePath()}",
@@ -700,7 +702,12 @@ class LiveFinanceApiClient(
     private fun parseError(text: String, code: Int): String {
         val fallback = "API вернул HTTP $code"
         return runCatching {
-            JSONObject(text).optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+            val error = JSONObject(text).optJSONObject("error")
+            when (error?.optString("code")) {
+                "ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS" ->
+                    "Валюту счета нельзя изменить после создания операций."
+                else -> error?.optString("message")?.takeIf { it.isNotBlank() }
+            }
         }.getOrNull() ?: fallback
     }
 }

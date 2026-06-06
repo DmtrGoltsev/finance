@@ -190,6 +190,7 @@ class SqlAlchemyAccountRepository:
 
         model.name = record.name
         model.account_type = record.account_type
+        model.currency = record.currency
         model.current_balance_amount = record.current_balance
         model.record_status = record.status.value
         model.archived_at = record.archived_at

@@ -77,6 +77,8 @@ class AccountCreateRequest(ApiModel):
 
 class AccountUpdateRequest(ApiModel):
     name: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
+    current_balance: DecimalString | None = None
+    currency: CurrencyCode | None = None
     account_type: AccountType | None = None
     status: RecordStatus | None = None
     version: Annotated[int, Field(ge=1)] | None = None

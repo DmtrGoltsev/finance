@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
@@ -26,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.annotation.DrawableRes
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -58,6 +62,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -92,6 +98,7 @@ import java.text.NumberFormat
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,6 +125,7 @@ fun FinanceApp(
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotAggregateDrafts by remember { mutableStateOf<List<ScreenshotAggregateDraftUi>>(emptyList()) }
+    var assetGroupNames by rememberSaveable { mutableStateOf<Map<String, String>>(emptyMap()) }
     var addAccountKind by rememberSaveable { mutableStateOf<AssetKind?>(null) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
@@ -740,11 +748,15 @@ fun FinanceApp(
                 )
                 AppSection.Assets -> assetsContent(
                     dashboard = dashboard,
-                    onUpdateAccount = { account, newName ->
+                    groupNames = assetGroupNames,
+                    onRenameGroup = { kind, newName ->
+                        assetGroupNames = assetGroupNames + (kind.apiValue to newName)
+                    },
+                    onUpdateAccount = { updatedAccount ->
                         scope.launch {
                             uiState = uiState.copy(isLoading = true, message = "Обновляем актив")
                             val result = withContext(Dispatchers.IO) {
-                                apiClient.updateAccount(account.copy(name = newName))
+                                apiClient.updateAccount(updatedAccount)
                             }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Актив обновлён")
@@ -764,6 +776,27 @@ fun FinanceApp(
                                 is ApiResult.Failure -> uiState = uiState.copy(
                                     isLoading = false,
                                     message = result.userFacingMessage(),
+                                )
+                            }
+                        }
+                    },
+                    onArchiveGroup = { accountIds ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Удаляем группу активов")
+                            val failure = withContext(Dispatchers.IO) {
+                                accountIds.firstNotNullOfOrNull { accountId ->
+                                    when (val result = apiClient.archiveAccount(accountId)) {
+                                        is ApiResult.Success -> null
+                                        is ApiResult.Failure -> result
+                                    }
+                                }
+                            }
+                            if (failure == null) {
+                                loadDashboard("Группа активов удалена")
+                            } else {
+                                uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = failure.userFacingMessage(),
                                 )
                             }
                         }
@@ -1469,8 +1502,11 @@ private fun CaptureDraftRow(
 
 private fun LazyListScope.assetsContent(
     dashboard: FinanceDashboard?,
-    onUpdateAccount: (AccountSummary, String) -> Unit,
+    groupNames: Map<String, String>,
+    onRenameGroup: (AssetKind, String) -> Unit,
+    onUpdateAccount: (AccountSummary) -> Unit,
     onArchiveAccount: (String) -> Unit,
+    onArchiveGroup: (List<String>) -> Unit,
     onAddAccount: (AssetKind) -> Unit,
 ) {
     val allAccounts = dashboard?.accounts.orEmpty()
@@ -1483,8 +1519,11 @@ private fun LazyListScope.assetsContent(
         AssetCategoryCard(
             summary = summary,
             accounts = allAccounts.filter { it.status == "active" && it.assetKind() == summary.kind },
+            displayName = groupNames[summary.kind.apiValue] ?: summary.kind.title,
+            onRenameGroup = { onRenameGroup(summary.kind, it) },
             onUpdate = onUpdateAccount,
             onArchive = onArchiveAccount,
+            onArchiveGroup = onArchiveGroup,
             onAdd = { onAddAccount(summary.kind) },
         )
     }
@@ -1746,11 +1785,18 @@ private fun CompactTransactionRow(transaction: TransactionSummary) {
 private fun AssetCategoryCard(
     summary: AssetSummary,
     accounts: List<AccountSummary>,
-    onUpdate: (AccountSummary, String) -> Unit,
+    displayName: String,
+    onRenameGroup: (String) -> Unit,
+    onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
+    onArchiveGroup: (List<String>) -> Unit,
     onAdd: () -> Unit,
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+    var isEditingGroup by rememberSaveable { mutableStateOf(false) }
+    var groupNameDraft by rememberSaveable(displayName) { mutableStateOf(displayName) }
+    var confirmArchiveGroup by rememberSaveable { mutableStateOf(false) }
+    val activeAccountIds = remember(accounts) { accounts.map { it.id }.filter { it.isNotBlank() } }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -1758,29 +1804,44 @@ private fun AssetCategoryCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconBubble(summary.kind.icon, summary.kind.tint)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(summary.kind.title, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .tapOrLongPress(
+                            onTap = { isExpanded = !isExpanded },
+                            onLongPress = {
+                                if (activeAccountIds.isNotEmpty()) {
+                                    confirmArchiveGroup = true
+                                }
+                            },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconBubble(summary.kind.icon, summary.kind.tint)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(displayName, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = if (accounts.isEmpty()) "Нажмите чтобы добавить" else "${accounts.size} ${pluralItems(accounts.size)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     Text(
-                        text = if (accounts.isEmpty()) "Нажмите чтобы добавить" else "${accounts.size} ${pluralItems(accounts.size)}",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = summary.balance.formatMoney(summary.currency),
+                        fontWeight = FontWeight.SemiBold,
                     )
                 }
-                Text(
-                    text = summary.balance.formatMoney(summary.currency),
-                    fontWeight = FontWeight.SemiBold,
-                )
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
-                    onClick = { isExpanded = !isExpanded },
+                    onClick = {
+                        groupNameDraft = displayName
+                        isEditingGroup = true
+                    },
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
-                        painter = painterResource(
-                            if (isExpanded) R.drawable.ic_refresh_24 else R.drawable.ic_edit_24
-                        ),
-                        contentDescription = if (isExpanded) "Свернуть" else "Открыть",
+                        painter = painterResource(R.drawable.ic_edit_24),
+                        contentDescription = "Изменить название группы",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
@@ -1817,18 +1878,116 @@ private fun AssetCategoryCard(
             }
         }
     }
+
+    if (isEditingGroup) {
+        AlertDialog(
+            onDismissRequest = { isEditingGroup = false },
+            title = { Text("Название группы") },
+            text = {
+                OutlinedTextField(
+                    value = groupNameDraft,
+                    onValueChange = { groupNameDraft = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val cleanName = groupNameDraft.trim()
+                        if (cleanName.isNotBlank()) {
+                            onRenameGroup(cleanName)
+                            isEditingGroup = false
+                        }
+                    },
+                    enabled = groupNameDraft.isNotBlank(),
+                ) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { isEditingGroup = false }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
+    if (confirmArchiveGroup) {
+        AlertDialog(
+            onDismissRequest = { confirmArchiveGroup = false },
+            title = { Text("Удалить группу?") },
+            text = {
+                Text("Будут архивированы все активные счета группы «$displayName»: ${activeAccountIds.size} ${pluralItems(activeAccountIds.size)}.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmArchiveGroup = false
+                        onArchiveGroup(activeAccountIds)
+                    },
+                ) {
+                    Text("Удалить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmArchiveGroup = false }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
 }
 
 private val CURRENCIES = listOf("RUB", "USD", "EUR", "XAU")
 
+private fun String.currencyLabel(): String = when (this) {
+    "RUB" -> "₽ RUB"
+    "USD" -> "$ USD"
+    "EUR" -> "€ EUR"
+    "XAU" -> "граммы"
+    else -> this
+}
+
+private fun Modifier.tapOrLongPress(
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    thresholdMillis: Long = 1050L,
+): Modifier = pointerInput(onTap, onLongPress, thresholdMillis) {
+    detectTapOrLongPress(
+        thresholdMillis = thresholdMillis,
+        onTap = onTap,
+        onLongPress = onLongPress,
+    )
+}
+
+private suspend fun PointerInputScope.detectTapOrLongPress(
+    thresholdMillis: Long,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        val releasedBeforeThreshold = withTimeoutOrNull(thresholdMillis) {
+            waitForUpOrCancellation()
+        }
+        if (releasedBeforeThreshold != null) {
+            onTap()
+        } else {
+            onLongPress()
+            waitForUpOrCancellation()
+        }
+    }
+}
+
 @Composable
 private fun AccountRow(
     account: AccountSummary,
-    onUpdate: (AccountSummary, String) -> Unit,
+    onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
 ) {
     var isEditing by rememberSaveable { mutableStateOf(false) }
-    var editName by rememberSaveable { mutableStateOf(account.name) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1842,8 +2001,69 @@ private fun AccountRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (isEditing) {
-                Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = account.currentBalance.toMoney().formatMoney(account.currency),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        IconButton(
+            onClick = { isEditing = true },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_edit_24),
+                contentDescription = "Изменить",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        IconButton(
+            onClick = { onArchive(account.id) },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_delete_24),
+                contentDescription = "Удалить",
+                tint = Color(0xFFE35D4F),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+
+    if (isEditing) {
+        AccountEditDialog(
+            account = account,
+            onDismiss = { isEditing = false },
+            onArchive = {
+                onArchive(account.id)
+                isEditing = false
+            },
+            onSave = { updatedAccount ->
+                onUpdate(updatedAccount)
+                isEditing = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun AccountEditDialog(
+    account: AccountSummary,
+    onDismiss: () -> Unit,
+    onArchive: () -> Unit,
+    onSave: (AccountSummary) -> Unit,
+) {
+    var editName by rememberSaveable(account.id, account.name) { mutableStateOf(account.name) }
+    var editBalance by rememberSaveable(account.id, account.currentBalance) { mutableStateOf(account.currentBalance) }
+    var editCurrency by rememberSaveable(account.id, account.currency) { mutableStateOf(account.currency) }
+    val cleanBalance = editBalance.normalizedBalanceAmount()
+    val canSave = editName.isNotBlank() && cleanBalance != null
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Редактировать счёт") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = editName,
                     onValueChange = { editName = it },
@@ -1851,74 +2071,66 @@ private fun AccountRow(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = editBalance,
+                    onValueChange = { editBalance = it },
+                    label = { Text("Баланс") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("Валюта", style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(CURRENCIES) { cur ->
+                        FilterChip(
+                            selected = editCurrency == cur,
+                            onClick = { editCurrency = cur },
+                            label = { Text(cur.currencyLabel()) },
+                            leadingIcon = {
+                                if (cur == "XAU") {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gold_bar_24),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
             }
-            Text(
-                text = account.currentBalance.toMoney().formatMoney(account.currency),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (isEditing) {
+        },
+        confirmButton = {
             TextButton(
                 onClick = {
-                    if (editName.isNotBlank()) {
-                        onUpdate(account, editName.trim())
-                        isEditing = false
+                    val cleanName = editName.trim()
+                    val normalizedBalance = editBalance.normalizedBalanceAmount()
+                    if (cleanName.isNotBlank() && normalizedBalance != null) {
+                        onSave(
+                            account.copy(
+                                name = cleanName,
+                                currentBalance = normalizedBalance,
+                                currency = editCurrency,
+                            ),
+                        )
                     }
                 },
-                enabled = editName.isNotBlank(),
+                enabled = canSave,
             ) {
-                Text("ОК")
+                Text("Сохранить")
             }
-            IconButton(
-                onClick = { isEditing = false; editName = account.name },
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_refresh_24),
-                    contentDescription = "Отмена",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onArchive) {
+                    Text("Удалить", color = Color(0xFFE35D4F))
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Отмена")
+                }
             }
-            IconButton(
-                onClick = {
-                    onArchive(account.id)
-                    isEditing = false
-                },
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_delete_24),
-                    contentDescription = "Удалить",
-                    tint = Color(0xFFE35D4F),
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        } else {
-            IconButton(
-                onClick = { isEditing = true },
-                modifier = Modifier.size(28.dp),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_edit_24),
-                    contentDescription = "Изменить",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            IconButton(
-                onClick = { onArchive(account.id) },
-                modifier = Modifier.size(28.dp),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_delete_24),
-                    contentDescription = "Удалить",
-                    tint = Color(0xFFE35D4F),
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        }
-    }
+        },
+    )
 }
 
 private fun pluralItems(count: Int): String {
@@ -2247,16 +2459,15 @@ private fun AddAccountSheet(
                     FilterChip(
                         selected = currency == cur,
                         onClick = { currency = cur },
-                        label = {
-                            Text(
-                                when (cur) {
-                                    "RUB" -> "₽ RUB"
-                                    "USD" -> "$ USD"
-                                    "EUR" -> "€ EUR"
-                                    "XAU" -> "🥇 XAU"
-                                    else -> cur
-                                }
-                            )
+                        label = { Text(cur.currencyLabel()) },
+                        leadingIcon = {
+                            if (cur == "XAU") {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_gold_bar_24),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                         },
                     )
                 }
@@ -2597,7 +2808,7 @@ enum class AssetKind(
     Cash("Наличные", "cash", R.drawable.ic_cash_24, Color(0xFF9A6A24)),
     Deposit("Вклад", "deposit", R.drawable.ic_savings_24, Color(0xFF6D5BD0)),
     Brokerage("Брокер", "brokerage", R.drawable.ic_chart_24, Color(0xFF227C9D)),
-    Metal("Металл", "metal", R.drawable.ic_coin_24, Color(0xFF8A6A12)),
+    Metal("Металл", "metal", R.drawable.ic_gold_bar_24, Color(0xFF8A6A12)),
 }
 
 fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<SectionCard> {
@@ -2750,6 +2961,12 @@ private fun String.normalizedAmount(): String? {
     val normalized = trim().replace(',', '.')
     val value = runCatching { BigDecimal(normalized) }.getOrNull()
     return value?.takeIf { it > BigDecimal.ZERO }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString()
+}
+
+private fun String.normalizedBalanceAmount(): String? {
+    val normalized = trim().replace(',', '.')
+    if (!Regex("-?\\d+(\\.\\d+)?").matches(normalized)) return null
+    return runCatching { BigDecimal(normalized).toPlainString() }.getOrNull()
 }
 
 private fun BigDecimal.formatMoney(currency: String): String {

@@ -10,6 +10,7 @@ from app.api.auth_context import CurrentActor
 from app.authz import AccountOwnershipType, DenialReason, ResourceStatus
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.transactions.repository import SqlAlchemyTransactionRepository
 
 from .repository import AccountRecord, SqlAlchemyAccountRepository
 from .schemas import (
@@ -23,6 +24,7 @@ from .schemas import (
     PageInfo,
 )
 from .service import (
+    AccountConflictError,
     AccountNotFoundOrInaccessible,
     AccountService,
     AccountServiceError,
@@ -39,7 +41,10 @@ def account_service_for_request() -> Iterator[AccountService]:
         return
 
     with sync_session_scope(get_settings()) as session:
-        yield AccountService(SqlAlchemyAccountRepository(session))
+        yield AccountService(
+            SqlAlchemyAccountRepository(session),
+            SqlAlchemyTransactionRepository(session),
+        )
 
 
 AccountServiceDependency = Annotated[AccountService, Depends(account_service_for_request)]
@@ -110,6 +115,13 @@ def _account_error_response(error: AccountServiceError, request_id: str | None) 
             error.reason.value.upper(),
             request_id=request_id,
             message="Invalid account request.",
+        )
+    if isinstance(error, AccountConflictError):
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            error.code,
+            request_id=request_id,
+            message=error.message,
         )
 
     status_code = (

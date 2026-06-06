@@ -14,6 +14,8 @@ from app.authz import (
     canMutateAccount,
     canReadAccount,
 )
+from app.transactions.repository import TransactionRepository
+from app.transactions.repository import repository as transaction_repository
 
 from .repository import AccountRecord, AccountRepository, account_repository
 from .schemas import AccountCreateRequest, AccountUpdateRequest
@@ -31,6 +33,13 @@ class AccountNotFoundOrInaccessible(AccountServiceError):
 
 class AccountValidationError(AccountServiceError):
     pass
+
+
+class AccountConflictError(AccountServiceError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(DenialReason.ACTION_NOT_ALLOWED)
+        self.code = code
+        self.message = message
 
 
 def _authz_account(record: AccountRecord) -> AuthzAccount:
@@ -58,9 +67,18 @@ def _is_visible(actor: Actor, record: AccountRecord) -> bool:
     return canReadAccount(actor, _authz_account(record)).allowed
 
 
+CONFLICTING_UPDATE_CODE = "CONFLICTING_UPDATE"
+CURRENCY_IMMUTABLE_CODE = "ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS"
+
+
 class AccountService:
-    def __init__(self, repository: AccountRepository = account_repository) -> None:
+    def __init__(
+        self,
+        repository: AccountRepository = account_repository,
+        transactions: TransactionRepository = transaction_repository,
+    ) -> None:
         self._repository = repository
+        self._transactions = transactions
 
     def list_accounts(
         self,
@@ -162,10 +180,21 @@ class AccountService:
         decision = canMutateAccount(actor, _authz_account(record))
         if not decision.allowed:
             raise AccountServiceError(decision.reason or DenialReason.ACTION_NOT_ALLOWED)
+        if request.version is not None and request.version != record.version:
+            raise AccountConflictError(CONFLICTING_UPDATE_CODE, "Conflicting update.")
 
         next_record = record
         if request.name is not None:
             next_record = replace(next_record, name=request.name)
+        if request.current_balance is not None:
+            next_record = replace(next_record, current_balance=Decimal(request.current_balance))
+        if request.currency is not None and request.currency != record.currency:
+            if self._transactions.has_for_account(record.id):
+                raise AccountConflictError(
+                    CURRENCY_IMMUTABLE_CODE,
+                    "Account currency cannot be changed after transactions exist.",
+                )
+            next_record = replace(next_record, currency=request.currency)
         if request.account_type is not None:
             next_record = replace(next_record, account_type=str(request.account_type))
         if request.status is not None:
