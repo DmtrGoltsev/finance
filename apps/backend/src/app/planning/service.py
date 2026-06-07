@@ -46,6 +46,8 @@ from .schemas import (
 
 MONEY_QUANT = Decimal("0.0001")
 ZERO_MONEY = Decimal("0.0000")
+ACCOUNT_BACKED_TARGET_TYPES = frozenset({"account", "asset"})
+ASSET_ACCOUNT_TYPES = frozenset({"deposit", "brokerage", "metal", "other"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,7 +449,7 @@ class PlanningService:
                 attention_reason=None,
             )
 
-        if target_type == "account":
+        if target_type in ACCOUNT_BACKED_TARGET_TYPES:
             account = self._accounts.get(target_id)
             if account is None or not canReadAccount(actor, _authz_account(account)).allowed:
                 raise PlanningReferencedResourceError()
@@ -455,9 +457,11 @@ class PlanningService:
                 raise PlanningReferencedResourceError()
             if account.currency != plan.currency or not _account_in_plan_scope(account, plan):
                 raise PlanningReferencedResourceError()
+            if target_type == "asset" and account.account_type not in ASSET_ACCOUNT_TYPES:
+                raise PlanningReferencedResourceError()
             return _ResolvedTarget(
                 target_id=account.id,
-                snapshot=_account_snapshot(account),
+                snapshot=_account_snapshot(account, target_type=target_type),
                 requires_attention=False,
                 attention_reason=None,
             )
@@ -671,9 +675,9 @@ def _category_snapshot(category: CategoryRecord) -> dict[str, Any]:
     }
 
 
-def _account_snapshot(account: AccountRecord) -> dict[str, Any]:
+def _account_snapshot(account: AccountRecord, *, target_type: str = "account") -> dict[str, Any]:
     return {
-        "targetType": "account",
+        "targetType": target_type,
         "id": account.id,
         "name": account.name,
         "accountType": account.account_type,

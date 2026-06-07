@@ -850,7 +850,7 @@ class LiveFinanceApiClient(
         this.request(
             path = "/api/v1/planning/plans/${planId.urlEncodePath()}/allocations",
             method = "POST",
-            body = request.toJson().toString(),
+            body = request.toJsonForApi().toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
         ).planningAllocationObject().let(::parsePlanningAllocation)
     }
@@ -1120,11 +1120,12 @@ private fun parsePlanningIncomeSource(json: JSONObject): PlanningIncomeSource {
 }
 
 private fun parsePlanningAllocation(json: JSONObject): PlanningAllocation {
+    val targetType = json.planningAllocationTargetType()
     return PlanningAllocation(
         id = json.optString("id").ifBlank { json.optString("allocationId") },
         planId = json.optString("planId"),
-        targetType = json.optString("targetType"),
-        targetId = json.optNullableString("targetId"),
+        targetType = targetType,
+        targetId = json.planningAllocationTargetId(targetType),
         targetSnapshot = json.optNullableJsonString("targetSnapshot"),
         requiresAttention = json.optBoolean("requiresAttention", false),
         attentionReason = json.optNullableString("attentionReason"),
@@ -1189,7 +1190,7 @@ internal fun PlanningIncomeSourceUpdateRequest.toJsonForApi(): JSONObject {
     }
 }
 
-private fun PlanningAllocationCreateRequest.toJson(): JSONObject {
+internal fun PlanningAllocationCreateRequest.toJsonForApi(): JSONObject {
     return JSONObject()
         .put("targetType", targetType)
         .put("targetId", targetId)
@@ -1343,6 +1344,27 @@ private fun JSONObject.optNullableJsonString(name: String): String? {
     return when (value) {
         is JSONObject, is JSONArray -> value.toString()
         else -> value.toString().takeIf { it.isNotBlank() && it != "null" }
+    }
+}
+
+private fun JSONObject.planningAllocationTargetType(): String {
+    val explicit = optString("targetType").takeIf { it.isNotBlank() && it != "null" }
+    return explicit ?: when {
+        optNullableString("assetId") != null -> "asset"
+        optNullableString("accountId") != null -> "account"
+        optNullableString("categoryId") != null -> "expense_category"
+        else -> ""
+    }
+}
+
+private fun JSONObject.planningAllocationTargetId(targetType: String): String? {
+    return optNullableString("targetId") ?: when (targetType) {
+        "asset" -> optNullableString("assetId")
+        "account" -> optNullableString("accountId")
+        "expense_category" -> optNullableString("categoryId")
+        else -> optNullableString("assetId")
+            ?: optNullableString("accountId")
+            ?: optNullableString("categoryId")
     }
 }
 

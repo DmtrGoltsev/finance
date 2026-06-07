@@ -891,13 +891,13 @@ fun FinanceApp(
                         }
                         result
                     },
-                    onCreatePlanningAccount = { name, currency, mode ->
+                    onCreatePlanningAccount = { name, currency, accountType, mode ->
                         val result = withContext(Dispatchers.IO) {
                             apiClient.createAccount(
                                 name = name,
                                 currency = currency,
                                 initialBalance = "0",
-                                accountType = "bank",
+                                accountType = accountType,
                                 householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
                             )
                         }
@@ -1609,7 +1609,7 @@ private fun LazyListScope.analyticsContent(
     onModeSelected: (FinanceMode) -> Unit,
     onSubsectionSelected: (AnalyticsSubsection) -> Unit,
     onCreatePlanningCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
-    onCreatePlanningAccount: suspend (String, String, FinanceMode) -> ApiResult<AccountSummary>,
+    onCreatePlanningAccount: suspend (String, String, String, FinanceMode) -> ApiResult<AccountSummary>,
     onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
 ) {
     val view = dashboard.viewFor(selectedMode)

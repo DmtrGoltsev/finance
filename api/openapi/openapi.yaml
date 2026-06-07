@@ -1030,7 +1030,7 @@ paths:
       tags: [Planning]
       operationId: createPlanningAllocation
       summary: Add amount or percent allocation.
-      description: Target must be a visible same-scope expense category or same-currency account. Overallocated plans are allowed and surfaced through derived flags.
+      description: Target must be a visible same-scope expense category, same-currency account, or same-currency account-backed asset/investment. Overallocated plans are allowed and surfaced through derived flags.
       parameters:
         - $ref: '#/components/parameters/PlanId'
       requestBody:
@@ -1055,7 +1055,7 @@ paths:
       tags: [Planning]
       operationId: copyPlanningPlan
       summary: Copy plan to another month.
-      description: Copies income sources and allocations, preserving allocation mode/value. Missing or inaccessible targets become requiresAttention rows with targetSnapshot; no category/account/transaction is auto-created.
+      description: Copies income sources and allocations, preserving allocation mode/value. Missing or inaccessible targets become requiresAttention rows with targetSnapshot; no category/account/asset/transaction is auto-created.
       parameters:
         - $ref: '#/components/parameters/PlanId'
       requestBody:
@@ -1429,8 +1429,8 @@ components:
       enum: [planned, confirmed]
     AllocationTargetType:
       type: string
-      enum: [expense_category, account]
-      description: "`expense_category` targets expense categories; `account` also covers asset/investment account targets."
+      enum: [expense_category, account, asset]
+      description: "`expense_category` targets expense categories; `account` preserves existing account targets; `asset` explicitly targets an account-backed asset or investment."
     AllocationMode:
       type: string
       enum: [amount, percent]
@@ -1911,7 +1911,7 @@ components:
         targetSnapshot:
           type: object
           additionalProperties: true
-          description: Non-authoritative display snapshot of the category/account target at allocation creation or copy time.
+          description: Non-authoritative display snapshot of the category/account/asset target at allocation creation or copy time.
         requiresAttention:
           type: boolean
         attentionReason:

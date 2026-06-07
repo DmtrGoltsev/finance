@@ -92,6 +92,11 @@ class ModelMetadataTests(unittest.TestCase):
             "target_attention_shape",
             ["target_id", "requires_attention"],
         )
+        self.assertCheckContains(
+            "planning_allocations",
+            "target_type_valid",
+            ["expense_category", "account", "asset"],
+        )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:
         self.assertCheckContains(

@@ -140,7 +140,7 @@ fun PlanningUi(
     selectedMode: FinanceMode,
     onModeSelected: (FinanceMode) -> Unit,
     onCreateCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
-    onCreateAccount: suspend (String, String, FinanceMode) -> ApiResult<AccountSummary>,
+    onCreateAccount: suspend (String, String, String, FinanceMode) -> ApiResult<AccountSummary>,
     onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -154,6 +154,7 @@ fun PlanningUi(
     var message by rememberSaveable { mutableStateOf<String?>(null) }
     var showCategorySheet by rememberSaveable { mutableStateOf(false) }
     var showAccountSheet by rememberSaveable { mutableStateOf(false) }
+    var createAccountTargetType by rememberSaveable { mutableStateOf(TARGET_ACCOUNT) }
 
     fun loadPlanningState(successMessage: String? = null) {
         val scopeInfo = resolvedScope ?: return
@@ -402,7 +403,10 @@ fun PlanningUi(
                 planMode = resolvedScope.mode,
                 isLoading = isLoading,
                 onShowCreateCategory = { showCategorySheet = true },
-                onShowCreateAccount = { showAccountSheet = true },
+                onShowCreateAccount = { targetType ->
+                    createAccountTargetType = targetType
+                    showAccountSheet = true
+                },
                 onCreate = { request ->
                     coroutineScope.launch {
                         isLoading = true
@@ -502,14 +506,15 @@ fun PlanningUi(
         PlanningCreateAccountSheet(
             mode = resolvedScope.mode,
             currency = currency,
+            targetType = createAccountTargetType,
             onDismiss = { showAccountSheet = false },
-            onCreate = { name, accountCurrency ->
+            onCreate = { name, accountCurrency, accountType ->
                 coroutineScope.launch {
                     isLoading = true
-                    when (val result = onCreateAccount(name, accountCurrency, resolvedScope.mode)) {
+                    when (val result = onCreateAccount(name, accountCurrency, accountType, resolvedScope.mode)) {
                         is ApiResult.Success -> {
                             showAccountSheet = false
-                            message = "Счёт «${result.value.planningDisplayName()}» создан. Выберите его в целях после обновления."
+                            message = "${createAccountTargetType.localizedCreatedTargetLabel()} «${result.value.planningDisplayName()}» создан. Выберите его в целях после обновления."
                             isLoading = false
                         }
                         is ApiResult.Failure -> {
@@ -815,7 +820,7 @@ private fun AllocationsCard(
     planMode: FinanceMode,
     isLoading: Boolean,
     onShowCreateCategory: () -> Unit,
-    onShowCreateAccount: () -> Unit,
+    onShowCreateAccount: (String) -> Unit,
     onCreate: (PlanningAllocationCreateRequest) -> Unit,
     onUpdate: (PlanningAllocation, PlanningAllocationUpdateRequest) -> Unit,
     onDelete: (PlanningAllocation) -> Unit,
@@ -824,11 +829,7 @@ private fun AllocationsCard(
     val categories = dashboard.planningCategories(planMode)
     val accounts = dashboard.planningAccounts(planMode)
     val targetOptions = remember(draft.targetType, categories, accounts) {
-        if (draft.targetType == TARGET_EXPENSE_CATEGORY) {
-            categories.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-        } else {
-            accounts.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-        }
+        planningTargetOptions(draft.targetType, categories, accounts)
     }
     LaunchedEffect(draft.targetType, targetOptions) {
         if (draft.targetId.isBlank() && targetOptions.isNotEmpty()) {
@@ -888,12 +889,12 @@ private fun PlanningAllocationEditor(
     targetOptions: List<PlanningTargetOption>,
     onDraftChange: (PlanningAllocationDraft) -> Unit,
     onShowCreateCategory: () -> Unit,
-    onShowCreateAccount: () -> Unit,
+    onShowCreateAccount: (String) -> Unit,
     showCreateButtons: Boolean = true,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf(TARGET_EXPENSE_CATEGORY, TARGET_ACCOUNT)) { targetType ->
+            items(listOf(TARGET_EXPENSE_CATEGORY, TARGET_ACCOUNT, TARGET_ASSET)) { targetType ->
                 FilterChip(
                     selected = draft.targetType == targetType,
                     onClick = { onDraftChange(draft.copy(targetType = targetType, targetId = "")) },
@@ -904,15 +905,21 @@ private fun PlanningAllocationEditor(
         if (showCreateButtons) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                    onClick = if (draft.targetType == TARGET_EXPENSE_CATEGORY) onShowCreateCategory else onShowCreateAccount,
+                    onClick = {
+                        if (draft.targetType == TARGET_EXPENSE_CATEGORY) {
+                            onShowCreateCategory()
+                        } else {
+                            onShowCreateAccount(draft.targetType)
+                        }
+                    },
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(if (draft.targetType == TARGET_EXPENSE_CATEGORY) "Новая категория" else "Новый счёт")
+                    Text(draft.targetType.localizedCreateButtonLabel())
                 }
             }
         }
         if (targetOptions.isEmpty()) {
-            Text("Целей этого типа пока нет. Создайте категорию или счёт перед сохранением распределения.", style = MaterialTheme.typography.bodySmall)
+            Text("Целей этого типа пока нет. Создайте категорию, счёт или актив перед сохранением распределения.", style = MaterialTheme.typography.bodySmall)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(targetOptions) { option ->
@@ -972,11 +979,7 @@ private fun AllocationRow(
             ),
         )
     }
-    val targetOptions = if (draft.targetType == TARGET_EXPENSE_CATEGORY) {
-        categories.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-    } else {
-        accounts.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-    }
+    val targetOptions = planningTargetOptions(draft.targetType, categories, accounts)
 
     Column(
         modifier = Modifier
@@ -1020,7 +1023,7 @@ private fun AllocationRow(
                 targetOptions = targetOptions,
                 onDraftChange = { draft = it },
                 onShowCreateCategory = {},
-                onShowCreateAccount = {},
+                onShowCreateAccount = { _ -> },
                 showCreateButtons = false,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1136,11 +1139,14 @@ private fun PlanningCreateCategorySheet(
 private fun PlanningCreateAccountSheet(
     mode: FinanceMode,
     currency: String,
+    targetType: String,
     onDismiss: () -> Unit,
-    onCreate: (String, String) -> Unit,
+    onCreate: (String, String, String) -> Unit,
 ) {
+    val accountTypeOptions = remember(targetType) { targetType.planningAccountTypeOptions() }
     var name by rememberSaveable { mutableStateOf("") }
     var accountCurrency by rememberSaveable(currency) { mutableStateOf(currency) }
+    var accountType by rememberSaveable(targetType) { mutableStateOf(accountTypeOptions.first().apiValue) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1149,14 +1155,23 @@ private fun PlanningCreateAccountSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Новый счёт • ${mode.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${targetType.localizedNewTargetTitle()} • ${mode.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Название счёта") },
+                label = { Text(targetType.localizedNameLabel()) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(accountTypeOptions) { option ->
+                    FilterChip(
+                        selected = accountType == option.apiValue,
+                        onClick = { accountType = option.apiValue },
+                        label = { Text(option.title) },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = accountCurrency,
                 onValueChange = { accountCurrency = it.uppercase(Locale.getDefault()).take(3) },
@@ -1169,7 +1184,7 @@ private fun PlanningCreateAccountSheet(
                     Text("Отмена")
                 }
                 Button(
-                    onClick = { onCreate(name.trim(), accountCurrency.ifBlank { currency }) },
+                    onClick = { onCreate(name.trim(), accountCurrency.ifBlank { currency }, accountType) },
                     enabled = name.isNotBlank(),
                     modifier = Modifier.weight(1f),
                 ) {
@@ -1239,6 +1254,11 @@ private data class PlanningTargetOption(
     val title: String,
 )
 
+private data class PlanningAccountTypeOption(
+    val apiValue: String,
+    val title: String,
+)
+
 private data class PlanningAllocationDraft(
     val targetType: String = TARGET_EXPENSE_CATEGORY,
     val targetId: String = "",
@@ -1259,6 +1279,7 @@ private data class PlanningAllocationDraft(
 
 private const val TARGET_EXPENSE_CATEGORY = "expense_category"
 private const val TARGET_ACCOUNT = "account"
+private const val TARGET_ASSET = "asset"
 private const val ALLOCATION_AMOUNT = "amount"
 private const val ALLOCATION_PERCENT = "percent"
 
@@ -1291,6 +1312,25 @@ private fun FinanceDashboard?.planningAccounts(mode: FinanceMode): List<AccountS
         }
 }
 
+private fun planningTargetOptions(
+    targetType: String,
+    categories: List<CategorySummary>,
+    accounts: List<AccountSummary>,
+): List<PlanningTargetOption> {
+    return when (targetType) {
+        TARGET_EXPENSE_CATEGORY -> categories.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
+        TARGET_ASSET -> accounts
+            .filter { it.isPlanningAssetTarget() }
+            .map { PlanningTargetOption(it.id, it.planningDisplayName()) }
+        else -> accounts
+            .map { PlanningTargetOption(it.id, it.planningDisplayName()) }
+    }
+}
+
+private fun AccountSummary.isPlanningAssetTarget(): Boolean {
+    return type in setOf("deposit", "brokerage", "metal", "other", "investment", "asset")
+}
+
 private fun FinanceDashboard?.planningCategories(mode: FinanceMode): List<CategorySummary> {
     return this?.categories.orEmpty()
         .filter { it.status == "active" && it.type == "expense" }
@@ -1315,8 +1355,47 @@ private fun String.localizedPlanningScope(): String = when (this) {
 
 private fun String.localizedTargetType(): String = when (this) {
     TARGET_EXPENSE_CATEGORY -> "Категория расходов"
-    TARGET_ACCOUNT -> "Счёт или актив"
+    TARGET_ACCOUNT -> "Счёт"
+    TARGET_ASSET -> "Актив/инвестиция"
     else -> this
+}
+
+private fun String.localizedCreateButtonLabel(): String = when (this) {
+    TARGET_EXPENSE_CATEGORY -> "Новая категория"
+    TARGET_ASSET -> "Новый актив"
+    else -> "Новый счёт"
+}
+
+private fun String.localizedCreatedTargetLabel(): String = when (this) {
+    TARGET_ASSET -> "Актив"
+    else -> "Счёт"
+}
+
+private fun String.localizedNewTargetTitle(): String = when (this) {
+    TARGET_ASSET -> "Новый актив"
+    else -> "Новый счёт"
+}
+
+private fun String.localizedNameLabel(): String = when (this) {
+    TARGET_ASSET -> "Название актива"
+    else -> "Название счёта"
+}
+
+private fun String.planningAccountTypeOptions(): List<PlanningAccountTypeOption> {
+    return if (this == TARGET_ASSET) {
+        listOf(
+            PlanningAccountTypeOption("brokerage", "Брокер"),
+            PlanningAccountTypeOption("deposit", "Вклад"),
+            PlanningAccountTypeOption("metal", "Металл"),
+            PlanningAccountTypeOption("other", "Другое"),
+        )
+    } else {
+        listOf(
+            PlanningAccountTypeOption("bank", "Банк"),
+            PlanningAccountTypeOption("card", "Карта"),
+            PlanningAccountTypeOption("cash", "Наличные"),
+        )
+    }
 }
 
 private fun String.localizedAllocationMode(): String = when (this) {

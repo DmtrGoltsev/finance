@@ -239,6 +239,16 @@ private class FakeFinanceApiClient(
         return ApiResult.Failure("unused")
     }
 
+    override suspend fun createAccount(
+        name: String,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        householdId: String?,
+    ): ApiResult<AccountSummary> {
+        return ApiResult.Failure("unused")
+    }
+
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> {
         return ApiResult.Failure("unused")
     }
@@ -252,6 +262,14 @@ private class FakeFinanceApiClient(
     }
 
     override suspend fun createDemoCategory(
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> {
+        return ApiResult.Failure("unused")
+    }
+
+    override suspend fun createCategory(
+        name: String,
         householdId: String?,
         categoryType: String,
     ): ApiResult<CategorySummary> {

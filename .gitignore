@@ -109,3 +109,21 @@ packages/generated/**
 !**/README.md
 artifacts/evidence/**
 security/scans/**
+
+# Local QA/browser evidence. Keep raw browser profiles, sessions, screenshots,
+# XML dumps, emulator logs, and credential probe outputs out of commits.
+qa-artifacts/**
+MVP_EVIDENCE/**/chrome-profile*/**
+MVP_EVIDENCE/prod-*/qa-artifacts/**
+MVP_EVIDENCE/prod-*/test-results/**
+MVP_EVIDENCE/prod-*/traces/**
+MVP_EVIDENCE/prod-*/*.session
+MVP_EVIDENCE/**/logs/**
+MVP_EVIDENCE/**/screenshots/**
+MVP_EVIDENCE/**/xml/**
+MVP_EVIDENCE/**/*cookie*
+MVP_EVIDENCE/**/*credential*
+MVP_EVIDENCE/**/*password*
+MVP_EVIDENCE/**/*secret*
+MVP_EVIDENCE/**/*session*
+MVP_EVIDENCE/**/*token*

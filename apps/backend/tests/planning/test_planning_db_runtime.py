@@ -183,6 +183,16 @@ def planning_graph(
             owner_user_id=str(owner_id),
             household_id=None,
         )
+        owner_asset_account = accounts.create(
+            name="Owner Brokerage",
+            account_type="brokerage",
+            ownership_type=AccountOwnershipType.PERSONAL,
+            currency="RUB",
+            initial_balance=Decimal("1000.0000"),
+            created_by_user_id=str(owner_id),
+            owner_user_id=str(owner_id),
+            household_id=None,
+        )
         member_account = accounts.create(
             name="Member Cash",
             account_type="cash",
@@ -255,6 +265,7 @@ def planning_graph(
             "former": _actor(former_id, ((household_id, MembershipStatus.LEFT),)),
             "household_id": str(household_id),
             "owner_account_id": owner_account.id,
+            "owner_asset_account_id": owner_asset_account.id,
             "member_account_id": member_account.id,
             "shared_account_id": shared_account.id,
             "usd_account_id": usd_account.id,
@@ -394,6 +405,102 @@ def test_personal_plan_totals_confirm_copy_and_attention(
         "250.0000",
         "80.0000",
     }
+
+
+def test_asset_target_uses_account_backing_summary_and_copy_attention(
+    planning_graph: dict[str, Any],
+) -> None:
+    owner = planning_graph["owner"]
+
+    with _client_for_actor(owner) as client:
+        created_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2026-12", "currency": "RUB"},
+        )
+        assert created_plan.status_code == 201, created_plan.text
+        plan_id = created_plan.json()["data"]["id"]
+
+        income = client.post(
+            f"/api/v1/planning/plans/{plan_id}/income-sources",
+            json={
+                "amount": "1000.0000",
+                "source": "Salary",
+                "dayOfMonth": 15,
+            },
+        )
+        asset_allocation = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "asset",
+                "targetId": planning_graph["owner_asset_account_id"],
+                "allocationMode": "amount",
+                "allocationValue": "400.0000",
+            },
+        )
+        wrong_currency_asset = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "asset",
+                "targetId": planning_graph["usd_account_id"],
+                "allocationMode": "amount",
+                "allocationValue": "1.0000",
+            },
+        )
+        cash_as_asset = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "asset",
+                "targetId": planning_graph["owner_account_id"],
+                "allocationMode": "amount",
+                "allocationValue": "1.0000",
+            },
+        )
+        fetched = client.get(f"/api/v1/planning/plans/{plan_id}")
+        history = client.get("/api/v1/planning/plans/history", params={"scope": "personal"})
+
+    assert income.status_code == 201, income.text
+    assert asset_allocation.status_code == 201, asset_allocation.text
+    asset_data = asset_allocation.json()["data"]
+    assert asset_data["targetType"] == "asset"
+    assert asset_data["targetId"] == planning_graph["owner_asset_account_id"]
+    assert asset_data["targetSnapshot"]["targetType"] == "asset"
+    assert asset_data["targetSnapshot"]["accountType"] == "brokerage"
+    assert asset_data["calculatedAmount"] == "400.0000"
+    assert wrong_currency_asset.status_code == 404
+    assert cash_as_asset.status_code == 404
+    assert fetched.status_code == 200, fetched.text
+    summary = fetched.json()["data"]["summary"]
+    assert summary["totalAllocatedAmount"] == "400.0000"
+    assert summary["unallocatedAmount"] == "600.0000"
+    assert summary["underallocated"] is True
+    assert summary["overallocated"] is False
+    assert history.status_code == 200, history.text
+    assert plan_id in {item["id"] for item in history.json()["items"]}
+
+    engine = planning_graph["engine"]
+    with engine.begin() as connection:
+        session = Session(bind=connection, expire_on_commit=False, future=True)
+        session.execute(
+            update(Account)
+            .where(Account.id == UUID(str(planning_graph["owner_asset_account_id"])))
+            .values(record_status="deleted", updated_at=BASE_TIME)
+        )
+        session.flush()
+
+    with _client_for_actor(owner) as client:
+        copied = client.post(
+            f"/api/v1/planning/plans/{plan_id}/copy",
+            json={"targetMonth": "2027-01"},
+        )
+
+    assert copied.status_code == 201, copied.text
+    copied_allocation = copied.json()["data"]["allocations"][0]
+    assert copied_allocation["targetType"] == "asset"
+    assert copied_allocation["targetId"] is None
+    assert copied_allocation["requiresAttention"] is True
+    assert copied_allocation["attentionReason"] == "TARGET_MISSING_OR_INACCESSIBLE"
+    assert copied_allocation["targetSnapshot"]["targetType"] == "asset"
+    assert copied_allocation["targetSnapshot"]["accountType"] == "brokerage"
 
 
 @pytest.mark.parametrize("bad_amount", ["0.0000", "-1.0000"])
