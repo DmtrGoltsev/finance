@@ -217,10 +217,11 @@ def validate_canonical_uuid_graph(graph: Mapping[str, Any]) -> None:
         if contracts.get("sourceType") != ["manual"]:
             errors.append("contracts.sourceType must be ['manual']")
         if contracts.get("reportModes") != [
+            "personal",
             "shared_family_report",
             "combined_viewer_overview",
         ]:
-            errors.append("contracts.reportModes must contain only W3 MVP modes")
+            errors.append("contracts.reportModes must contain only supported MVP report modes")
         if contracts.get("transferScopes") != [
             "personal_same_owner",
             "household_same_household",

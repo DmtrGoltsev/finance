@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.accounts.repository import SqlAlchemyAccountRepository
 from app.api.auth_context import CurrentActor
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.authz import DenialReason
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.config import get_settings
@@ -20,8 +21,10 @@ from app.transactions.schemas import PageInfo
 from .schemas import (
     AccountBalanceDto,
     AccountBalanceGroupDto,
+    AssetCategoryBalanceGroupDto,
     CashFlowPointDto,
     CategoryBreakdownItemDto,
+    InvestmentTotalDto,
     MoneyTotalDto,
     NetWorthTotalDto,
     ReportAccountBalancesDto,
@@ -42,6 +45,7 @@ from .schemas import (
 )
 from .service import (
     AccountBalanceGroup,
+    AssetCategoryBalanceGroup,
     CashFlowPoint,
     CategoryBreakdownRow,
     ReportContext,
@@ -68,6 +72,7 @@ def report_service_for_request() -> Iterator[ReportService]:
             SqlAlchemyTransactionRepository(session),
             SqlAlchemyAccountRepository(session),
             SqlAlchemyCategoryRepository(session),
+            SqlAlchemyAssetCategoryRepository(session),
         )
 
 
@@ -134,7 +139,7 @@ async def get_report_summary(
     actor: CurrentActor,
     svc: ReportServiceDependency,
     reportMode: ReportMode,
-    householdId: Annotated[str, Query(min_length=1, max_length=128)],
+    householdId: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     startDate: Annotated[str | None, Query(min_length=1)] = None,
     endDate: Annotated[str | None, Query(min_length=1)] = None,
     timezone: Annotated[str, Query(min_length=1, max_length=80)] = "UTC",
@@ -157,14 +162,36 @@ async def get_report_summary(
             transaction_types=transactionTypes,
             currency=currency,
         )
+        summary_totals = svc.summary_totals(context)
+        summary_currencies = {row[0] for row in summary_totals}
+        investments_by_currency = dict(svc.investment_totals(context))
         return ReportSummaryEnvelope(
             data=ReportSummaryDto(
                 scope=_scope(context),
                 period=_period(context),
                 totals_by_currency=[
-                    _money_total(currency, income, expense, transfer, net_cash_flow)
+                    _money_total(
+                        currency,
+                        income,
+                        expense,
+                        transfer,
+                        net_cash_flow,
+                        investments_by_currency.get(currency, Decimal("0.0000")),
+                    )
                     for currency, income, expense, transfer, net_cash_flow
-                    in svc.summary_totals(context)
+                    in summary_totals
+                ]
+                + [
+                    _money_total(
+                        currency,
+                        Decimal("0.0000"),
+                        Decimal("0.0000"),
+                        Decimal("0.0000"),
+                        Decimal("0.0000"),
+                        investments,
+                    )
+                    for currency, investments in sorted(investments_by_currency.items())
+                    if currency not in summary_currencies
                 ],
             )
         )
@@ -182,7 +209,7 @@ async def get_report_category_breakdown(
     actor: CurrentActor,
     svc: ReportServiceDependency,
     reportMode: ReportMode,
-    householdId: Annotated[str, Query(min_length=1, max_length=128)],
+    householdId: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     startDate: Annotated[str | None, Query(min_length=1)] = None,
     endDate: Annotated[str | None, Query(min_length=1)] = None,
     timezone: Annotated[str, Query(min_length=1, max_length=80)] = "UTC",
@@ -229,7 +256,7 @@ async def get_report_account_balances(
     actor: CurrentActor,
     svc: ReportServiceDependency,
     reportMode: ReportMode,
-    householdId: Annotated[str, Query(min_length=1, max_length=128)],
+    householdId: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     startDate: Annotated[str | None, Query(min_length=1)] = None,
     endDate: Annotated[str | None, Query(min_length=1)] = None,
     timezone: Annotated[str, Query(min_length=1, max_length=80)] = "UTC",
@@ -265,6 +292,7 @@ async def get_report_account_balances(
                             if account.owner_user_id == actor.user_id
                             else None
                         ),
+                        asset_category_id=account.asset_category_id,
                         currency=account.currency,
                         current_balance=account.current_balance,
                         balance_as_of=context.generated_at,
@@ -277,9 +305,20 @@ async def get_report_account_balances(
                 assets_by_type=[
                     _account_balance_group(group) for group in svc.balance_groups(context)
                 ],
+                asset_category_groups=[
+                    _asset_category_balance_group(group, actor_user_id=actor.user_id)
+                    for group in svc.asset_category_groups(context)
+                ],
+                legacy_asset_type_groups=[
+                    _account_balance_group(group) for group in svc.legacy_asset_type_groups(context)
+                ],
                 totals_by_currency=[
                     NetWorthTotalDto(currency=currency, net_worth_total=amount)
                     for currency, amount in svc.net_worth_totals(context)
+                ],
+                investments_by_currency=[
+                    InvestmentTotalDto(currency=currency, investments_total=amount)
+                    for currency, amount in svc.investment_totals(context)
                 ],
             )
         )
@@ -297,7 +336,7 @@ async def get_report_cash_flow(
     actor: CurrentActor,
     svc: ReportServiceDependency,
     reportMode: ReportMode,
-    householdId: Annotated[str, Query(min_length=1, max_length=128)],
+    householdId: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     startDate: Annotated[str | None, Query(min_length=1)] = None,
     endDate: Annotated[str | None, Query(min_length=1)] = None,
     timezone: Annotated[str, Query(min_length=1, max_length=80)] = "UTC",
@@ -344,7 +383,7 @@ async def get_report_transactions(
     actor: CurrentActor,
     svc: ReportServiceDependency,
     reportMode: ReportMode,
-    householdId: Annotated[str, Query(min_length=1, max_length=128)],
+    householdId: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     startDate: Annotated[str | None, Query(min_length=1)] = None,
     endDate: Annotated[str | None, Query(min_length=1)] = None,
     timezone: Annotated[str, Query(min_length=1, max_length=80)] = "UTC",
@@ -393,7 +432,7 @@ def _context(
     *,
     actor,
     report_mode: ReportMode,
-    household_id: str,
+    household_id: str | None,
     start_date: str | None,
     end_date: str | None,
     timezone: str,
@@ -408,10 +447,13 @@ def _context(
     end = _date(end_date)
     if start is not None and end is not None and start > end:
         raise ReportValidationError(DenialReason.VALIDATION_FAILED, code="INVALID_DATE_RANGE")
+    if report_mode != ReportMode.PERSONAL and household_id is None:
+        raise ReportValidationError(DenialReason.VALIDATION_FAILED, code="HOUSEHOLD_ID_REQUIRED")
+    effective_household_id = None if report_mode == ReportMode.PERSONAL else household_id
 
     query = ReportQuery(
         report_mode=str(report_mode),
-        household_id=household_id,
+        household_id=effective_household_id,
         start=date_boundary(start, end=False),
         end=date_boundary(end, end=True),
         start_date=start,
@@ -483,6 +525,7 @@ def _money_total(
     expense: Decimal,
     transfer: Decimal,
     net_cash_flow: Decimal,
+    investments_total: Decimal = Decimal("0.0000"),
 ) -> MoneyTotalDto:
     return MoneyTotalDto(
         currency=currency,
@@ -491,6 +534,7 @@ def _money_total(
         transfer_total=transfer,
         net_cash_flow=net_cash_flow,
         net_total=net_cash_flow,
+        investments_total=investments_total,
     )
 
 
@@ -525,4 +569,26 @@ def _account_balance_group(group: AccountBalanceGroup) -> AccountBalanceGroupDto
         currency=group.currency,
         current_balance_total=group.current_balance_total,
         account_count=group.account_count,
+    )
+
+
+def _asset_category_balance_group(
+    group: AssetCategoryBalanceGroup,
+    *,
+    actor_user_id: str | None,
+) -> AssetCategoryBalanceGroupDto:
+    category = group.asset_category
+    return AssetCategoryBalanceGroupDto(
+        asset_category_id=category.id,
+        asset_category_name=category.name,
+        asset_type=category.asset_type.value,
+        scope_type=category.scope_type.value,
+        household_id=category.household_id,
+        owner_user_id=category.owner_user_id if category.owner_user_id == actor_user_id else None,
+        currency=category.currency,
+        manual_amount=category.manual_amount,
+        linked_accounts_total=group.linked_accounts_total,
+        current_balance_total=group.current_balance_total,
+        account_count=group.account_count,
+        is_investment=category.is_investment,
     )

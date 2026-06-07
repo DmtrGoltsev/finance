@@ -29,6 +29,7 @@ class ApiModel(BaseModel):
 
 
 class ReportMode(StrEnum):
+    PERSONAL = "personal"
     SHARED_FAMILY_REPORT = "shared_family_report"
     COMBINED_VIEWER_OVERVIEW = "combined_viewer_overview"
 
@@ -58,7 +59,7 @@ class ReportPeriodDto(ApiModel):
 
 class ReportScopeDto(ApiModel):
     viewer_user_id: ResourceId
-    household_id: ResourceId
+    household_id: ResourceId | None = None
     report_mode: ReportMode
     generated_at: datetime
 
@@ -70,6 +71,7 @@ class MoneyTotalDto(ApiModel):
     transfer_total: MoneyAmount
     net_cash_flow: MoneyAmount
     net_total: MoneyAmount
+    investments_total: MoneyAmount = Decimal("0.0000")
 
 
 class ReportSummaryDto(ApiModel):
@@ -103,6 +105,7 @@ class AccountBalanceDto(ApiModel):
     ownership_type: Annotated[str, StringConstraints(max_length=20)]
     household_id: ResourceId | None = None
     owner_user_id: ResourceId | None = None
+    asset_category_id: ResourceId | None = None
     currency: CurrencyCode
     current_balance: MoneyAmount
     balance_as_of: datetime
@@ -115,9 +118,29 @@ class AccountBalanceGroupDto(ApiModel):
     account_count: Annotated[int, Field(ge=0)]
 
 
+class AssetCategoryBalanceGroupDto(ApiModel):
+    asset_category_id: ResourceId
+    asset_category_name: Annotated[str, StringConstraints(max_length=200)]
+    asset_type: Annotated[str, StringConstraints(max_length=40)]
+    scope_type: Annotated[str, StringConstraints(max_length=20)]
+    household_id: ResourceId | None = None
+    owner_user_id: ResourceId | None = None
+    currency: CurrencyCode
+    manual_amount: MoneyAmount
+    linked_accounts_total: MoneyAmount
+    current_balance_total: MoneyAmount
+    account_count: Annotated[int, Field(ge=0)]
+    is_investment: bool
+
+
 class NetWorthTotalDto(ApiModel):
     currency: CurrencyCode
     net_worth_total: MoneyAmount
+
+
+class InvestmentTotalDto(ApiModel):
+    currency: CurrencyCode
+    investments_total: MoneyAmount
 
 
 class ReportAccountBalancesDto(ApiModel):
@@ -127,7 +150,10 @@ class ReportAccountBalancesDto(ApiModel):
     items: list[AccountBalanceDto]
     balance_groups: list[AccountBalanceGroupDto]
     assets_by_type: list[AccountBalanceGroupDto]
+    asset_category_groups: list[AssetCategoryBalanceGroupDto]
+    legacy_asset_type_groups: list[AccountBalanceGroupDto]
     totals_by_currency: list[NetWorthTotalDto]
+    investments_by_currency: list[InvestmentTotalDto]
 
 
 class CashFlowPointDto(ApiModel):

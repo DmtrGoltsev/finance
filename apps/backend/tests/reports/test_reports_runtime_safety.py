@@ -199,6 +199,172 @@ def test_report_totals_keep_transfers_and_asset_ops_out_of_spending(
     } == {"expense"}
 
 
+def test_account_balances_include_asset_categories_manual_amount_and_investments(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    params = _params(transaction_graph, "shared_family_report")
+
+    with _client_for_actor(owner) as client:
+        category = client.post(
+            "/api/v1/asset-categories",
+            json={
+                "name": "Shared Investments",
+                "scopeType": "household",
+                "householdId": transaction_graph["households"]["hh_ab"],
+                "currency": "RUB",
+                "assetType": "brokerage",
+                "manualAmount": "100.0000",
+                "isInvestment": True,
+            },
+        )
+        assert category.status_code == 201, category.text
+        category_id = category.json()["data"]["id"]
+
+        linked = client.patch(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}",
+            json={"assetCategoryId": category_id},
+        )
+        before_delete = client.get("/api/v1/reports/account-balances", params=params)
+        summary = client.get("/api/v1/reports/summary", params=params)
+        deleted = client.delete(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}"
+        )
+        after_delete = client.get("/api/v1/reports/account-balances", params=params)
+
+    assert linked.status_code == 200, linked.text
+    assert before_delete.status_code == 200, before_delete.text
+    group = before_delete.json()["data"]["assetCategoryGroups"][0]
+    assert group["assetCategoryId"] == category_id
+    assert group["manualAmount"] == "100.0000"
+    assert group["accountCount"] == 1
+    assert group["currentBalanceTotal"] == "200.0000"
+    assert before_delete.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "200.0000"}
+    ]
+    assert summary.status_code == 200
+    assert _summary_by_currency(summary.json())["RUB"]["investmentsTotal"] == "200.0000"
+
+    assert deleted.status_code == 204
+    group_after_delete = after_delete.json()["data"]["assetCategoryGroups"][0]
+    assert group_after_delete["accountCount"] == 0
+    assert group_after_delete["currentBalanceTotal"] == "100.0000"
+    assert after_delete.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "100.0000"}
+    ]
+    assert transaction_graph["accounts"]["acc_ab_savings"] not in _account_ids(after_delete.json())
+
+
+def test_personal_report_without_household_id_succeeds_for_summary_and_account_balances(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    params = {
+        "reportMode": "personal",
+        "startDate": "2026-05-01",
+        "endDate": "2026-05-31",
+        "timezone": "Europe/Moscow",
+    }
+    owner_personal_accounts = {
+        transaction_graph["accounts"]["acc_a_cash"],
+        transaction_graph["accounts"]["acc_a_savings"],
+        transaction_graph["accounts"]["acc_a_usd"],
+    }
+    hidden_values = (
+        transaction_graph["transactions"]["txn_ab_income_may"],
+        transaction_graph["transactions"]["txn_b_income_may"],
+        transaction_graph["accounts"]["acc_ab_cash"],
+        transaction_graph["accounts"]["acc_b_cash"],
+    )
+
+    with _client_for_actor(owner) as client:
+        category = client.post(
+            "/api/v1/asset-categories",
+            json={
+                "name": "Personal Investments",
+                "scopeType": "personal",
+                "currency": "RUB",
+                "assetType": "brokerage",
+                "manualAmount": "50.0000",
+                "isInvestment": True,
+            },
+        )
+        assert category.status_code == 201, category.text
+        category_id = category.json()["data"]["id"]
+
+        linked = client.patch(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_a_savings']}",
+            json={"assetCategoryId": category_id},
+        )
+        summary = client.get("/api/v1/reports/summary", params=params)
+        balances = client.get("/api/v1/reports/account-balances", params=params)
+        explicit_household_summary = client.get(
+            "/api/v1/reports/summary",
+            params={**params, "householdId": transaction_graph["households"]["hh_ab"]},
+        )
+
+    assert linked.status_code == 200, linked.text
+    assert summary.status_code == 200, summary.text
+    assert balances.status_code == 200, balances.text
+    assert explicit_household_summary.status_code == 200, explicit_household_summary.text
+
+    summary_data = summary.json()["data"]
+    balances_data = balances.json()["data"]
+    explicit_household_summary_data = explicit_household_summary.json()["data"]
+    assert summary_data["scope"]["reportMode"] == "personal"
+    assert summary_data["scope"]["householdId"] is None
+    assert balances_data["scope"]["reportMode"] == "personal"
+    assert balances_data["scope"]["householdId"] is None
+    assert explicit_household_summary_data["scope"]["reportMode"] == "personal"
+    assert explicit_household_summary_data["scope"]["householdId"] is None
+
+    rub = _summary_by_currency(summary.json())["RUB"]
+    assert rub["incomeTotal"] == "11.0000"
+    assert rub["expenseTotal"] == "12.0000"
+    assert rub["investmentsTotal"] == "150.0000"
+    assert _account_ids(balances.json()) == owner_personal_accounts
+
+    group = balances_data["assetCategoryGroups"][0]
+    assert group["assetCategoryId"] == category_id
+    assert group["householdId"] is None
+    assert group["ownerUserId"] == owner.user_id
+    assert group["manualAmount"] == "50.0000"
+    assert group["linkedAccountsTotal"] == "100.0000"
+    assert group["currentBalanceTotal"] == "150.0000"
+    assert group["isInvestment"] is True
+    assert balances_data["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "150.0000"}
+    ]
+    _assert_report_response_has_no_hidden_signals(summary, *hidden_values)
+    _assert_report_response_has_no_hidden_signals(balances, *hidden_values)
+
+
+def test_household_report_modes_still_require_household_id(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    base_params = {
+        "startDate": "2026-05-01",
+        "endDate": "2026-05-31",
+        "timezone": "Europe/Moscow",
+    }
+
+    with _client_for_actor(owner) as client:
+        responses = [
+            client.get(endpoint, params={**base_params, "reportMode": mode})
+            for endpoint in (
+                "/api/v1/reports/summary",
+                "/api/v1/reports/account-balances",
+            )
+            for mode in ("shared_family_report", "combined_viewer_overview")
+        ]
+
+    assert {response.status_code for response in responses} == {422}
+    assert {response.json()["error"]["code"] for response in responses} == {
+        "HOUSEHOLD_ID_REQUIRED"
+    }
+
+
 def test_non_members_invited_and_former_get_neutral_report_denials(
     transaction_graph: dict[str, Any],
 ) -> None:

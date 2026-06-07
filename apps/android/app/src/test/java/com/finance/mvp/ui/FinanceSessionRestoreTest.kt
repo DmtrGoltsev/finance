@@ -245,6 +245,7 @@ private class FakeFinanceApiClient(
         initialBalance: String,
         accountType: String,
         householdId: String?,
+        assetCategoryId: String?,
     ): ApiResult<AccountSummary> {
         return ApiResult.Failure("unused")
     }

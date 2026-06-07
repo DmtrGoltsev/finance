@@ -7,10 +7,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
-ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
-DecimalString = Annotated[Decimal, Field(max_digits=24, decimal_places=6)]
-
 
 def to_camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -26,12 +22,17 @@ class ApiModel(BaseModel):
     )
 
 
-class OwnershipType(StrEnum):
+ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+MoneyDecimal = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=4)]
+
+
+class AssetCategoryScope(StrEnum):
     PERSONAL = "personal"
-    SHARED = "shared"
+    HOUSEHOLD = "household"
 
 
-class AccountType(StrEnum):
+class AssetCategoryType(StrEnum):
     CASH = "cash"
     BANK = "bank"
     CARD = "card"
@@ -47,18 +48,17 @@ class RecordStatus(StrEnum):
     DELETED = "deleted"
 
 
-class AccountDto(ApiModel):
+class AssetCategoryDto(ApiModel):
     id: ResourceId
     name: Annotated[str, StringConstraints(max_length=120)]
-    account_type: AccountType
-    ownership_type: OwnershipType
+    scope_type: AssetCategoryScope
     owner_user_id: ResourceId | None = None
     household_id: ResourceId | None = None
-    asset_category_id: ResourceId | None = None
     currency: CurrencyCode
-    initial_balance: DecimalString
-    current_balance: DecimalString
-    status: RecordStatus
+    asset_type: AssetCategoryType
+    manual_amount: MoneyDecimal
+    is_investment: bool
+    record_status: RecordStatus
     created_by_user_id: ResourceId
     created_at: datetime
     updated_at: datetime
@@ -67,33 +67,23 @@ class AccountDto(ApiModel):
     version: Annotated[int, Field(ge=1)]
 
 
-class AccountCreateRequest(ApiModel):
+class AssetCategoryCreateRequest(ApiModel):
     name: Annotated[str, StringConstraints(min_length=1, max_length=120)]
-    account_type: AccountType
-    ownership_type: OwnershipType
+    scope_type: AssetCategoryScope
     household_id: ResourceId | None = None
-    asset_category_id: ResourceId | None = None
     currency: CurrencyCode
-    initial_balance: DecimalString
+    asset_type: AssetCategoryType = AssetCategoryType.OTHER
+    manual_amount: MoneyDecimal = Decimal("0.0000")
+    is_investment: bool = False
 
 
-class AccountUpdateRequest(ApiModel):
+class AssetCategoryUpdateRequest(ApiModel):
     name: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
-    current_balance: DecimalString | None = None
-    currency: CurrencyCode | None = None
-    account_type: AccountType | None = None
-    asset_category_id: ResourceId | None = None
-    status: RecordStatus | None = None
+    manual_amount: MoneyDecimal | None = None
+    asset_type: AssetCategoryType | None = None
+    is_investment: bool | None = None
+    record_status: RecordStatus | None = None
     version: Annotated[int, Field(ge=1)] | None = None
-
-
-class AccountAutocompleteDto(ApiModel):
-    id: ResourceId
-    name: str
-    account_type: AccountType
-    ownership_type: OwnershipType
-    household_id: ResourceId | None = None
-    currency: CurrencyCode
 
 
 class PageInfo(ApiModel):
@@ -102,14 +92,10 @@ class PageInfo(ApiModel):
     has_more: bool
 
 
-class AccountEnvelope(ApiModel):
-    data: AccountDto
+class AssetCategoryEnvelope(ApiModel):
+    data: AssetCategoryDto
 
 
-class AccountPageEnvelope(ApiModel):
-    items: list[AccountDto]
+class AssetCategoryPageEnvelope(ApiModel):
+    items: list[AssetCategoryDto]
     page: PageInfo
-
-
-class AccountAutocompleteListEnvelope(ApiModel):
-    items: list[AccountAutocompleteDto]

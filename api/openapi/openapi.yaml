@@ -21,7 +21,7 @@ info:
     Privacy invariants:
     - personal data is owner-only;
     - shared data is visible only to active members of the same Household;
-    - reports use only `shared_family_report` and `combined_viewer_overview`;
+    - reports support `personal`, `shared_family_report`, and `combined_viewer_overview`;
     - every list, report, search, autocomplete, cache, count, and aggregation
       filters visible rows before any aggregation or pagination;
     - responses never expose hidden counts, filtered-out counts, hidden facets,
@@ -300,6 +300,149 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories:
+    get:
+      tags: [Asset Categories]
+      operationId: listAssetCategories
+      summary: List/search visible asset categories.
+      description: Personal asset categories are owner-only; household asset categories require active membership. This is the source of truth for manual asset groups and investment flags.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: scopeType
+          in: query
+          schema:
+            $ref: '#/components/schemas/AssetCategoryScope'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+        - $ref: '#/components/parameters/AssetCategoryRecordStatusFilter'
+        - name: isInvestment
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/SearchQuery'
+      responses:
+        '200':
+          description: Visible asset categories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Asset Categories]
+      operationId: createAssetCategory
+      summary: Create personal or household asset category.
+      description: Defaults `manualAmount` to 0 and `isInvestment` to false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCategoryCreateRequest'
+      responses:
+        '201':
+          description: Created asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}:
+    get:
+      tags: [Asset Categories]
+      operationId: getAssetCategory
+      summary: Get visible asset category detail.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Asset category detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Asset Categories]
+      operationId: updateAssetCategory
+      summary: Update asset category mutable fields.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCategoryUpdateRequest'
+      responses:
+        '200':
+          description: Updated asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Asset Categories]
+      operationId: deleteAssetCategory
+      summary: Soft delete asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '204':
+          description: Asset category soft-deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}/archive:
+    post:
+      tags: [Asset Categories]
+      operationId: archiveAssetCategory
+      summary: Archive asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Archived asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}/restore:
+    post:
+      tags: [Asset Categories]
+      operationId: restoreAssetCategory
+      summary: Restore archived asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Restored asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -789,10 +932,10 @@ paths:
       tags: [Reports]
       operationId: getReportSummary
       summary: Get summary report for visible rows.
-      description: Computes totals only after resolving visibleAccountIds for the selected report mode.
+      description: Computes totals only after resolving visible accounts for the selected report mode. `personal` uses only the current viewer's personal scope and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -816,10 +959,10 @@ paths:
       tags: [Reports]
       operationId: getReportCategoryBreakdown
       summary: Get category breakdown for visible rows.
-      description: Category buckets and transactionCount use only visible filtered transactions.
+      description: Category buckets and transactionCount use only visible filtered transactions. `personal` uses only the current viewer's personal scope and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -843,10 +986,10 @@ paths:
       tags: [Reports]
       operationId: getReportAccountBalances
       summary: Get balances for visible accounts.
-      description: Never includes personal accounts of another household member, including sorting/min/max/cache behavior.
+      description: Never includes personal accounts of another household member, including sorting/min/max/cache behavior. `personal` uses only the current viewer's personal accounts and personal asset categories and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -870,7 +1013,7 @@ paths:
       summary: Get cash-flow trend for visible rows.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -898,7 +1041,7 @@ paths:
       description: Every returned row must pass regular transaction list/detail predicates for the same actor.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -1198,6 +1341,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/ResourceId' }
+    AssetCategoryId:
+      name: assetCategoryId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
     CategoryId:
       name: categoryId
       in: path
@@ -1306,6 +1454,12 @@ components:
       required: false
       schema: { $ref: '#/components/schemas/ResourceId' }
       description: Optional scope narrowing only; inaccessible ids use neutral behavior.
+    ReportHouseholdId:
+      name: householdId
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ResourceId' }
+      description: Required for `shared_family_report` and `combined_viewer_overview`; omitted for `personal`.
     AccountIdFilter:
       name: accountId
       in: query
@@ -1379,6 +1533,11 @@ components:
       in: query
       required: false
       schema: { $ref: '#/components/schemas/RecordStatus' }
+    AssetCategoryRecordStatusFilter:
+      name: recordStatus
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/RecordStatus' }
   schemas:
     ResourceId:
       type: string
@@ -1414,6 +1573,12 @@ components:
     AccountType:
       type: string
       enum: [cash, bank, card, deposit, brokerage, metal, other]
+    AssetCategoryType:
+      type: string
+      enum: [cash, bank, card, deposit, brokerage, metal, other]
+    AssetCategoryScope:
+      type: string
+      enum: [personal, household]
     CategoryScope:
       type: string
       enum: [personal, household]
@@ -1429,8 +1594,8 @@ components:
       enum: [planned, confirmed]
     AllocationTargetType:
       type: string
-      enum: [expense_category, account, asset]
-      description: "`expense_category` targets expense categories; `account` preserves existing account targets; `asset` explicitly targets an account-backed asset or investment."
+      enum: [expense_category, account, asset, investment_asset_category]
+      description: "`expense_category` targets expense categories; `investment_asset_category` targets active investment asset categories. `account` and `asset` are legacy-compatible account-backed targets."
     AllocationMode:
       type: string
       enum: [amount, percent]
@@ -1439,8 +1604,8 @@ components:
       enum: [income, expense, transfer, brokerage, asset_buy, asset_sell, interest, dividend, adjustment]
     ReportMode:
       type: string
-      enum: [shared_family_report, combined_viewer_overview]
-      description: The only two report modes in MVP.
+      enum: [personal, shared_family_report, combined_viewer_overview]
+      description: "`personal` includes only the current viewer's personal owner scope; household modes require householdId."
     TransferScope:
       type: string
       enum: [personal_same_owner, household_same_household]
@@ -1743,6 +1908,11 @@ components:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
           description: Required for shared accounts; null for personal accounts.
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Optional link to an active same-scope same-currency asset category.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         initialBalance:
@@ -1784,6 +1954,9 @@ components:
         householdId:
           $ref: '#/components/schemas/ResourceId'
           description: Required when ownershipType is shared; ignored/rejected for personal per backend validation.
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Optional active same-scope same-currency asset category.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         initialBalance:
@@ -1804,6 +1977,11 @@ components:
           description: Allowed only while no transaction references the account.
         accountType:
           $ref: '#/components/schemas/AccountType'
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Set or clear the optional asset category link.
         status:
           $ref: '#/components/schemas/RecordStatus'
         version:
@@ -1829,6 +2007,97 @@ components:
             - type: 'null'
         currency:
           $ref: '#/components/schemas/CurrencyCode'
+    AssetCategoryDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, scopeType, currency, assetType, manualAmount, isInvestment, recordStatus, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+          maxLength: 120
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        isInvestment:
+          type: boolean
+        recordStatus:
+          $ref: '#/components/schemas/RecordStatus'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        archivedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        deletedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    AssetCategoryCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, scopeType, currency]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for household scope; forbidden for personal.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+          default: other
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+          default: '0.0000'
+        isInvestment:
+          type: boolean
+          default: false
+    AssetCategoryUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        isInvestment:
+          type: boolean
+        recordStatus:
+          $ref: '#/components/schemas/RecordStatus'
+        version:
+          type: integer
+          minimum: 1
     PlanningSummaryDto:
       type: object
       additionalProperties: false
@@ -2619,12 +2888,14 @@ components:
     ReportScopeDto:
       type: object
       additionalProperties: false
-      required: [viewerUserId, householdId, reportMode, includedAccountIds, generatedAt]
+      required: [viewerUserId, reportMode, generatedAt]
       properties:
         viewerUserId:
           $ref: '#/components/schemas/ResourceId'
         householdId:
-          $ref: '#/components/schemas/ResourceId'
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
         reportMode:
           $ref: '#/components/schemas/ReportMode'
         includedAccountIds:
@@ -2637,7 +2908,7 @@ components:
     MoneyTotalDto:
       type: object
       additionalProperties: false
-      required: [currency, incomeTotal, expenseTotal, netTotal]
+      required: [currency, incomeTotal, expenseTotal, transferTotal, netCashFlow, netTotal]
       properties:
         currency:
           $ref: '#/components/schemas/CurrencyCode'
@@ -2645,8 +2916,15 @@ components:
           $ref: '#/components/schemas/DecimalString'
         expenseTotal:
           $ref: '#/components/schemas/DecimalString'
+        transferTotal:
+          $ref: '#/components/schemas/DecimalString'
+        netCashFlow:
+          $ref: '#/components/schemas/DecimalString'
         netTotal:
           $ref: '#/components/schemas/DecimalString'
+        investmentsTotal:
+          $ref: '#/components/schemas/DecimalString'
+          default: '0.0000'
     ReportSummaryDto:
       type: object
       additionalProperties: false
@@ -2724,16 +3002,87 @@ components:
           anyOf:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         currentBalance:
           $ref: '#/components/schemas/DecimalString'
         balanceAsOf:
           $ref: '#/components/schemas/DateTime'
+    AccountBalanceGroupDto:
+      type: object
+      additionalProperties: false
+      required: [accountType, currency, currentBalanceTotal, accountCount]
+      properties:
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        currentBalanceTotal:
+          $ref: '#/components/schemas/DecimalString'
+        accountCount:
+          type: integer
+          minimum: 0
+    AssetCategoryBalanceGroupDto:
+      type: object
+      additionalProperties: false
+      required: [assetCategoryId, assetCategoryName, assetType, scopeType, currency, manualAmount, linkedAccountsTotal, currentBalanceTotal, accountCount, isInvestment]
+      properties:
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+        assetCategoryName:
+          type: string
+          maxLength: 200
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        linkedAccountsTotal:
+          $ref: '#/components/schemas/DecimalString'
+        currentBalanceTotal:
+          $ref: '#/components/schemas/DecimalString'
+        accountCount:
+          type: integer
+          minimum: 0
+        isInvestment:
+          type: boolean
+    NetWorthTotalDto:
+      type: object
+      additionalProperties: false
+      required: [currency, netWorthTotal]
+      properties:
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        netWorthTotal:
+          $ref: '#/components/schemas/DecimalString'
+    InvestmentTotalDto:
+      type: object
+      additionalProperties: false
+      required: [currency, investmentsTotal]
+      properties:
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        investmentsTotal:
+          $ref: '#/components/schemas/DecimalString'
     ReportAccountBalancesDto:
       type: object
       additionalProperties: false
-      required: [scope, asOfDate, timezone, items]
+      required: [scope, asOfDate, timezone, items, balanceGroups, assetsByType, assetCategoryGroups, legacyAssetTypeGroups, totalsByCurrency, investmentsByCurrency]
       properties:
         scope:
           $ref: '#/components/schemas/ReportScopeDto'
@@ -2745,6 +3094,30 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountBalanceDto'
+        balanceGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        assetsByType:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        assetCategoryGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetCategoryBalanceGroupDto'
+        legacyAssetTypeGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        totalsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetWorthTotalDto'
+        investmentsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvestmentTotalDto'
     CashFlowPointDto:
       type: object
       additionalProperties: false
@@ -2822,6 +3195,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountAutocompleteDto'
+    AssetCategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/AssetCategoryDto'
+    AssetCategoryPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetCategoryDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
     TransactionEnvelope:
       type: object
       additionalProperties: false

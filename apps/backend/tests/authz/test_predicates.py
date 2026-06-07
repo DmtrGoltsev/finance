@@ -197,6 +197,15 @@ def test_account_predicates_enforce_owner_only_and_active_shared_access():
 
 
 def test_report_scope_resolver_covers_shared_and_combined_modes():
+    personal_report = canReadReport(
+        owner_a,
+        ReportRequest(mode=ReportMode.PERSONAL, household_id=None),
+    )
+    assert personal_report.allowed
+    assert personal_report.visible_scope is not None
+    assert personal_report.visible_scope.scopes == (ScopeRef.personal(OWNER_A),)
+    assert personal_report.resolved_scope == ScopeRef.personal(OWNER_A)
+
     shared_report = canReadReport(
         owner_a,
         ReportRequest(mode=ReportMode.SHARED_FAMILY_REPORT, household_id=HH_AB),
@@ -231,6 +240,13 @@ def test_report_scope_resolver_covers_shared_and_combined_modes():
     )
     assert exported.allowed
     assert exported.visible_scope == combined_report.visible_scope
+
+    personal_export = canExportData(
+        owner_a,
+        ExportRequest(mode=ReportMode.PERSONAL, household_id=None),
+    )
+    assert personal_export.allowed
+    assert personal_export.visible_scope == personal_report.visible_scope
 
     assert_denied(
         canReadReport(

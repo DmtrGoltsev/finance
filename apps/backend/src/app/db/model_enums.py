@@ -21,6 +21,7 @@ def values_from_enum(enum_type: type) -> tuple[str, ...]:
 
 
 ACCOUNT_TYPES = values_from_enum(AccountType)
+ASSET_CATEGORY_TYPES = ACCOUNT_TYPES
 AUTH_STATUSES = ("active", "deactivated")
 HOUSEHOLD_STATUSES = ("active", "archived")
 RECORD_STATUSES = values_from_enum(RecordStatus)
@@ -50,5 +51,10 @@ AUDIT_RESULTS = ("allow", "deny", "state-deny", "error")
 OUTBOX_STATUSES = ("pending", "processing", "processed", "failed", "dead")
 PLANNING_SCOPE_TYPES = ("personal", "household")
 PLANNING_INCOME_CONFIRMATION_STATES = ("planned", "confirmed")
-PLANNING_ALLOCATION_TARGET_TYPES = ("expense_category", "account", "asset")
+PLANNING_ALLOCATION_TARGET_TYPES = (
+    "expense_category",
+    "account",
+    "asset",
+    "investment_asset_category",
+)
 PLANNING_ALLOCATION_MODES = ("amount", "percent")

@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "memberships",
     "invites",
     "accounts",
+    "asset_categories",
     "categories",
     "transactions",
     "capture_drafts",
@@ -50,6 +51,7 @@ class ModelMetadataTests(unittest.TestCase):
         for table_name, column_name in (
             ("accounts", "initial_balance_amount"),
             ("accounts", "current_balance_amount"),
+            ("asset_categories", "manual_amount"),
             ("transactions", "amount"),
             ("capture_drafts", "amount"),
             ("planning_income_sources", "amount"),
@@ -71,6 +73,16 @@ class ModelMetadataTests(unittest.TestCase):
             "categories",
             "exactly_one_scope",
             ["category_scope", "owner_user_id", "household_id"],
+        )
+        self.assertCheckContains(
+            "asset_categories",
+            "exactly_one_scope",
+            ["scope_type", "owner_user_id", "household_id"],
+        )
+        self.assertCheckContains(
+            "asset_categories",
+            "non_negative_manual_amount",
+            ["manual_amount"],
         )
         self.assertCheckContains(
             "transactions",
@@ -95,7 +107,7 @@ class ModelMetadataTests(unittest.TestCase):
         self.assertCheckContains(
             "planning_allocations",
             "target_type_valid",
-            ["expense_category", "account", "asset"],
+            ["expense_category", "account", "asset", "investment_asset_category"],
         )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:
@@ -115,6 +127,8 @@ class ModelMetadataTests(unittest.TestCase):
         for table_name, index_name in (
             ("memberships", "ix_memberships_active_user_household"),
             ("accounts", "ix_accounts_owner_user_status"),
+            ("accounts", "ix_accounts_asset_category_id"),
+            ("asset_categories", "ix_asset_categories_owner_status"),
             ("accounts", "ix_accounts_household_status"),
             ("sessions", "ix_sessions_user_active_expires"),
             ("sessions", "ix_sessions_session_version"),

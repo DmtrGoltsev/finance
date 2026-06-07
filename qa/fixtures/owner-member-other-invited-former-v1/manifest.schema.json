@@ -727,6 +727,7 @@
         },
         "reportMode": {
           "enum": [
+            "personal",
             "shared_family_report",
             "combined_viewer_overview"
           ]

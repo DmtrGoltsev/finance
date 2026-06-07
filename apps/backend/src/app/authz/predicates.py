@@ -87,6 +87,7 @@ class SourceType(StringEnum):
 
 
 class ReportMode(StringEnum):
+    PERSONAL = "personal"
     SHARED_FAMILY_REPORT = "shared_family_report"
     COMBINED_VIEWER_OVERVIEW = "combined_viewer_overview"
 
@@ -578,6 +579,11 @@ def canMutateTransaction(
 def resolveReportVisibleScope(actor: Actor, request: ReportRequest) -> AuthzDecision:
     if not _is_authenticated(actor):
         return deny(DenialReason.UNAUTHENTICATED)
+
+    if request.mode == ReportMode.PERSONAL:
+        personal_scope = ScopeRef.personal(actor.user_id)
+        visible_scope = VisibleReportScope(mode=request.mode, scopes=(personal_scope,))
+        return allow(visible_scope=visible_scope, resolved_scope=personal_scope)
 
     if not request.household_id or not _has_active_membership(actor, request.household_id):
         return deny()

@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiResult
+import com.finance.mvp.api.AssetCategory
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
@@ -154,7 +155,7 @@ fun PlanningUi(
     var message by rememberSaveable { mutableStateOf<String?>(null) }
     var showCategorySheet by rememberSaveable { mutableStateOf(false) }
     var showAccountSheet by rememberSaveable { mutableStateOf(false) }
-    var createAccountTargetType by rememberSaveable { mutableStateOf(TARGET_ACCOUNT) }
+    var createAccountTargetType by rememberSaveable { mutableStateOf(TARGET_INVESTMENT_ASSET_CATEGORY) }
 
     fun loadPlanningState(successMessage: String? = null) {
         val scopeInfo = resolvedScope ?: return
@@ -645,6 +646,7 @@ private fun IncomeSourcesCard(
     var source by rememberSaveable(plan.id) { mutableStateOf("") }
     var amount by rememberSaveable(plan.id) { mutableStateOf("") }
     var day by rememberSaveable(plan.id) { mutableStateOf("") }
+    var showAddForm by rememberSaveable(plan.id) { mutableStateOf(false) }
     val normalizedAmount = amount.trim().normalizedPlanningAmount()
     val planningDay = day.toPlanningDay()
 
@@ -654,6 +656,15 @@ private fun IncomeSourcesCard(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Источники дохода", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (!showAddForm) {
+                OutlinedButton(
+                    onClick = { showAddForm = true },
+                    enabled = !isLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Добавить источник")
+                }
+            } else {
             OutlinedTextField(
                 value = source,
                 onValueChange = { source = it },
@@ -673,7 +684,7 @@ private fun IncomeSourcesCard(
                 OutlinedTextField(
                     value = day,
                     onValueChange = { day = it.filter(Char::isDigit).take(2) },
-                    label = { Text("День") },
+                    label = { Text("День месяца") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.weight(0.7f),
@@ -691,11 +702,13 @@ private fun IncomeSourcesCard(
                     source = ""
                     amount = ""
                     day = ""
+                    showAddForm = false
                 },
                 enabled = !isLoading && source.isNotBlank() && normalizedAmount != null && planningDay != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Добавить источник")
+            }
             }
 
             if (plan.incomeSources.isEmpty()) {
@@ -771,7 +784,7 @@ private fun IncomeSourceRow(
                 OutlinedTextField(
                     value = editDay,
                     onValueChange = { editDay = it.filter(Char::isDigit).take(2) },
-                    label = { Text("День") },
+                    label = { Text("День месяца") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.weight(0.7f),
@@ -827,9 +840,9 @@ private fun AllocationsCard(
 ) {
     var draft by remember(plan.id) { mutableStateOf(PlanningAllocationDraft()) }
     val categories = dashboard.planningCategories(planMode)
-    val accounts = dashboard.planningAccounts(planMode)
-    val targetOptions = remember(draft.targetType, categories, accounts) {
-        planningTargetOptions(draft.targetType, categories, accounts)
+    val investments = dashboard.planningInvestmentAssetCategories(planMode)
+    val targetOptions = remember(draft.targetType, categories, investments) {
+        planningTargetOptions(draft.targetType, categories, investments)
     }
     LaunchedEffect(draft.targetType, targetOptions) {
         if (draft.targetId.isBlank() && targetOptions.isNotEmpty()) {
@@ -872,7 +885,7 @@ private fun AllocationsCard(
                         allocation = allocation,
                         currency = plan.currency,
                         categories = categories,
-                        accounts = accounts,
+                        investments = investments,
                         isLoading = isLoading,
                         onUpdate = onUpdate,
                         onDelete = onDelete,
@@ -894,7 +907,7 @@ private fun PlanningAllocationEditor(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf(TARGET_EXPENSE_CATEGORY, TARGET_ACCOUNT, TARGET_ASSET)) { targetType ->
+            items(listOf(TARGET_EXPENSE_CATEGORY, TARGET_INVESTMENT_ASSET_CATEGORY)) { targetType ->
                 FilterChip(
                     selected = draft.targetType == targetType,
                     onClick = { onDraftChange(draft.copy(targetType = targetType, targetId = "")) },
@@ -902,7 +915,7 @@ private fun PlanningAllocationEditor(
                 )
             }
         }
-        if (showCreateButtons) {
+        if (showCreateButtons && draft.targetType == TARGET_EXPENSE_CATEGORY) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = {
@@ -926,6 +939,7 @@ private fun PlanningAllocationEditor(
                     FilterChip(
                         selected = draft.targetId == option.id,
                         onClick = { onDraftChange(draft.copy(targetId = option.id)) },
+                        modifier = Modifier.width(116.dp),
                         label = { Text(option.title) },
                     )
                 }
@@ -962,7 +976,7 @@ private fun AllocationRow(
     allocation: PlanningAllocation,
     currency: String,
     categories: List<CategorySummary>,
-    accounts: List<AccountSummary>,
+    investments: List<AssetCategory>,
     isLoading: Boolean,
     onUpdate: (PlanningAllocation, PlanningAllocationUpdateRequest) -> Unit,
     onDelete: (PlanningAllocation) -> Unit,
@@ -979,7 +993,7 @@ private fun AllocationRow(
             ),
         )
     }
-    val targetOptions = planningTargetOptions(draft.targetType, categories, accounts)
+    val targetOptions = planningTargetOptions(draft.targetType, categories, investments)
 
     Column(
         modifier = Modifier
@@ -1093,7 +1107,7 @@ private fun PlanningHistoryCard(
                     }
                 }
             }
-            Text("Копирование создаёт план следующего месяца через API.", style = MaterialTheme.typography.labelSmall)
+            Text("Можно взять прошлый план за основу для следующего месяца.", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -1280,6 +1294,7 @@ private data class PlanningAllocationDraft(
 private const val TARGET_EXPENSE_CATEGORY = "expense_category"
 private const val TARGET_ACCOUNT = "account"
 private const val TARGET_ASSET = "asset"
+private const val TARGET_INVESTMENT_ASSET_CATEGORY = "investment_asset_category"
 private const val ALLOCATION_AMOUNT = "amount"
 private const val ALLOCATION_PERCENT = "percent"
 
@@ -1315,20 +1330,28 @@ private fun FinanceDashboard?.planningAccounts(mode: FinanceMode): List<AccountS
 private fun planningTargetOptions(
     targetType: String,
     categories: List<CategorySummary>,
-    accounts: List<AccountSummary>,
+    investments: List<AssetCategory>,
 ): List<PlanningTargetOption> {
     return when (targetType) {
         TARGET_EXPENSE_CATEGORY -> categories.map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-        TARGET_ASSET -> accounts
-            .filter { it.isPlanningAssetTarget() }
+        TARGET_INVESTMENT_ASSET_CATEGORY -> investments
             .map { PlanningTargetOption(it.id, it.planningDisplayName()) }
-        else -> accounts
+        TARGET_ASSET -> investments
             .map { PlanningTargetOption(it.id, it.planningDisplayName()) }
+        else -> emptyList()
     }
 }
 
-private fun AccountSummary.isPlanningAssetTarget(): Boolean {
-    return type in setOf("deposit", "brokerage", "metal", "other", "investment", "asset")
+private fun FinanceDashboard?.planningInvestmentAssetCategories(mode: FinanceMode): List<AssetCategory> {
+    return this?.assetCategories.orEmpty()
+        .filter { it.recordStatus == "active" && it.isInvestment }
+        .filter {
+            when (mode) {
+                FinanceMode.Personal -> it.scopeType != "household"
+                FinanceMode.Shared -> it.scopeType == "household"
+                FinanceMode.Overview -> true
+            }
+        }
 }
 
 private fun FinanceDashboard?.planningCategories(mode: FinanceMode): List<CategorySummary> {
@@ -1346,6 +1369,8 @@ private fun FinanceDashboard?.planningCategories(mode: FinanceMode): List<Catego
 private fun AccountSummary.planningDisplayName(): String = userFacingSeedText(name)
 
 private fun CategorySummary.planningDisplayName(): String = userFacingSeedText(name)
+
+private fun AssetCategory.planningDisplayName(): String = userFacingSeedText(name)
 
 private fun String.localizedPlanningScope(): String = when (this) {
     "personal" -> "Личное"

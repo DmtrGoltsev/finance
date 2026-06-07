@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from app.accounts import router as accounts_router
+from app.asset_categories import router as asset_categories_router
 from app.api.error_contract import ErrorEnvelopeRoute, error_response, request_id_for
 from app.auth.router import router as auth_router
 from app.capture_drafts import router as capture_drafts_router
@@ -51,6 +52,7 @@ def _include_router_with_error_envelope(router: APIRouter) -> None:
 
 _include_router_with_error_envelope(auth_router)
 _include_router_with_error_envelope(accounts_router)
+_include_router_with_error_envelope(asset_categories_router)
 _include_router_with_error_envelope(categories_router)
 _include_router_with_error_envelope(transactions_router)
 _include_router_with_error_envelope(capture_drafts_router)

@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.accounts.repository import SqlAlchemyAccountRepository
 from app.api.auth_context import fixed_actor_provider_for_tests, provide_actor
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
+from app.asset_categories.schemas import AssetCategoryScope, AssetCategoryType
 from app.authz import AccountOwnershipType, Actor, Membership, MembershipStatus
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType
@@ -23,6 +25,7 @@ from app.config import get_settings
 from app.db.base import Base
 from app.db.models import (
     Account,
+    AssetCategory,
     Category,
     Household,
     PlanningAllocation,
@@ -40,6 +43,7 @@ TABLES = [
     User.__table__,
     Household.__table__,
     DbMembership.__table__,
+    AssetCategory.__table__,
     Account.__table__,
     Category.__table__,
     Transaction.__table__,
@@ -172,6 +176,7 @@ def planning_graph(
             )
 
         accounts = SqlAlchemyAccountRepository(session)
+        asset_categories = SqlAlchemyAssetCategoryRepository(session)
         categories = SqlAlchemyCategoryRepository(session)
         owner_account = accounts.create(
             name="Owner Cash",
@@ -223,6 +228,28 @@ def planning_graph(
             owner_user_id=str(owner_id),
             household_id=None,
         )
+        owner_investment_category = asset_categories.create(
+            name="Owner Investments",
+            scope_type=AssetCategoryScope.PERSONAL,
+            owner_user_id=str(owner_id),
+            household_id=None,
+            currency="RUB",
+            asset_type=AssetCategoryType.BROKERAGE,
+            manual_amount=Decimal("500.0000"),
+            is_investment=True,
+            created_by_user_id=str(owner_id),
+        )
+        owner_non_investment_category = asset_categories.create(
+            name="Owner Metal Reserve",
+            scope_type=AssetCategoryScope.PERSONAL,
+            owner_user_id=str(owner_id),
+            household_id=None,
+            currency="RUB",
+            asset_type=AssetCategoryType.METAL,
+            manual_amount=Decimal("300.0000"),
+            is_investment=False,
+            created_by_user_id=str(owner_id),
+        )
         owner_category = categories.create(
             name="Owner Groceries",
             type=CategoryType.EXPENSE,
@@ -269,6 +296,8 @@ def planning_graph(
             "member_account_id": member_account.id,
             "shared_account_id": shared_account.id,
             "usd_account_id": usd_account.id,
+            "owner_investment_category_id": owner_investment_category.id,
+            "owner_non_investment_category_id": owner_non_investment_category.id,
             "owner_category_id": owner_category.id,
             "income_category_id": income_category.id,
             "shared_category_id": shared_category.id,
@@ -501,6 +530,52 @@ def test_asset_target_uses_account_backing_summary_and_copy_attention(
     assert copied_allocation["attentionReason"] == "TARGET_MISSING_OR_INACCESSIBLE"
     assert copied_allocation["targetSnapshot"]["targetType"] == "asset"
     assert copied_allocation["targetSnapshot"]["accountType"] == "brokerage"
+
+
+def test_investment_asset_category_target_validates_active_investment_category(
+    planning_graph: dict[str, Any],
+) -> None:
+    owner = planning_graph["owner"]
+
+    with _client_for_actor(owner) as client:
+        created_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2027-02", "currency": "RUB"},
+        )
+        assert created_plan.status_code == 201, created_plan.text
+        plan_id = created_plan.json()["data"]["id"]
+
+        income = client.post(
+            f"/api/v1/planning/plans/{plan_id}/income-sources",
+            json={"amount": "1000.0000", "source": "Salary", "dayOfMonth": 15},
+        )
+        investment_allocation = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "investment_asset_category",
+                "targetId": planning_graph["owner_investment_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "350.0000",
+            },
+        )
+        non_investment_allocation = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "investment_asset_category",
+                "targetId": planning_graph["owner_non_investment_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "1.0000",
+            },
+        )
+
+    assert income.status_code == 201, income.text
+    assert investment_allocation.status_code == 201, investment_allocation.text
+    data = investment_allocation.json()["data"]
+    assert data["targetType"] == "investment_asset_category"
+    assert data["targetSnapshot"]["targetType"] == "investment_asset_category"
+    assert data["targetSnapshot"]["assetType"] == "brokerage"
+    assert data["calculatedAmount"] == "350.0000"
+    assert non_investment_allocation.status_code == 404
 
 
 @pytest.mark.parametrize("bad_amount", ["0.0000", "-1.0000"])

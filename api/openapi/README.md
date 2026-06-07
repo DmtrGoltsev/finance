@@ -17,7 +17,7 @@ MVP boundaries are hard-coded in the contract:
 - `sourceType` accepts only `manual`;
 - `personal` data is owner-only;
 - `shared` data is visible only to active members of the same `Household`;
-- reports expose only `shared_family_report` and `combined_viewer_overview`;
+- reports expose `personal`, `shared_family_report`, and `combined_viewer_overview`;
 - reports, search, autocomplete, pagination, and cache materialization must filter visible rows before aggregation;
 - no response may expose hidden counts, filtered-out counts, hidden facets, or inaccessible-resource diagnostics.
 

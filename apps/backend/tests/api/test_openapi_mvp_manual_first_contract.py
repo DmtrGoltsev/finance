@@ -120,6 +120,10 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/accounts/{accountId}/archive",
         "/accounts/{accountId}/restore",
         "/accounts/autocomplete",
+        "/asset-categories",
+        "/asset-categories/{assetCategoryId}",
+        "/asset-categories/{assetCategoryId}/archive",
+        "/asset-categories/{assetCategoryId}/restore",
         "/categories",
         "/categories/{categoryId}",
         "/categories/{categoryId}/archive",
@@ -249,6 +253,7 @@ def test_openapi_manual_first_enum_boundaries() -> None:
     for field_name in forbidden_capture_fields:
         assert field_name not in contract
     assert _inline_array_value(_schema_block("ReportMode"), "enum") == [
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     ]
@@ -261,6 +266,20 @@ def test_openapi_manual_first_enum_boundaries() -> None:
         _inline_array_value(_schema_block("SourceType"), "x-reserved-post-mvp-values")
     )
     assert {"file_import", "bank_api", "sms", "push"} <= reserved_source_values
+
+
+def test_openapi_asset_category_contract_uses_record_status() -> None:
+    asset_category = "\n".join(_schema_block("AssetCategoryDto"))
+    asset_category_update = "\n".join(_schema_block("AssetCategoryUpdateRequest"))
+    contract = _contract_text()
+
+    assert "recordStatus" in asset_category
+    assert "recordStatus" in asset_category_update
+    assert (
+        "required: [id, name, scopeType, currency, assetType, manualAmount, "
+        "isInvestment, recordStatus"
+    ) in asset_category
+    assert "name: recordStatus" in contract
 
 
 def test_openapi_canonical_error_envelope_shape() -> None:

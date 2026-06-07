@@ -609,7 +609,7 @@
   ],
   "contracts": {
     "sourceType": ["manual"],
-    "reportModes": ["shared_family_report", "combined_viewer_overview"],
+    "reportModes": ["personal", "shared_family_report", "combined_viewer_overview"],
     "transferScopes": ["personal_same_owner", "household_same_household"],
     "unmountedUntilRuntimeWorker": [
       "/api/v1/transactions",

@@ -34,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -79,11 +80,15 @@ import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiConfig
 import com.finance.mvp.api.ApiResult
+import com.finance.mvp.api.AssetCategory
+import com.finance.mvp.api.AssetCategoryCreateRequest
+import com.finance.mvp.api.AssetCategoryGroup
 import com.finance.mvp.api.CaptureDraft
 import com.finance.mvp.api.CaptureDraftUpdateRequest
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
+import com.finance.mvp.api.MoneyAmount
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.RegistrationResult
 import com.finance.mvp.api.SessionStatus
@@ -134,7 +139,8 @@ fun FinanceApp(
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotAggregateDrafts by remember { mutableStateOf<List<ScreenshotAggregateDraftUi>>(emptyList()) }
     var assetGroupNames by rememberSaveable { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var addAccountKind by rememberSaveable { mutableStateOf<AssetKind?>(null) }
+    var addAccountState by rememberSaveable { mutableStateOf<AddAccountState?>(null) }
+    var showAssetCategorySheet by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
 
@@ -764,9 +770,25 @@ fun FinanceApp(
                 )
                 AppSection.Assets -> assetsContent(
                     dashboard = dashboard,
+                    selectedMode = selectedMode,
+                    onModeSelected = { selectedMode = it },
                     groupNames = assetGroupNames,
                     onRenameGroup = { kind, newName ->
                         assetGroupNames = assetGroupNames + (kind.apiValue to newName)
+                    },
+                    onCreateAssetCategory = { showAssetCategorySheet = true },
+                    onUpdateAssetCategory = { category ->
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Обновляем категорию активов")
+                            val result = withContext(Dispatchers.IO) { apiClient.updateAssetCategory(category) }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Категория активов обновлена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
                     },
                     onUpdateAccount = { updatedAccount ->
                         scope.launch {
@@ -818,7 +840,11 @@ fun FinanceApp(
                         }
                     },
                     onAddAccount = { kind ->
-                        addAccountKind = kind
+                        addAccountState = AddAccountState(kind, selectedMode)
+                    },
+                    onAddAccountToCategory = { category ->
+                        val categoryMode = if (category.scopeType == "household") FinanceMode.Shared else FinanceMode.Personal
+                        addAccountState = AddAccountState(category.assetType.assetKindOrBank(), categoryMode, category.id)
                     },
                 )
                 AppSection.Categories -> categoriesContent(
@@ -929,11 +955,12 @@ fun FinanceApp(
         )
     }
 
-    if (addAccountKind != null) {
-        val kind = addAccountKind!!
+    if (addAccountState != null) {
+        val state = addAccountState!!
+        val kind = state.kind
         AddAccountSheet(
             kind = kind,
-            onDismiss = { addAccountKind = null },
+            onDismiss = { addAccountState = null },
             onSubmit = { name, balance, currency ->
                 scope.launch {
                     uiState = uiState.copy(isLoading = true, message = "Добавляем актив")
@@ -943,13 +970,38 @@ fun FinanceApp(
                             currency = currency,
                             initialBalance = balance,
                             accountType = kind.apiValue,
-                            householdId = uiState.session?.householdId,
+                            householdId = if (state.mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                            assetCategoryId = state.assetCategoryId,
                         )
                     }
                     when (result) {
                         is ApiResult.Success -> {
-                            addAccountKind = null
+                            addAccountState = null
                             loadDashboard("Актив добавлен")
+                        }
+                        is ApiResult.Failure -> uiState = uiState.copy(
+                            isLoading = false,
+                            message = result.userFacingMessage(),
+                        )
+                    }
+                }
+            },
+        )
+    }
+
+    if (showAssetCategorySheet) {
+        AssetCategorySheet(
+            mode = selectedMode,
+            householdId = uiState.session?.householdId,
+            onDismiss = { showAssetCategorySheet = false },
+            onCreate = { request ->
+                scope.launch {
+                    uiState = uiState.copy(isLoading = true, message = "Добавляем категорию активов")
+                    val result = withContext(Dispatchers.IO) { apiClient.createAssetCategory(request) }
+                    when (result) {
+                        is ApiResult.Success -> {
+                            showAssetCategorySheet = false
+                            loadDashboard("Категория активов добавлена")
                         }
                         is ApiResult.Failure -> uiState = uiState.copy(
                             isLoading = false,
@@ -1219,7 +1271,6 @@ private fun LazyListScope.operationsContent(
     }
     if (items.isEmpty()) {
         item { EmptyState("Операций пока нет") }
-        return
     }
     item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
     items(items.sortedByDescending { it.occurredAt }) { transaction ->
@@ -1556,23 +1607,54 @@ private fun CaptureDraftRow(
 
 private fun LazyListScope.assetsContent(
     dashboard: FinanceDashboard?,
+    selectedMode: FinanceMode,
+    onModeSelected: (FinanceMode) -> Unit,
     groupNames: Map<String, String>,
     onRenameGroup: (AssetKind, String) -> Unit,
+    onCreateAssetCategory: () -> Unit,
+    onUpdateAssetCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
     onArchiveAccount: (String) -> Unit,
     onArchiveGroup: (List<String>) -> Unit,
     onAddAccount: (AssetKind) -> Unit,
+    onAddAccountToCategory: (AssetCategory) -> Unit,
 ) {
     val allAccounts = dashboard?.accounts.orEmpty()
-    val summaries = assetSummaries(allAccounts)
+    val categoryRows = dashboard.assetCategoryRows(selectedMode)
+    val modeAccounts = allAccounts.filterByMode(selectedMode)
+    val legacyAccounts = modeAccounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
+    val summaries = assetSummaries(legacyAccounts).filter { categoryRows.isEmpty() || it.count > 0 }
+    item {
+        ModeChips(
+            selectedMode = selectedMode,
+            onModeSelected = onModeSelected,
+        )
+    }
     item { Text("Активы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-    if (allAccounts.filter { it.status == "active" }.isEmpty()) {
+    item {
+        OutlinedButton(onClick = onCreateAssetCategory, modifier = Modifier.fillMaxWidth()) {
+            Text("Добавить категорию активов")
+        }
+    }
+    if (categoryRows.isNotEmpty()) {
+        items(categoryRows) { row ->
+            AssetCategoryGroupCard(
+                row = row,
+                accounts = modeAccounts.filter { it.status == "active" && it.assetCategoryId == row.category.id },
+                onUpdateCategory = onUpdateAssetCategory,
+                onUpdateAccount = onUpdateAccount,
+                onArchiveAccount = onArchiveAccount,
+                onAddAccount = { onAddAccountToCategory(row.category) },
+            )
+        }
+    }
+    if (categoryRows.isEmpty() && modeAccounts.filter { it.status == "active" }.isEmpty()) {
         item { EmptyState("Активов пока нет") }
     }
     items(summaries) { summary ->
         AssetCategoryCard(
             summary = summary,
-            accounts = allAccounts.filter { it.status == "active" && it.assetKind() == summary.kind },
+            accounts = legacyAccounts.filter { it.assetKind() == summary.kind },
             displayName = groupNames[summary.kind.apiValue] ?: summary.kind.title,
             onRenameGroup = { onRenameGroup(summary.kind, it) },
             onUpdate = onUpdateAccount,
@@ -1581,7 +1663,6 @@ private fun LazyListScope.assetsContent(
             onAdd = { onAddAccount(summary.kind) },
         )
     }
-    item { CapitalBreakdownCard(summaries) }
 }
 
 private fun LazyListScope.categoriesContent(
@@ -1594,6 +1675,7 @@ private fun LazyListScope.categoriesContent(
         CategoryManagementCard(
             categories = dashboard?.categories.orEmpty(),
             isAuthenticated = dashboard?.session?.isAuthenticated == true,
+            hasHousehold = !dashboard?.session?.householdId.isNullOrBlank(),
             onAddCategory = onAddCategory,
             onUpdateCategory = onUpdateCategory,
             onArchiveCategory = onArchiveCategory,
@@ -1628,6 +1710,7 @@ private fun LazyListScope.analyticsContent(
     when (selectedSubsection) {
         AnalyticsSubsection.Summary -> {
             item { AnalyticsSummaryCard(view) }
+            item { InvestmentsCard(dashboard?.investmentsTotal, dashboard?.investmentsByCurrency.orEmpty(), view.primaryCurrency) }
             item { CategoryBreakdownCard(view.topCategories) }
             item { CapitalBreakdownCard(view.assetSummaries) }
         }
@@ -1865,6 +1948,131 @@ private fun CompactTransactionRow(transaction: TransactionSummary) {
 }
 
 @Composable
+private fun AssetCategoryGroupCard(
+    row: AssetCategoryUiRow,
+    accounts: List<AccountSummary>,
+    onUpdateCategory: (AssetCategory) -> Unit,
+    onUpdateAccount: (AccountSummary) -> Unit,
+    onArchiveAccount: (String) -> Unit,
+    onAddAccount: () -> Unit,
+) {
+    val category = row.category
+    val kind = category.assetType.assetKindOrBank()
+    var isExpanded by rememberSaveable(category.id) { mutableStateOf(false) }
+    var isEditing by rememberSaveable(category.id) { mutableStateOf(false) }
+    var editName by rememberSaveable(category.id, category.name) { mutableStateOf(category.name) }
+    var editManual by rememberSaveable(category.id, category.manualAmount) { mutableStateOf(category.manualAmount) }
+    var editInvestment by rememberSaveable(category.id, category.isInvestment) { mutableStateOf(category.isInvestment) }
+    var editAssetType by rememberSaveable(category.id, category.assetType) { mutableStateOf(category.assetType) }
+
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tapOrLongPress(onTap = { isExpanded = !isExpanded }, onLongPress = { isEditing = true }),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBubble(kind.icon, if (category.isInvestment) Color(0xFF227C9D) else kind.tint)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(category.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (category.isInvestment) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                painter = painterResource(R.drawable.ic_chart_24),
+                                contentDescription = null,
+                                tint = Color(0xFF227C9D),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "${row.scopeTitle} • ${accounts.size} ${pluralItems(accounts.size)} • Ручная ${row.manualAmount.toMoney().formatMoney(row.currency)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(row.totalAmount.toMoney().formatMoney(row.currency), fontWeight = FontWeight.SemiBold)
+                IconButton(onClick = { isEditing = !isEditing }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_edit_24),
+                        contentDescription = "Изменить",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            if (isEditing) {
+                OutlinedTextField(
+                    value = editName,
+                    onValueChange = { editName = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = editManual,
+                    onValueChange = { editManual = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' } },
+                    label = { Text("Ручная сумма") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(AssetKind.entries.toList()) { option ->
+                        FilterChip(
+                            selected = editAssetType == option.apiValue,
+                            onClick = { editAssetType = option.apiValue },
+                            label = { Text(option.title) },
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = editInvestment, onCheckedChange = { editInvestment = it })
+                    Text("Инвестиционный актив")
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { isEditing = false }, modifier = Modifier.weight(1f)) {
+                        Text("Отмена")
+                    }
+                    Button(
+                        onClick = {
+                            onUpdateCategory(
+                                category.copy(
+                                    name = editName.trim().ifBlank { category.name },
+                                    manualAmount = editManual.normalizedBalanceAmount() ?: "0",
+                                    isInvestment = editInvestment,
+                                    assetType = editAssetType,
+                                ),
+                            )
+                            isEditing = false
+                        },
+                        enabled = editManual.normalizedBalanceAmount() != null,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Сохранить")
+                    }
+                }
+            }
+
+            if (isExpanded) {
+                if (accounts.isEmpty()) {
+                    Text("Счетов в этой категории нет", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    accounts.forEach { account ->
+                        AccountRow(account = account, onUpdate = onUpdateAccount, onArchive = onArchiveAccount)
+                    }
+                }
+                OutlinedButton(onClick = onAddAccount, modifier = Modifier.fillMaxWidth()) {
+                    Text("Добавить счет в категорию")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AssetCategoryCard(
     summary: AssetSummary,
     accounts: List<AccountSummary>,
@@ -2031,6 +2239,98 @@ private fun String.currencyLabel(): String = when (this) {
     "EUR" -> "€ EUR"
     "XAU" -> "граммы"
     else -> this
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AssetCategorySheet(
+    mode: FinanceMode,
+    householdId: String?,
+    onDismiss: () -> Unit,
+    onCreate: (AssetCategoryCreateRequest) -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var selectedMode by rememberSaveable(mode, householdId) {
+        mutableStateOf(if (mode == FinanceMode.Shared && !householdId.isNullOrBlank()) FinanceMode.Shared else FinanceMode.Personal)
+    }
+    var currency by rememberSaveable { mutableStateOf("RUB") }
+    var manualAmount by rememberSaveable { mutableStateOf("0") }
+    var isInvestment by rememberSaveable { mutableStateOf(false) }
+    var assetKind by rememberSaveable { mutableStateOf(AssetKind.Bank) }
+    val modeOptions = if (householdId.isNullOrBlank()) {
+        listOf(FinanceMode.Personal)
+    } else {
+        listOf(FinanceMode.Personal, FinanceMode.Shared)
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Новая категория активов", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Название") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Доступ", style = MaterialTheme.typography.labelLarge)
+            ChipRow(modeOptions, selectedMode, { selectedMode = it }, { it.title }, { it.icon() })
+            Text("Тип актива", style = MaterialTheme.typography.labelLarge)
+            ChipRow(AssetKind.entries.toList(), assetKind, { assetKind = it }, { it.title }, { it.icon })
+            Text("Валюта", style = MaterialTheme.typography.labelLarge)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(CURRENCIES) { cur ->
+                    FilterChip(
+                        selected = currency == cur,
+                        onClick = { currency = cur },
+                        label = { Text(cur.currencyLabel()) },
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = manualAmount,
+                onValueChange = { manualAmount = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' } },
+                label = { Text("Ручная сумма") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = isInvestment, onCheckedChange = { isInvestment = it })
+                Text("Инвестиции")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                    Text("Отмена")
+                }
+                Button(
+                    onClick = {
+                        onCreate(
+                            AssetCategoryCreateRequest(
+                                name = name.trim(),
+                                scopeType = if (selectedMode == FinanceMode.Shared) "household" else "personal",
+                                householdId = if (selectedMode == FinanceMode.Shared) householdId else null,
+                                currency = currency,
+                                manualAmount = manualAmount.normalizedBalanceAmount() ?: "0",
+                                isInvestment = isInvestment,
+                                assetType = assetKind.apiValue,
+                            ),
+                        )
+                    },
+                    enabled = name.isNotBlank() && manualAmount.normalizedBalanceAmount() != null,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Создать")
+                }
+            }
+        }
+    }
 }
 
 private fun Modifier.tapOrLongPress(
@@ -2240,6 +2540,33 @@ private fun AnalyticsSummaryCard(view: DashboardView) {
 }
 
 @Composable
+private fun InvestmentsCard(
+    total: MoneyAmount?,
+    byCurrency: List<MoneyAmount>,
+    fallbackCurrency: String,
+) {
+    val resolvedTotal = total ?: byCurrency.firstOrNull() ?: MoneyAmount(fallbackCurrency, "0")
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(R.drawable.ic_chart_24, Color(0xFF227C9D), size = 36)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Инвестиции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(resolvedTotal.amount.toMoney().formatMoney(resolvedTotal.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+            }
+            byCurrency.takeIf { it.isNotEmpty() }?.forEach { item ->
+                MetricLine(item.currency, item.amount.toMoney().formatMoney(item.currency), Color(0xFF227C9D))
+            }
+        }
+    }
+}
+
+@Composable
 private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -2262,6 +2589,7 @@ private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
 private fun CategoryManagementCard(
     categories: List<CategorySummary>,
     isAuthenticated: Boolean,
+    hasHousehold: Boolean,
     onAddCategory: (String, QuickEntryType, FinanceMode) -> Unit,
     onUpdateCategory: (CategorySummary, String) -> Unit,
     onArchiveCategory: (String) -> Unit,
@@ -2270,6 +2598,7 @@ private fun CategoryManagementCard(
     var mode by rememberSaveable { mutableStateOf(FinanceMode.Personal) }
     var newCategoryName by rememberSaveable { mutableStateOf("") }
     val categoryTypes = listOf(QuickEntryType.Expense, QuickEntryType.Income)
+    val modeOptions = if (hasHousehold) listOf(FinanceMode.Personal, FinanceMode.Shared) else listOf(FinanceMode.Personal)
     val visibleCategories = categories
         .filter { it.status == "active" }
         .sortedWith(compareBy<CategorySummary> { it.type }.thenBy { it.displayName() })
@@ -2295,7 +2624,7 @@ private fun CategoryManagementCard(
             Text("Тип", style = MaterialTheme.typography.labelLarge)
             ChipRow(categoryTypes, type, { type = it }, { it.title }, { it.icon() })
             Text("Режим", style = MaterialTheme.typography.labelLarge)
-            ChipRow(listOf(FinanceMode.Personal, FinanceMode.Shared), mode, { mode = it }, { it.title }, { it.icon() })
+            ChipRow(modeOptions, mode, { mode = it }, { it.title }, { it.icon() })
 
             OutlinedTextField(
                 value = newCategoryName,
@@ -2356,14 +2685,23 @@ private fun CategoryManagementRow(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            TextButton(onClick = {
+            IconButton(onClick = {
                 if (isEditing) editName = category.displayName()
                 isEditing = !isEditing
             }) {
-                Text(if (isEditing) "Отмена" else "Изменить")
+                Icon(
+                    painter = painterResource(if (isEditing) R.drawable.ic_delete_24 else R.drawable.ic_edit_24),
+                    contentDescription = if (isEditing) "Отмена" else "Изменить",
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
         if (isEditing) {
+            Text(
+                text = "Доступ: ${category.localizedScope()}. Изменяется только при создании категории.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2846,6 +3184,14 @@ data class AssetSummary(
     val count: Int,
 )
 
+data class AssetCategoryUiRow(
+    val category: AssetCategory,
+    val totalAmount: String,
+    val manualAmount: String,
+    val currency: String,
+    val scopeTitle: String,
+)
+
 data class CategorySpend(
     val name: String,
     val amount: BigDecimal,
@@ -2862,6 +3208,12 @@ data class QuickAddDraft(
     val categoryId: String,
     val assetKind: AssetKind,
     val visibility: FinanceMode,
+)
+
+data class AddAccountState(
+    val kind: AssetKind,
+    val mode: FinanceMode,
+    val assetCategoryId: String? = null,
 )
 
 enum class FinanceMode(val title: String) {
@@ -2965,6 +3317,40 @@ private fun assetSummaries(accounts: List<AccountSummary>): List<AssetSummary> {
             count = matching.size,
         )
     }
+}
+
+private fun FinanceDashboard?.assetCategoryRows(mode: FinanceMode): List<AssetCategoryUiRow> {
+    val dashboard = this ?: return emptyList()
+    val categories = dashboard.assetCategories
+        .filter { it.recordStatus == "active" }
+        .filter { it.matchesMode(mode) }
+    val byId = categories.associateBy { it.id }
+    val rowsFromGroups = dashboard.assetCategoryGroups
+        .filter { it.assetCategoryId.isNotBlank() }
+        .filter { it.matchesMode(mode) }
+        .map { group ->
+            val category = byId[group.assetCategoryId] ?: group.toAssetCategory()
+            AssetCategoryUiRow(
+                category = category,
+                totalAmount = group.totalAmount,
+                manualAmount = group.manualAmount,
+                currency = group.currency,
+                scopeTitle = group.scopeType.assetScopeTitle(),
+            )
+        }
+    val groupedIds = rowsFromGroups.map { it.category.id }.toSet()
+    val emptyCategoryRows = categories
+        .filter { it.id !in groupedIds }
+        .map { category ->
+            AssetCategoryUiRow(
+                category = category,
+                totalAmount = category.manualAmount,
+                manualAmount = category.manualAmount,
+                currency = category.currency,
+                scopeTitle = category.scopeType.assetScopeTitle(),
+            )
+        }
+    return (rowsFromGroups + emptyCategoryRows).sortedWith(compareBy<AssetCategoryUiRow> { it.scopeTitle }.thenBy { it.category.name })
 }
 
 private fun topCategories(
@@ -3113,6 +3499,39 @@ private fun AccountSummary.assetKind(): AssetKind {
     }
 }
 
+private fun AssetCategory.matchesMode(mode: FinanceMode): Boolean = when (mode) {
+    FinanceMode.Personal -> scopeType != "household"
+    FinanceMode.Shared -> scopeType == "household"
+    FinanceMode.Overview -> true
+}
+
+private fun AssetCategoryGroup.matchesMode(mode: FinanceMode): Boolean = when (mode) {
+    FinanceMode.Personal -> scopeType != "household"
+    FinanceMode.Shared -> scopeType == "household"
+    FinanceMode.Overview -> true
+}
+
+private fun AssetCategoryGroup.toAssetCategory(): AssetCategory {
+    return AssetCategory(
+        id = assetCategoryId,
+        name = name,
+        scopeType = scopeType,
+        householdId = householdId,
+        currency = currency,
+        manualAmount = manualAmount,
+        isInvestment = isInvestment,
+        assetType = assetType,
+    )
+}
+
+private fun String.assetKindOrBank(): AssetKind {
+    return AssetKind.entries.firstOrNull { it.apiValue == this } ?: AssetKind.Bank
+}
+
+private fun String.assetScopeTitle(): String {
+    return if (this == "household") "Общее" else "Личное"
+}
+
 private fun CategorySummary?.colorOrFallback(): Color {
     val fallback = if (this?.type == "income") Color(0xFF2E7D62) else Color(0xFFE35D4F)
     val raw = this?.color?.takeIf { it.startsWith("#") } ?: return fallback
@@ -3253,8 +3672,9 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         initialBalance: String,
         accountType: String,
         householdId: String?,
+        assetCategoryId: String?,
     ): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary(name, accountType, if (householdId.isNullOrBlank()) "personal" else "shared", currency, initialBalance, id = "acc-created", householdId = householdId, version = 1))
+        return ApiResult.Success(AccountSummary(name, accountType, if (householdId.isNullOrBlank()) "personal" else "shared", currency, initialBalance, id = "acc-created", householdId = householdId, assetCategoryId = assetCategoryId, version = 1))
     }
 
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> {

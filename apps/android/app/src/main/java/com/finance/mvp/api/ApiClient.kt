@@ -44,10 +44,15 @@ interface FinanceApiClient {
         initialBalance: String,
         accountType: String,
         householdId: String?,
+        assetCategoryId: String? = null,
     ): ApiResult<AccountSummary>
     suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary>
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
+    suspend fun createAssetCategory(request: AssetCategoryCreateRequest): ApiResult<AssetCategory> =
+        ApiResult.Failure("Asset categories are not supported by this client")
+    suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> =
+        ApiResult.Failure("Asset categories are not supported by this client")
     suspend fun createDemoCategory(
         householdId: String?,
         categoryType: String = "expense",
@@ -148,6 +153,10 @@ data class FinanceDashboard(
     val transactions: List<TransactionSummary>,
     val totals: List<MoneyTotal>,
     val reportTransferCount: Int,
+    val assetCategories: List<AssetCategory> = emptyList(),
+    val assetCategoryGroups: List<AssetCategoryGroup> = emptyList(),
+    val investmentsByCurrency: List<MoneyAmount> = emptyList(),
+    val investmentsTotal: MoneyAmount? = null,
 )
 
 data class AccountSummary(
@@ -159,7 +168,51 @@ data class AccountSummary(
     val id: String = "",
     val householdId: String? = null,
     val status: String = "active",
+    val assetCategoryId: String? = null,
     val version: Int? = null,
+)
+
+data class AssetCategory(
+    val id: String,
+    val name: String,
+    val scopeType: String,
+    val householdId: String? = null,
+    val ownerUserId: String? = null,
+    val currency: String,
+    val manualAmount: String,
+    val isInvestment: Boolean,
+    val assetType: String,
+    val recordStatus: String = "active",
+    val version: Int? = null,
+)
+
+data class AssetCategoryGroup(
+    val assetCategoryId: String,
+    val name: String,
+    val scopeType: String,
+    val householdId: String? = null,
+    val currency: String,
+    val manualAmount: String,
+    val accountsTotal: String,
+    val totalAmount: String,
+    val isInvestment: Boolean,
+    val assetType: String,
+    val accountCount: Int = 0,
+)
+
+data class MoneyAmount(
+    val currency: String,
+    val amount: String,
+)
+
+data class AssetCategoryCreateRequest(
+    val name: String,
+    val scopeType: String,
+    val householdId: String? = null,
+    val currency: String,
+    val manualAmount: String = "0",
+    val isInvestment: Boolean = false,
+    val assetType: String = "bank",
 )
 
 data class CategorySummary(
@@ -423,23 +476,55 @@ class LiveFinanceApiClient(
         val session = parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
         val accounts = request(path = "/api/v1/accounts", method = "GET").items().map(::parseAccount)
         val categories = request(path = "/api/v1/categories", method = "GET").items().map(::parseCategory)
+        val assetCategories = runCatching {
+            request(path = "/api/v1/asset-categories", method = "GET").items().map(::parseAssetCategory)
+        }.getOrDefault(emptyList())
         val transactions = request(path = "/api/v1/transactions", method = "GET").items().map(::parseTransaction)
-        val reportData = session.householdId?.let { householdId ->
+        val reportData = runCatching {
+            val householdId = session.householdId
             request(
                 path = "/api/v1/reports/summary",
                 method = "GET",
-                query = mapOf(
-                    "reportMode" to "combined_viewer_overview",
-                    "householdId" to householdId,
-                    "currency" to (accounts.firstOrNull()?.currency ?: "USD"),
-                ),
+                query = (
+                    if (householdId.isNullOrBlank()) {
+                        mapOf("reportMode" to "personal")
+                    } else {
+                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
+                    }
+                    ) + mapOf("currency" to (accounts.firstOrNull()?.currency ?: "USD")),
             ).optJSONObject("data")
-        }
+        }.getOrNull()
         val totals = reportData
             ?.optJSONArray("totalsByCurrency")
             ?.toObjectList()
             ?.map(::parseMoneyTotal)
             ?: emptyList()
+        val accountBalancesData = runCatching {
+            val householdId = session.householdId
+            request(
+                path = "/api/v1/reports/account-balances",
+                method = "GET",
+                query = (
+                    if (householdId.isNullOrBlank()) {
+                        mapOf("reportMode" to "personal")
+                    } else {
+                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
+                    }
+                    ) + mapOf("currency" to (accounts.firstOrNull()?.currency ?: "USD")),
+            ).optJSONObject("data")
+        }.getOrNull()
+        val assetCategoryGroups = accountBalancesData
+            ?.optJSONArray("assetCategoryGroups")
+            ?.toObjectList()
+            ?.map(::parseAssetCategoryGroup)
+            ?: emptyList()
+        val investmentsByCurrency = accountBalancesData
+            ?.optJSONArray("investmentsByCurrency")
+            ?.toObjectList()
+            ?.map(::parseMoneyAmount)
+            ?: emptyList()
+        val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
+            ?: accountBalancesData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
         val reportTransferCount = session.householdId?.let { householdId ->
             request(
                 path = "/api/v1/reports/transactions",
@@ -463,6 +548,10 @@ class LiveFinanceApiClient(
             transactions = transactions,
             totals = totals,
             reportTransferCount = reportTransferCount,
+            assetCategories = assetCategories,
+            assetCategoryGroups = assetCategoryGroups,
+            investmentsByCurrency = investmentsByCurrency,
+            investmentsTotal = investmentsTotal,
         )
     }
 
@@ -497,6 +586,7 @@ class LiveFinanceApiClient(
         initialBalance: String,
         accountType: String,
         householdId: String?,
+        assetCategoryId: String?,
     ): ApiResult<AccountSummary> = safeCall {
         val ownershipType = if (householdId.isNullOrBlank()) "personal" else "shared"
         request(
@@ -507,6 +597,7 @@ class LiveFinanceApiClient(
                 .put("accountType", accountType)
                 .put("ownershipType", ownershipType)
                 .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
+                .apply { assetCategoryId?.takeIf { it.isNotBlank() }?.let { put("assetCategoryId", it) } }
                 .put("currency", currency)
                 .put("initialBalance", initialBalance)
                 .toString(),
@@ -519,6 +610,7 @@ class LiveFinanceApiClient(
             .put("name", account.name.take(80))
             .put("currentBalance", account.currentBalance)
             .put("currency", account.currency)
+            .apply { account.assetCategoryId?.takeIf { it.isNotBlank() }?.let { put("assetCategoryId", it) } }
         account.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/accounts/${account.id.urlEncodePath()}",
@@ -531,6 +623,29 @@ class LiveFinanceApiClient(
         request(path = "/api/v1/accounts/${accountId.urlEncodePath()}/archive", method = "POST")
             .dataObject()
             .let(::parseAccount)
+    }
+
+    override suspend fun createAssetCategory(request: AssetCategoryCreateRequest): ApiResult<AssetCategory> = safeCall {
+        request(
+            path = "/api/v1/asset-categories",
+            method = "POST",
+            body = request.toJson().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
+        ).dataObject().let(::parseAssetCategory)
+    }
+
+    override suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> = safeCall {
+        val body = JSONObject()
+            .put("name", category.name.take(80))
+            .put("manualAmount", category.manualAmount)
+            .put("isInvestment", category.isInvestment)
+            .put("assetType", category.assetType)
+        category.version?.let { body.put("version", it) }
+        request(
+            path = "/api/v1/asset-categories/${category.id.urlEncodePath()}",
+            method = "PATCH",
+            body = body.toString(),
+        ).dataObject().let(::parseAssetCategory)
     }
 
     override suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary> = safeCall {
@@ -1001,7 +1116,76 @@ private fun parseAccount(json: JSONObject): AccountSummary {
         id = json.optString("id"),
         householdId = json.optString("householdId").takeIf { it.isNotBlank() && it != "null" },
         status = json.optString("status", "active"),
+        assetCategoryId = json.optString("assetCategoryId").takeIf { it.isNotBlank() && it != "null" },
         version = json.optIntOrNull("version"),
+    )
+}
+
+private fun parseAssetCategory(json: JSONObject): AssetCategory {
+    return AssetCategory(
+        id = json.optString("id"),
+        name = userFacingSeedText(json.optString("name", "Категория активов")),
+        scopeType = json.optString("scopeType", json.optString("scope", "personal")),
+        householdId = json.optNullableString("householdId"),
+        ownerUserId = json.optNullableString("ownerUserId"),
+        currency = json.optString("currency", "USD"),
+        manualAmount = json.optString("manualAmount", "0"),
+        isInvestment = json.optBoolean("isInvestment", false),
+        assetType = json.optString("assetType", json.optString("accountType", "bank")),
+        recordStatus = json.optString("recordStatus", json.optString("status", "active")),
+        version = json.optIntOrNull("version"),
+    )
+}
+
+private fun parseAssetCategoryGroup(json: JSONObject): AssetCategoryGroup {
+    val category = json.optJSONObject("assetCategory") ?: json.optJSONObject("category")
+    val categoryId = json.optNullableString("assetCategoryId")
+        ?: category?.optNullableString("id")
+        ?: json.optNullableString("id")
+        ?: ""
+    val manualAmount = json.optString("manualAmount", category?.optString("manualAmount", "0") ?: "0")
+    val accountsTotal = json.optString(
+        "linkedAccountsTotal",
+        json.optString(
+            "accountsTotal",
+            json.optString("accountsBalance", json.optString("accountsAmount", "0")),
+        ),
+    )
+    val fallbackTotal = (accountsTotal.toApiMoney() + manualAmount.toApiMoney()).toPlainString()
+    return AssetCategoryGroup(
+        assetCategoryId = categoryId,
+        name = userFacingSeedText(
+            json.optString("assetCategoryName").ifBlank {
+                json.optString("name").ifBlank {
+                    category?.optString("name", "Категория активов").orEmpty()
+                }
+            },
+        ),
+        scopeType = json.optString("scopeType", category?.optString("scopeType", "personal") ?: "personal"),
+        householdId = json.optNullableString("householdId") ?: category?.optNullableString("householdId"),
+        currency = json.optString("currency", category?.optString("currency", "USD") ?: "USD"),
+        manualAmount = manualAmount,
+        accountsTotal = accountsTotal,
+        totalAmount = json.optString(
+            "currentBalanceTotal",
+            json.optString(
+                "totalAmount",
+                json.optString("total", json.optString("currentBalance", fallbackTotal)),
+            ),
+        ),
+        isInvestment = json.optBoolean("isInvestment", category?.optBoolean("isInvestment", false) ?: false),
+        assetType = json.optString("assetType", category?.optString("assetType", "bank") ?: "bank"),
+        accountCount = json.optInt("accountCount", json.optJSONArray("accounts")?.length() ?: 0),
+    )
+}
+
+private fun parseMoneyAmount(json: JSONObject): MoneyAmount {
+    return MoneyAmount(
+        currency = json.optString("currency", "USD"),
+        amount = json.optString(
+            "investmentsTotal",
+            json.optString("amount", json.optString("total", json.optString("value", "0"))),
+        ),
     )
 }
 
@@ -1165,6 +1349,19 @@ private fun PlanningPlanCreateRequest.toJson(): JSONObject {
 private fun PlanningPlanCopyRequest.toJson(): JSONObject {
     return JSONObject()
         .put("targetMonth", targetMonth)
+}
+
+private fun AssetCategoryCreateRequest.toJson(): JSONObject {
+    return JSONObject()
+        .put("name", name.trim().take(80))
+        .put("scopeType", if (scopeType == "household") "household" else "personal")
+        .put("currency", currency)
+        .put("manualAmount", manualAmount)
+        .put("isInvestment", isInvestment)
+        .put("assetType", assetType)
+        .apply {
+            householdId?.takeIf { it.isNotBlank() && scopeType == "household" }?.let { put("householdId", it) }
+        }
 }
 
 private fun PlanningIncomeSourceCreateRequest.toJson(): JSONObject {
@@ -1350,6 +1547,7 @@ private fun JSONObject.optNullableJsonString(name: String): String? {
 private fun JSONObject.planningAllocationTargetType(): String {
     val explicit = optString("targetType").takeIf { it.isNotBlank() && it != "null" }
     return explicit ?: when {
+        optNullableString("assetCategoryId") != null -> "investment_asset_category"
         optNullableString("assetId") != null -> "asset"
         optNullableString("accountId") != null -> "account"
         optNullableString("categoryId") != null -> "expense_category"
@@ -1359,6 +1557,7 @@ private fun JSONObject.planningAllocationTargetType(): String {
 
 private fun JSONObject.planningAllocationTargetId(targetType: String): String? {
     return optNullableString("targetId") ?: when (targetType) {
+        "investment_asset_category" -> optNullableString("assetCategoryId")
         "asset" -> optNullableString("assetId")
         "account" -> optNullableString("accountId")
         "expense_category" -> optNullableString("categoryId")
@@ -1369,6 +1568,10 @@ private fun JSONObject.planningAllocationTargetId(targetType: String): String? {
 }
 
 private fun String.planningAbsoluteAmount(): String = trim().removePrefix("-")
+
+private fun String.toApiMoney(): BigDecimal {
+    return runCatching { BigDecimal(trim().ifBlank { "0" }) }.getOrDefault(BigDecimal.ZERO)
+}
 
 private fun JSONArray.toObjectList(): List<JSONObject> {
     return (0 until length()).mapNotNull { index -> optJSONObject(index) }

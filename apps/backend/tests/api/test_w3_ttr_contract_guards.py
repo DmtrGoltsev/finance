@@ -199,6 +199,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
 
     assert _inline_array_value(_schema_block("SourceType"), "enum") == ["manual"]
     assert _inline_array_value(_schema_block("ReportMode"), "enum") == [
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     ]
@@ -209,6 +210,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
 
     assert tuple(item.value for item in SourceType) == ("manual",)
     assert tuple(item.value for item in ReportMode) == (
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     )
@@ -220,6 +222,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
     assert TRANSFER_SCOPES == ("personal_same_owner", "household_same_household")
     assert graph_contracts["sourceType"] == ["manual"]
     assert graph_contracts["reportModes"] == [
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     ]

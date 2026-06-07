@@ -33,6 +33,7 @@ from app.db.base import Base
 from app.db.model_enums import (
     ACCOUNT_TYPES,
     ACTIVE_DELETED_STATUSES,
+    ASSET_CATEGORY_TYPES,
     AUDIT_RESULTS,
     AUDIT_SCOPE_TYPES,
     AUTH_STATUSES,
@@ -215,6 +216,7 @@ class Account(TimestampMixin, VersionedMixin, Base):
         ),
         Index("ix_accounts_owner_user_status", "owner_user_id", "record_status"),
         Index("ix_accounts_household_status", "household_id", "record_status"),
+        Index("ix_accounts_asset_category_id", "asset_category_id"),
         Index("ix_accounts_ownership_owner_status", "ownership_type", "owner_user_id", "record_status"),
         Index("ix_accounts_ownership_household_status", "ownership_type", "household_id", "record_status"),
     )
@@ -226,6 +228,7 @@ class Account(TimestampMixin, VersionedMixin, Base):
     ownership_type: Mapped[str] = mapped_column(Text, nullable=False)
     owner_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
+    asset_category_id: Mapped[uuid.UUID | None] = uuid_fk("asset_categories.id", nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     initial_balance_amount: Mapped[Decimal] = mapped_column(
         MONEY_NUMERIC,
@@ -233,6 +236,50 @@ class Account(TimestampMixin, VersionedMixin, Base):
         server_default=text("0"),
     )
     current_balance_amount: Mapped[Decimal | None] = mapped_column(MONEY_NUMERIC)
+    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AssetCategory(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "asset_categories"
+    __table_args__ = (
+        CheckConstraint(enum_check("scope_type", CATEGORY_SCOPES), name="scope_type_valid"),
+        CheckConstraint(enum_check("asset_type", ASSET_CATEGORY_TYPES), name="asset_type_valid"),
+        CheckConstraint(
+            "(scope_type = 'personal' AND owner_user_id IS NOT NULL AND household_id IS NULL) "
+            "OR (scope_type = 'household' AND household_id IS NOT NULL AND owner_user_id IS NULL)",
+            name="exactly_one_scope",
+        ),
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
+        CheckConstraint("manual_amount >= 0", name="non_negative_manual_amount"),
+        CheckConstraint(enum_check("record_status", RECORD_STATUSES), name="record_status_valid"),
+        Index("ix_asset_categories_owner_status", "owner_user_id", "record_status"),
+        Index("ix_asset_categories_household_status", "household_id", "record_status"),
+        Index("ix_asset_categories_investment_status", "is_investment", "record_status"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_type: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
+    household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    asset_type: Mapped[str] = mapped_column(Text, nullable=False)
+    manual_amount: Mapped[Decimal] = mapped_column(
+        MONEY_NUMERIC,
+        nullable=False,
+        server_default=text("0"),
+    )
+    is_investment: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
     record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

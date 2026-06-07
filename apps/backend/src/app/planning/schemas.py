@@ -46,6 +46,7 @@ class AllocationTargetType(StrEnum):
     EXPENSE_CATEGORY = "expense_category"
     ACCOUNT = "account"
     ASSET = "asset"
+    INVESTMENT_ASSET_CATEGORY = "investment_asset_category"
 
 
 class AllocationMode(StrEnum):

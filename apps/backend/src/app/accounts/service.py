@@ -6,6 +6,12 @@ from decimal import Decimal
 from app.authz import (
     Account as AuthzAccount,
 )
+from app.asset_categories.repository import AssetCategoryRepository
+from app.asset_categories.repository import repository as asset_category_repository
+from app.asset_categories.service import (
+    asset_category_in_account_scope,
+    can_read_asset_category,
+)
 from app.authz import (
     AccountOwnershipType,
     Actor,
@@ -76,9 +82,11 @@ class AccountService:
         self,
         repository: AccountRepository = account_repository,
         transactions: TransactionRepository = transaction_repository,
+        asset_categories: AssetCategoryRepository = asset_category_repository,
     ) -> None:
         self._repository = repository
         self._transactions = transactions
+        self._asset_categories = asset_categories
 
     def list_accounts(
         self,
@@ -152,6 +160,15 @@ class AccountService:
             owner_user_id = None
             household_id = request.household_id
 
+        asset_category_id = self._validated_asset_category_id(
+            actor=actor,
+            asset_category_id=request.asset_category_id,
+            ownership_type=ownership_type.value,
+            owner_user_id=owner_user_id,
+            household_id=household_id,
+            currency=request.currency,
+        )
+
         return self._repository.create(
             name=request.name,
             account_type=str(request.account_type),
@@ -161,6 +178,7 @@ class AccountService:
             created_by_user_id=actor.user_id,
             owner_user_id=owner_user_id,
             household_id=household_id,
+            asset_category_id=asset_category_id,
         )
 
     def get_account(self, *, actor: Actor, account_id: str) -> AccountRecord:
@@ -197,6 +215,16 @@ class AccountService:
             next_record = replace(next_record, currency=request.currency)
         if request.account_type is not None:
             next_record = replace(next_record, account_type=str(request.account_type))
+        if "asset_category_id" in request.model_fields_set:
+            asset_category_id = self._validated_asset_category_id(
+                actor=actor,
+                asset_category_id=request.asset_category_id,
+                ownership_type=record.ownership_type.value,
+                owner_user_id=record.owner_user_id,
+                household_id=record.household_id,
+                currency=next_record.currency,
+            )
+            next_record = replace(next_record, asset_category_id=asset_category_id)
         if request.status is not None:
             next_record = _with_status(next_record, ResourceStatus(request.status))
 
@@ -221,6 +249,31 @@ class AccountService:
         if record.status != ResourceStatus.ARCHIVED:
             raise AccountServiceError(DenialReason.ACTION_NOT_ALLOWED)
         return self._repository.save(_with_status(record, ResourceStatus.ACTIVE))
+
+    def _validated_asset_category_id(
+        self,
+        *,
+        actor: Actor,
+        asset_category_id: str | None,
+        ownership_type: str,
+        owner_user_id: str | None,
+        household_id: str | None,
+        currency: str,
+    ) -> str | None:
+        if asset_category_id is None:
+            return None
+        asset_category = self._asset_categories.get(asset_category_id)
+        if asset_category is None or not can_read_asset_category(actor, asset_category):
+            raise AccountNotFoundOrInaccessible()
+        if not asset_category_in_account_scope(
+            asset_category,
+            ownership_type=ownership_type,
+            owner_user_id=owner_user_id,
+            household_id=household_id,
+            currency=currency,
+        ):
+            raise AccountNotFoundOrInaccessible()
+        return asset_category.id
 
 
 def _decode_cursor(cursor: str | None) -> int:

@@ -20,6 +20,7 @@ from app.auth.runtime import AuthSessionService, InMemoryCredentialStore, get_au
 from app.auth.security import HmacSha256TokenHashingBackend, Pbkdf2Sha256PasswordHashingBackend
 from app.auth.session_tokens import InMemorySessionTokenStore
 from app.authz import AccountOwnershipType, MembershipStatus, ResourceStatus
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.categories.repository import CategoryRecord, SqlAlchemyCategoryRepository
 from app.categories.repository import repository as category_repository
 from app.categories.schemas import CategoryScope, CategoryType, RecordStatus
@@ -27,6 +28,7 @@ from app.config import Settings, get_settings
 from app.db.base import Base
 from app.db.models import (
     Account,
+    AssetCategory,
     Category,
     Household,
     PlanningAllocation,
@@ -69,6 +71,7 @@ _DEV_PLANNING_TABLES = [
     User.__table__,
     Household.__table__,
     DbMembership.__table__,
+    AssetCategory.__table__,
     Account.__table__,
     Category.__table__,
     PlanningPlan.__table__,
@@ -632,6 +635,7 @@ def _seeded_dev_planning_service(database_url: str):
                 SqlAlchemyPlanningRepository(session),
                 SqlAlchemyAccountRepository(session),
                 SqlAlchemyCategoryRepository(session),
+                SqlAlchemyAssetCategoryRepository(session),
             )
 
     return override

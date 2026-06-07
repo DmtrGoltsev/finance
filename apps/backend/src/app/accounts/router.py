@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from app.api.auth_context import CurrentActor
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.authz import AccountOwnershipType, DenialReason, ResourceStatus
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
@@ -44,6 +45,7 @@ def account_service_for_request() -> Iterator[AccountService]:
         yield AccountService(
             SqlAlchemyAccountRepository(session),
             SqlAlchemyTransactionRepository(session),
+            SqlAlchemyAssetCategoryRepository(session),
         )
 
 
@@ -58,6 +60,7 @@ def _account_dto(record: AccountRecord) -> AccountDto:
         ownership_type=record.ownership_type.value,
         owner_user_id=record.owner_user_id,
         household_id=record.household_id,
+        asset_category_id=record.asset_category_id,
         currency=record.currency,
         initial_balance=record.initial_balance,
         current_balance=record.current_balance,

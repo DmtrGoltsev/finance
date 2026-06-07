@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.accounts.repository import SqlAlchemyAccountRepository
 from app.api.auth_context import CurrentActor
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.authz import DenialReason
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.config import get_settings
@@ -57,6 +58,7 @@ def planning_service_for_request() -> Iterator[PlanningService]:
             SqlAlchemyPlanningRepository(session),
             SqlAlchemyAccountRepository(session),
             SqlAlchemyCategoryRepository(session),
+            SqlAlchemyAssetCategoryRepository(session),
         )
 
 

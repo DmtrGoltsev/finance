@@ -51,6 +51,7 @@ class TransactionType(DomainStrEnum):
 
 
 class ReportMode(DomainStrEnum):
+    PERSONAL = "personal"
     SHARED_FAMILY_REPORT = "shared_family_report"
     COMBINED_VIEWER_OVERVIEW = "combined_viewer_overview"
 

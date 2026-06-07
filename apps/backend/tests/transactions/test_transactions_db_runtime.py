@@ -19,6 +19,7 @@ from app.authz import Actor, Membership, MembershipStatus
 from app.db.base import Base
 from app.db.models import (
     Account,
+    AssetCategory,
     CaptureCategoryMapping,
     CaptureDraft,
     Category,
@@ -43,6 +44,7 @@ TABLES = [
     User.__table__,
     Household.__table__,
     DbMembership.__table__,
+    AssetCategory.__table__,
     Account.__table__,
     Category.__table__,
     Transaction.__table__,

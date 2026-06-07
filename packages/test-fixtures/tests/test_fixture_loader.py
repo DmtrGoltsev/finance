@@ -106,7 +106,7 @@ class FixtureLoaderTests(unittest.TestCase):
         )
         self.assertEqual(
             graph["contracts"]["reportModes"],
-            ["shared_family_report", "combined_viewer_overview"],
+            ["personal", "shared_family_report", "combined_viewer_overview"],
         )
         self.assertEqual(
             graph["contracts"]["transferScopes"],

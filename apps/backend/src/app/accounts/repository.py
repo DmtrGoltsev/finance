@@ -29,6 +29,7 @@ class AccountRecord:
     version: int = 1
     owner_user_id: str | None = None
     household_id: str | None = None
+    asset_category_id: str | None = None
     status: ResourceStatus = ResourceStatus.ACTIVE
     archived_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -52,6 +53,7 @@ class AccountRepository(Protocol):
         created_by_user_id: str,
         owner_user_id: str | None,
         household_id: str | None,
+        asset_category_id: str | None = None,
     ) -> AccountRecord:
         """Persist a new account record."""
 
@@ -93,6 +95,7 @@ class InMemoryAccountRepository:
         created_by_user_id: str,
         owner_user_id: str | None,
         household_id: str | None,
+        asset_category_id: str | None = None,
     ) -> AccountRecord:
         now = datetime.now(UTC)
         record = AccountRecord(
@@ -102,6 +105,7 @@ class InMemoryAccountRepository:
             ownership_type=ownership_type,
             owner_user_id=owner_user_id,
             household_id=household_id,
+            asset_category_id=asset_category_id,
             currency=currency,
             initial_balance=initial_balance,
             current_balance=initial_balance,
@@ -158,6 +162,7 @@ class SqlAlchemyAccountRepository:
         created_by_user_id: str,
         owner_user_id: str | None,
         household_id: str | None,
+        asset_category_id: str | None = None,
     ) -> AccountRecord:
         now = datetime.now(UTC)
         model = AccountModel(
@@ -167,6 +172,7 @@ class SqlAlchemyAccountRepository:
             ownership_type=ownership_type.value,
             owner_user_id=_nullable_uuid(owner_user_id, "owner_user_id"),
             household_id=_nullable_uuid(household_id, "household_id"),
+            asset_category_id=_nullable_uuid(asset_category_id, "asset_category_id"),
             currency=currency,
             initial_balance_amount=initial_balance,
             current_balance_amount=initial_balance,
@@ -190,6 +196,7 @@ class SqlAlchemyAccountRepository:
 
         model.name = record.name
         model.account_type = record.account_type
+        model.asset_category_id = _nullable_uuid(record.asset_category_id, "asset_category_id")
         model.currency = record.currency
         model.current_balance_amount = record.current_balance
         model.record_status = record.status.value
@@ -214,6 +221,9 @@ def _record_from_model(model: AccountModel) -> AccountRecord:
         ownership_type=AccountOwnershipType(model.ownership_type),
         owner_user_id=str(model.owner_user_id) if model.owner_user_id is not None else None,
         household_id=str(model.household_id) if model.household_id is not None else None,
+        asset_category_id=(
+            str(model.asset_category_id) if model.asset_category_id is not None else None
+        ),
         currency=model.currency,
         initial_balance=Decimal(model.initial_balance_amount),
         current_balance=Decimal(current_balance),

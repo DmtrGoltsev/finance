@@ -11,7 +11,7 @@ import org.junit.Test
 
 class ApiClientPlanningAllocationTest {
     @Test
-    fun createPlanningAllocationPostsAssetTargetTypeAndParsesAssetIdFallback() = runBlocking {
+    fun createPlanningAllocationPostsInvestmentAssetCategoryTargetTypeAndParsesAssetCategoryFallback() = runBlocking {
         withJsonPlanningServer(
             statusCode = 201,
             body = """
@@ -19,8 +19,8 @@ class ApiClientPlanningAllocationTest {
                   "data": {
                     "id": "alloc-1",
                     "planId": "plan-1",
-                    "targetType": "asset",
-                    "assetId": "asset-broker",
+                    "targetType": "investment_asset_category",
+                    "assetCategoryId": "asset-cat-broker",
                     "targetSnapshot": "Brokerage",
                     "requiresAttention": false,
                     "comment": "Invest",
@@ -37,8 +37,8 @@ class ApiClientPlanningAllocationTest {
             val result = client.createPlanningAllocation(
                 planId = "plan-1",
                 request = PlanningAllocationCreateRequest(
-                    targetType = "asset",
-                    targetId = "asset-broker",
+                    targetType = "investment_asset_category",
+                    targetId = "asset-cat-broker",
                     comment = "Invest",
                     allocationMode = "amount",
                     allocationValue = "100.00",
@@ -47,31 +47,31 @@ class ApiClientPlanningAllocationTest {
 
             assertTrue("Expected success, got $result", result is ApiResult.Success)
             val allocation = (result as ApiResult.Success).value
-            assertEquals("asset", allocation.targetType)
-            assertEquals("asset-broker", allocation.targetId)
+            assertEquals("investment_asset_category", allocation.targetType)
+            assertEquals("asset-cat-broker", allocation.targetId)
 
             val request = capturedRequest.get()
             val requestLine = request.lineSequence().first()
             assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
             assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/planning/plans/plan-1/allocations"))
             val json = JSONObject(request.substringAfter("\r\n\r\n"))
-            assertEquals("asset", json.getString("targetType"))
-            assertEquals("asset-broker", json.getString("targetId"))
+            assertEquals("investment_asset_category", json.getString("targetType"))
+            assertEquals("asset-cat-broker", json.getString("targetId"))
         }
     }
 
     @Test
-    fun updatePlanningAllocationPayloadAllowsAssetTargetType() {
+    fun updatePlanningAllocationPayloadAllowsInvestmentAssetCategoryTargetType() {
         val json = PlanningAllocationUpdateRequest(
-            targetType = "asset",
-            targetId = "asset-metal",
+            targetType = "investment_asset_category",
+            targetId = "asset-cat-metal",
             allocationMode = "percent",
             allocationValue = "15.00",
             version = 2,
         ).toJsonForApi()
 
-        assertEquals("asset", json.getString("targetType"))
-        assertEquals("asset-metal", json.getString("targetId"))
+        assertEquals("investment_asset_category", json.getString("targetType"))
+        assertEquals("asset-cat-metal", json.getString("targetId"))
         assertEquals("percent", json.getString("allocationMode"))
         assertEquals("15.00", json.getString("allocationValue"))
         assertEquals(2, json.getInt("version"))

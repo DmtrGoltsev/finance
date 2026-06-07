@@ -7,6 +7,10 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from app.accounts.repository import AccountRecord, AccountRepository
+from app.asset_categories.repository import AssetCategoryRecord, AssetCategoryRepository
+from app.asset_categories.schemas import AssetCategoryScope
+from app.asset_categories.schemas import RecordStatus as AssetCategoryRecordStatus
+from app.asset_categories.service import can_read_asset_category
 from app.authz import (
     Account as AuthzAccount,
 )
@@ -105,10 +109,12 @@ class PlanningService:
         plans: SqlAlchemyPlanningRepository,
         accounts: AccountRepository,
         categories: CategoryRepository,
+        asset_categories: AssetCategoryRepository,
     ) -> None:
         self._plans = plans
         self._accounts = accounts
         self._categories = categories
+        self._asset_categories = asset_categories
 
     def get_plan_for_scope_month(
         self,
@@ -466,6 +472,24 @@ class PlanningService:
                 attention_reason=None,
             )
 
+        if target_type == "investment_asset_category":
+            asset_category = self._asset_categories.get(target_id)
+            if asset_category is None or not can_read_asset_category(actor, asset_category):
+                raise PlanningReferencedResourceError()
+            if (
+                asset_category.status != AssetCategoryRecordStatus.ACTIVE
+                or not asset_category.is_investment
+                or asset_category.currency != plan.currency
+                or not _asset_category_in_plan_scope(asset_category, plan)
+            ):
+                raise PlanningReferencedResourceError()
+            return _ResolvedTarget(
+                target_id=asset_category.id,
+                snapshot=_asset_category_snapshot(asset_category),
+                requires_attention=False,
+                attention_reason=None,
+            )
+
         raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
 
     def _target_for_copy(
@@ -663,6 +687,21 @@ def _account_in_plan_scope(account: AccountRecord, plan: PlanningPlanRecord) -> 
     )
 
 
+def _asset_category_in_plan_scope(
+    category: AssetCategoryRecord,
+    plan: PlanningPlanRecord,
+) -> bool:
+    if plan.scope_type == "personal":
+        return (
+            category.scope_type == AssetCategoryScope.PERSONAL
+            and category.owner_user_id == plan.owner_user_id
+        )
+    return (
+        category.scope_type == AssetCategoryScope.HOUSEHOLD
+        and category.household_id == plan.household_id
+    )
+
+
 def _category_snapshot(category: CategoryRecord) -> dict[str, Any]:
     return {
         "targetType": "expense_category",
@@ -685,4 +724,18 @@ def _account_snapshot(account: AccountRecord, *, target_type: str = "account") -
         "ownerUserId": account.owner_user_id,
         "householdId": account.household_id,
         "currency": account.currency,
+    }
+
+
+def _asset_category_snapshot(category: AssetCategoryRecord) -> dict[str, Any]:
+    return {
+        "targetType": "investment_asset_category",
+        "id": category.id,
+        "name": category.name,
+        "assetType": category.asset_type.value,
+        "scopeType": category.scope_type.value,
+        "ownerUserId": category.owner_user_id,
+        "householdId": category.household_id,
+        "currency": category.currency,
+        "isInvestment": category.is_investment,
     }
