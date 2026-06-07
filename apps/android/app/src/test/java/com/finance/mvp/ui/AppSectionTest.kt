@@ -54,6 +54,40 @@ class AppSectionTest {
     }
 
     @Test
+    fun homeViewExcludesArchivedAccountsFromCapitalAssetsAndTransactions() {
+        val dashboard = dashboardFixture().copy(
+            accounts = dashboardFixture().accounts + AccountSummary(
+                "Архивный брокер",
+                "brokerage",
+                "personal",
+                "USD",
+                "9999.00",
+                id = "acc-archived",
+                status = "archived",
+            ),
+            transactions = dashboardFixture().transactions + TransactionSummary(
+                type = "expense",
+                amount = "999.00",
+                currency = "USD",
+                occurredAt = "2026-05-18T10:00:00Z",
+                description = "Архивная операция",
+                transferScope = null,
+                transferStatus = null,
+                id = "txn-archived",
+                accountId = "acc-archived",
+                categoryId = "cat-food",
+            ),
+        )
+
+        val view = dashboard.viewFor(FinanceMode.Overview)
+
+        assertEquals(BigDecimal("3525.50"), view.capital)
+        assertEquals(BigDecimal("69.75"), view.monthExpenses)
+        assertEquals(2, view.operationCount)
+        assertTrue(view.assetSummaries.any { it.kind == AssetKind.Brokerage && it.balance == BigDecimal("2200.00") })
+    }
+
+    @Test
     fun personalSharedAndOverviewModesFilterAccountsAndTransactions() {
         val dashboard = dashboardFixture().copy(
             accounts = dashboardFixture().accounts + AccountSummary(

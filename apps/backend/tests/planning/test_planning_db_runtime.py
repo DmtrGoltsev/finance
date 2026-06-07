@@ -280,6 +280,14 @@ def planning_graph(
             color="#445566",
             created_by_user_id=str(owner_id),
         )
+        session.execute(
+            update(Account)
+            .where(Account.id == UUID(str(owner_asset_account.id)))
+            .values(
+                asset_category_id=UUID(str(owner_investment_category.id)),
+                updated_at=BASE_TIME,
+            )
+        )
         session.flush()
 
     try:
@@ -576,6 +584,214 @@ def test_investment_asset_category_target_validates_active_investment_category(
     assert data["targetSnapshot"]["assetType"] == "brokerage"
     assert data["calculatedAmount"] == "350.0000"
     assert non_investment_allocation.status_code == 404
+
+
+def test_allocation_recurrence_and_savings_goal_contract(
+    planning_graph: dict[str, Any],
+) -> None:
+    owner = planning_graph["owner"]
+
+    with _client_for_actor(owner) as client:
+        created_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2027-03-01", "currency": "RUB"},
+        )
+        assert created_plan.status_code == 201, created_plan.text
+        plan_id = created_plan.json()["data"]["id"]
+
+        created_goal = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "investment_asset_category",
+                "targetId": planning_graph["owner_investment_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "100.0000",
+                "recurrenceType": "one_off",
+                "isSavingsGoal": True,
+                "goalTargetAmount": "900.0000",
+                "goalDueMonth": "2027-05-01",
+            },
+        )
+        rejected_expense_goal = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "expense_category",
+                "targetId": planning_graph["owner_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "50.0000",
+                "isSavingsGoal": True,
+            },
+        )
+
+    assert created_goal.status_code == 201, created_goal.text
+    goal_data = created_goal.json()["data"]
+    assert goal_data["recurrenceType"] == "one_off"
+    assert goal_data["isSavingsGoal"] is True
+    assert goal_data["goalTargetAmount"] == "900.0000"
+    assert goal_data["goalDueMonth"] == "2027-05"
+    assert goal_data["goalMonthlyAmount"] == "300.0000"
+    assert goal_data["status"] == "needs_attention"
+    assert goal_data["attentionReason"] == "INVESTMENT_UNDER_PLAN"
+    assert rejected_expense_goal.status_code == 422
+
+    with _client_for_actor(owner) as client:
+        updated_goal = client.patch(
+            f"/api/v1/planning/allocations/{goal_data['id']}",
+            json={
+                "recurrenceType": "regular",
+                "goalTargetAmount": "1200.0000",
+                "goalDueMonth": "2027-06",
+                "version": goal_data["version"],
+            },
+        )
+
+    assert updated_goal.status_code == 200, updated_goal.text
+    updated_data = updated_goal.json()["data"]
+    assert updated_data["recurrenceType"] == "regular"
+    assert updated_data["goalTargetAmount"] == "1200.0000"
+    assert updated_data["goalDueMonth"] == "2027-06"
+    assert updated_data["goalMonthlyAmount"] == "300.0000"
+
+
+def test_actual_progress_attention_rules_and_previous_month_surplus(
+    planning_graph: dict[str, Any],
+) -> None:
+    owner = planning_graph["owner"]
+
+    with _client_for_actor(owner) as client:
+        previous_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2027-04", "currency": "RUB"},
+        )
+        assert previous_plan.status_code == 201, previous_plan.text
+        previous_plan_id = previous_plan.json()["data"]["id"]
+        previous_expense = client.post(
+            f"/api/v1/planning/plans/{previous_plan_id}/allocations",
+            json={
+                "targetType": "expense_category",
+                "targetId": planning_graph["owner_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "500.0000",
+            },
+        )
+        assert previous_expense.status_code == 201, previous_expense.text
+
+        current_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2027-05", "currency": "RUB"},
+        )
+        assert current_plan.status_code == 201, current_plan.text
+        current_plan_id = current_plan.json()["data"]["id"]
+        current_expense = client.post(
+            f"/api/v1/planning/plans/{current_plan_id}/allocations",
+            json={
+                "targetType": "expense_category",
+                "targetId": planning_graph["owner_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "100.0000",
+            },
+        )
+        current_investment = client.post(
+            f"/api/v1/planning/plans/{current_plan_id}/allocations",
+            json={
+                "targetType": "investment_asset_category",
+                "targetId": planning_graph["owner_investment_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "300.0000",
+            },
+        )
+        assert current_expense.status_code == 201, current_expense.text
+        assert current_investment.status_code == 201, current_investment.text
+
+    engine = planning_graph["engine"]
+    owner_id = UUID(owner.user_id or "")
+    with engine.begin() as connection:
+        session = Session(bind=connection, expire_on_commit=False, future=True)
+        session.add_all(
+            [
+                Transaction(
+                    id=uuid4(),
+                    transaction_type="expense",
+                    account_id=UUID(str(planning_graph["owner_account_id"])),
+                    counterparty_account_id=None,
+                    category_id=UUID(str(planning_graph["owner_category_id"])),
+                    amount=Decimal("350.0000"),
+                    currency="RUB",
+                    occurred_at=datetime(2027, 4, 15, 12, 0, tzinfo=UTC),
+                    description="April groceries",
+                    source_type="manual",
+                    transfer_scope=None,
+                    transfer_status=None,
+                    record_status="active",
+                    created_by_user_id=owner_id,
+                    last_edited_by_user_id=owner_id,
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
+                Transaction(
+                    id=uuid4(),
+                    transaction_type="expense",
+                    account_id=UUID(str(planning_graph["owner_account_id"])),
+                    counterparty_account_id=None,
+                    category_id=UUID(str(planning_graph["owner_category_id"])),
+                    amount=Decimal("120.0000"),
+                    currency="RUB",
+                    occurred_at=datetime(2027, 5, 10, 12, 0, tzinfo=UTC),
+                    description="May groceries",
+                    source_type="manual",
+                    transfer_scope=None,
+                    transfer_status=None,
+                    record_status="active",
+                    created_by_user_id=owner_id,
+                    last_edited_by_user_id=owner_id,
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
+                Transaction(
+                    id=uuid4(),
+                    transaction_type="asset_buy",
+                    account_id=UUID(str(planning_graph["owner_asset_account_id"])),
+                    counterparty_account_id=None,
+                    category_id=None,
+                    amount=Decimal("100.0000"),
+                    currency="RUB",
+                    occurred_at=datetime(2027, 5, 20, 12, 0, tzinfo=UTC),
+                    description="May investment",
+                    source_type="manual",
+                    transfer_scope=None,
+                    transfer_status=None,
+                    record_status="active",
+                    created_by_user_id=owner_id,
+                    last_edited_by_user_id=owner_id,
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
+            ]
+        )
+        session.flush()
+
+    with _client_for_actor(owner) as client:
+        fetched = client.get(f"/api/v1/planning/plans/{current_plan_id}")
+
+    assert fetched.status_code == 200, fetched.text
+    data = fetched.json()["data"]
+    assert data["summary"]["previousMonthSurplus"] == "150.0000"
+    allocations_by_type = {item["targetType"]: item for item in data["allocations"]}
+    expense = allocations_by_type["expense_category"]
+    investment = allocations_by_type["investment_asset_category"]
+    assert expense["actualAmount"] == "120.0000"
+    assert expense["varianceAmount"] == "20.0000"
+    assert expense["requiresAttention"] is True
+    assert expense["status"] == "needs_attention"
+    assert expense["attentionReason"] == "EXPENSE_OVER_PLAN"
+    assert investment["actualAmount"] == "100.0000"
+    assert investment["varianceAmount"] == "-200.0000"
+    assert investment["requiresAttention"] is True
+    assert investment["status"] == "needs_attention"
+    assert investment["attentionReason"] == "INVESTMENT_UNDER_PLAN"
 
 
 @pytest.mark.parametrize("bad_amount", ["0.0000", "-1.0000"])

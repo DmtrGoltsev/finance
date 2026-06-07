@@ -58,3 +58,4 @@ PLANNING_ALLOCATION_TARGET_TYPES = (
     "investment_asset_category",
 )
 PLANNING_ALLOCATION_MODES = ("amount", "percent")
+PLANNING_ALLOCATION_RECURRENCE_TYPES = ("regular", "one_off")

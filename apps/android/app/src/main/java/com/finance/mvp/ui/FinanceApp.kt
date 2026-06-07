@@ -161,7 +161,7 @@ fun FinanceApp(
             val ocrResult = withContext(Dispatchers.IO) {
                 runCatching {
                     val inputStream = context.contentResolver.openInputStream(uri)
-                        ?: throw IllegalStateException("Cannot open image")
+                        ?: throw IllegalStateException("Не удалось открыть изображение")
                     val imageBytes = inputStream.use { it.readBytes() }
                     val contentType = context.contentResolver.getType(uri) ?: "image/jpeg"
                     apiClient.screenshotOcr(
@@ -1980,11 +1980,14 @@ private fun AssetCategoryGroupCard(
                         Text(category.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (category.isInvestment) {
                             Spacer(modifier = Modifier.width(6.dp))
-                            Icon(
-                                painter = painterResource(R.drawable.ic_chart_24),
-                                contentDescription = null,
-                                tint = Color(0xFF227C9D),
-                                modifier = Modifier.size(16.dp),
+                            Text(
+                                text = "Инвестиция",
+                                color = Color(0xFF227C9D),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .background(Color(0xFF227C9D).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
                     }
@@ -2030,7 +2033,7 @@ private fun AssetCategoryGroupCard(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = editInvestment, onCheckedChange = { editInvestment = it })
-                    Text("Инвестиционный актив")
+                    Text("Инвестиционная категория")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { isEditing = false }, modifier = Modifier.weight(1f)) {
@@ -2303,7 +2306,7 @@ private fun AssetCategorySheet(
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = isInvestment, onCheckedChange = { isInvestment = it })
-                Text("Инвестиции")
+                Text("Инвестиционная категория")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
@@ -3274,7 +3277,9 @@ fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<Sectio
 
 fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
     val dashboard = this
-    val accounts = dashboard?.accounts.orEmpty().filterByMode(mode)
+    val accounts = dashboard?.accounts.orEmpty()
+        .filter { it.status == "active" }
+        .filterByMode(mode)
     val accountIds = accounts.map { it.id }.toSet()
     val transactions = dashboard?.transactions.orEmpty()
         .filter { tx -> tx.matchesMode(mode, accountIds) }
@@ -3385,7 +3390,7 @@ private fun List<AccountSummary>.filterByMode(mode: FinanceMode): List<AccountSu
 
 private fun TransactionSummary.matchesMode(mode: FinanceMode, accountIds: Set<String>): Boolean {
     if (mode == FinanceMode.Overview) {
-        return true
+        return accountId in accountIds || counterpartyAccountId in accountIds
     }
     if (type == "transfer") {
         return accountId in accountIds && counterpartyAccountId in accountIds
@@ -3606,16 +3611,26 @@ private fun TransactionSummary.displayDescription(): String {
 private fun String.localizedCaptureSource(): String = when (this) {
     "screenshot_ocr" -> "Скриншот"
     "manual" -> "Ручной ввод"
-    else -> this
+    else -> "Импорт"
 }
 
 private fun ApiResult.Failure.userFacingMessage(): String {
     return when {
-        message.isNotBlank() -> message
+        message.isNotBlank() -> message.userFacingFailureText()
         statusCode == 401 -> "Сессия истекла. Войдите снова."
         statusCode == 403 -> "Нет доступа."
         statusCode != null && statusCode >= 500 -> "Ошибка сервера. Попробуйте позже."
         else -> "Не удалось выполнить действие"
+    }
+}
+
+private fun String.userFacingFailureText(): String {
+    return when {
+        contains("Cannot open image", ignoreCase = true) -> "Не удалось открыть изображение"
+        contains("not supported", ignoreCase = true) -> "Действие пока не поддерживается этим клиентом"
+        contains("HTTP 401", ignoreCase = true) -> "Сессия истекла. Войдите снова."
+        contains("HTTP 403", ignoreCase = true) -> "Нет доступа."
+        else -> this
     }
 }
 

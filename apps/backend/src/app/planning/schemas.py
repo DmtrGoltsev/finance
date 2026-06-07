@@ -24,7 +24,7 @@ class ApiModel(BaseModel):
 
 ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
-PlanMonth = Annotated[str, StringConstraints(pattern=r"^[0-9]{4}-[0-9]{2}$")]
+PlanMonth = Annotated[str, StringConstraints(pattern=r"^[0-9]{4}-[0-9]{2}(-01)?$")]
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=300)]
 OptionalShortText = Annotated[str, StringConstraints(max_length=500)]
 MoneyDecimal = Annotated[Decimal, Field(max_digits=20, decimal_places=4)]
@@ -54,11 +54,25 @@ class AllocationMode(StrEnum):
     PERCENT = "percent"
 
 
+class AllocationRecurrenceType(StrEnum):
+    REGULAR = "regular"
+    ONE_OFF = "one_off"
+
+
+class AllocationProgressStatus(StrEnum):
+    ON_TRACK = "on_track"
+    NEEDS_ATTENTION = "needs_attention"
+    NO_ACTUALS = "no_actuals"
+    TARGET_ATTENTION = "target_attention"
+    NOT_APPLICABLE = "not_applicable"
+
+
 class PlanningSummaryDto(ApiModel):
     total_planned_income: MoneyDecimal
     total_confirmed_income: MoneyDecimal
     total_allocated_amount: MoneyDecimal
     unallocated_amount: MoneyDecimal
+    previous_month_surplus: MoneyDecimal
     underallocated: bool
     overallocated: bool
 
@@ -92,6 +106,14 @@ class PlanningAllocationDto(ApiModel):
     allocation_mode: AllocationMode
     allocation_value: AllocationDecimal
     calculated_amount: MoneyDecimal
+    recurrence_type: AllocationRecurrenceType
+    is_savings_goal: bool
+    goal_target_amount: MoneyDecimal | None = None
+    goal_due_month: PlanMonth | None = None
+    goal_monthly_amount: MoneyDecimal | None = None
+    actual_amount: MoneyDecimal
+    variance_amount: MoneyDecimal
+    status: AllocationProgressStatus
     created_by_user_id: ResourceId
     created_at: datetime
     updated_at: datetime
@@ -155,6 +177,10 @@ class PlanningAllocationCreateRequest(ApiModel):
     comment: OptionalShortText | None = None
     allocation_mode: AllocationMode
     allocation_value: AllocationDecimal
+    recurrence_type: AllocationRecurrenceType = AllocationRecurrenceType.REGULAR
+    is_savings_goal: bool = False
+    goal_target_amount: PositiveMoneyDecimal | None = None
+    goal_due_month: PlanMonth | None = None
 
 
 class PlanningAllocationUpdateRequest(ApiModel):
@@ -163,6 +189,10 @@ class PlanningAllocationUpdateRequest(ApiModel):
     comment: OptionalShortText | None = None
     allocation_mode: AllocationMode | None = None
     allocation_value: AllocationDecimal | None = None
+    recurrence_type: AllocationRecurrenceType | None = None
+    is_savings_goal: bool | None = None
+    goal_target_amount: PositiveMoneyDecimal | None = None
+    goal_due_month: PlanMonth | None = None
     version: Annotated[int, Field(ge=1)] | None = None
 
 

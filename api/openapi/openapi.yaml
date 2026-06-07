@@ -1441,7 +1441,7 @@ components:
       in: query
       required: false
       schema: { $ref: '#/components/schemas/PlanMonth' }
-      description: Calendar month in YYYY-MM form. Defaults to next month when omitted.
+      description: Calendar month accepted as YYYY-MM or YYYY-MM-01. Defaults to next month when omitted.
     HouseholdIdRequired:
       name: householdId
       in: query
@@ -1555,9 +1555,9 @@ components:
       examples: ['2026-05-17']
     PlanMonth:
       type: string
-      pattern: '^[0-9]{4}-[0-9]{2}$'
-      examples: ['2026-06']
-      description: Calendar month encoded as YYYY-MM. Server stores the first day of the month.
+      pattern: '^[0-9]{4}-[0-9]{2}(-01)?$'
+      examples: ['2026-06', '2026-06-01']
+      description: Calendar month accepted as YYYY-MM or YYYY-MM-01. Responses use YYYY-MM; server stores the first day of the month.
     DecimalString:
       type: string
       pattern: '^-?[0-9]+(\.[0-9]{1,6})?$'
@@ -1599,6 +1599,12 @@ components:
     AllocationMode:
       type: string
       enum: [amount, percent]
+    AllocationRecurrenceType:
+      type: string
+      enum: [regular, one_off]
+    AllocationProgressStatus:
+      type: string
+      enum: [on_track, needs_attention, no_actuals, target_attention, not_applicable]
     TransactionType:
       type: string
       enum: [income, expense, transfer, brokerage, asset_buy, asset_sell, interest, dividend, adjustment]
@@ -2101,7 +2107,7 @@ components:
     PlanningSummaryDto:
       type: object
       additionalProperties: false
-      required: [totalPlannedIncome, totalConfirmedIncome, totalAllocatedAmount, unallocatedAmount, underallocated, overallocated]
+      required: [totalPlannedIncome, totalConfirmedIncome, totalAllocatedAmount, unallocatedAmount, previousMonthSurplus, underallocated, overallocated]
       properties:
         totalPlannedIncome:
           $ref: '#/components/schemas/DecimalString'
@@ -2111,6 +2117,9 @@ components:
           $ref: '#/components/schemas/DecimalString'
         unallocatedAmount:
           $ref: '#/components/schemas/DecimalString'
+        previousMonthSurplus:
+          $ref: '#/components/schemas/DecimalString'
+          description: "Proposal-only positive surplus from the previous month: planned expense allocations minus actual expense transactions in the previous plan month, floored at zero. No transaction is created."
         underallocated:
           type: boolean
           description: True when totalAllocatedAmount is less than totalPlannedIncome.
@@ -2164,7 +2173,7 @@ components:
     PlanningAllocationDto:
       type: object
       additionalProperties: false
-      required: [id, planId, targetType, targetSnapshot, requiresAttention, allocationMode, allocationValue, calculatedAmount, createdByUserId, createdAt, updatedAt, version]
+      required: [id, planId, targetType, targetSnapshot, requiresAttention, allocationMode, allocationValue, calculatedAmount, recurrenceType, isSavingsGoal, actualAmount, varianceAmount, status, createdByUserId, createdAt, updatedAt, version]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -2194,9 +2203,37 @@ components:
         allocationValue:
           $ref: '#/components/schemas/DecimalString'
           description: Amount value or percentage value depending on allocationMode.
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+          default: regular
+        isSavingsGoal:
+          type: boolean
+          default: false
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
+        goalMonthlyAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+          description: Computed as goalTargetAmount divided across plan month through goalDueMonth when both are present.
         calculatedAmount:
           $ref: '#/components/schemas/DecimalString'
           description: Percent allocations are calculated from total planned income in the current plan response.
+        actualAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: Actual matching transactions in the plan month. Expenses match by category; investment asset categories match active visible accounts linked by assetCategoryId.
+        varianceAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: actualAmount minus calculatedAmount.
+        status:
+          $ref: '#/components/schemas/AllocationProgressStatus'
         createdByUserId:
           $ref: '#/components/schemas/ResourceId'
         createdAt:
@@ -2344,6 +2381,21 @@ components:
           $ref: '#/components/schemas/AllocationMode'
         allocationValue:
           $ref: '#/components/schemas/DecimalString'
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+          default: regular
+        isSavingsGoal:
+          type: boolean
+          default: false
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
     PlanningAllocationUpdateRequest:
       type: object
       additionalProperties: false
@@ -2359,6 +2411,19 @@ components:
           $ref: '#/components/schemas/AllocationMode'
         allocationValue:
           $ref: '#/components/schemas/DecimalString'
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+        isSavingsGoal:
+          type: boolean
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
         version:
           type: integer
           minimum: 1

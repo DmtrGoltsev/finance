@@ -28,7 +28,7 @@ interface FinanceApiClient {
 
     suspend fun login(email: String, password: String): ApiResult<SessionStatus>
     suspend fun register(email: String, password: String, displayName: String? = null): ApiResult<RegistrationResult> =
-        ApiResult.Failure("Registration is not supported by this client")
+        ApiResult.Failure("Регистрация не поддерживается этим клиентом")
     suspend fun sessionStatus(): ApiResult<SessionStatus>
     suspend fun dashboard(): ApiResult<FinanceDashboard>
     suspend fun createDemoAccount(
@@ -50,9 +50,9 @@ interface FinanceApiClient {
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun createAssetCategory(request: AssetCategoryCreateRequest): ApiResult<AssetCategory> =
-        ApiResult.Failure("Asset categories are not supported by this client")
+        ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
     suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> =
-        ApiResult.Failure("Asset categories are not supported by this client")
+        ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
     suspend fun createDemoCategory(
         householdId: String?,
         categoryType: String = "expense",
@@ -80,58 +80,58 @@ interface FinanceApiClient {
         amount: String = "1.00",
     ): ApiResult<TransactionSummary>
     suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> =
-        ApiResult.Failure("Capture drafts are not supported by this client")
+        ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
     suspend fun listCaptureDrafts(status: String = "pending"): ApiResult<List<CaptureDraft>> =
-        ApiResult.Failure("Capture drafts are not supported by this client")
+        ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
     suspend fun updateCaptureDraft(draftId: String, request: CaptureDraftUpdateRequest): ApiResult<CaptureDraft> =
-        ApiResult.Failure("Capture drafts are not supported by this client")
+        ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
     suspend fun confirmCaptureDraft(draftId: String): ApiResult<CaptureDraft> =
-        ApiResult.Failure("Capture drafts are not supported by this client")
+        ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
     suspend fun discardCaptureDraft(draftId: String): ApiResult<Unit> =
-        ApiResult.Failure("Capture drafts are not supported by this client")
+        ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
     suspend fun screenshotOcr(
         imageBytes: ByteArray,
         contentType: String,
         capturedAt: String?,
         householdId: String?,
     ): ApiResult<ScreenshotOcrResponse> =
-        ApiResult.Failure("Screenshot OCR is not supported by this client")
+        ApiResult.Failure("Распознавание скриншотов не поддерживается этим клиентом")
     suspend fun listPlanningPlans(scope: String, month: String, householdId: String? = null): ApiResult<PlanningPlan?> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun listPlanningPlanHistory(scope: String, householdId: String? = null): ApiResult<List<PlanningPlan>> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun createPlanningPlan(request: PlanningPlanCreateRequest): ApiResult<PlanningPlan> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun getPlanningPlan(planId: String): ApiResult<PlanningPlan> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun createPlanningIncomeSource(
         planId: String,
         request: PlanningIncomeSourceCreateRequest,
     ): ApiResult<PlanningIncomeSource> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun updatePlanningIncomeSource(
         incomeSourceId: String,
         request: PlanningIncomeSourceUpdateRequest,
     ): ApiResult<PlanningIncomeSource> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun confirmPlanningIncomeSource(incomeSourceId: String): ApiResult<PlanningIncomeSource> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun deletePlanningIncomeSource(incomeSourceId: String): ApiResult<Unit> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun createPlanningAllocation(
         planId: String,
         request: PlanningAllocationCreateRequest,
     ): ApiResult<PlanningAllocation> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun updatePlanningAllocation(
         allocationId: String,
         request: PlanningAllocationUpdateRequest,
     ): ApiResult<PlanningAllocation> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun deletePlanningAllocation(allocationId: String): ApiResult<Unit> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun copyPlanningPlan(planId: String, request: PlanningPlanCopyRequest): ApiResult<PlanningPlan> =
-        ApiResult.Failure("Planning is not supported by this client")
+        ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -320,11 +320,15 @@ data class PlanningPlan(
     val currency: String,
     val householdId: String? = null,
     val totalPlannedIncome: String = "0",
+    val previousMonthSurplus: String = "0",
     val allocatedTotal: String = "0",
     val remainingAmount: String = "0",
     val overallocatedAmount: String = "0",
     val isUnderallocated: Boolean = false,
     val isOverallocated: Boolean = false,
+    val status: String? = null,
+    val progressStatus: String? = null,
+    val progressPercent: String? = null,
     val incomeSources: List<PlanningIncomeSource> = emptyList(),
     val allocations: List<PlanningAllocation> = emptyList(),
     val version: Int? = null,
@@ -354,6 +358,16 @@ data class PlanningAllocation(
     val allocationMode: String,
     val allocationValue: String,
     val calculatedAmount: String,
+    val recurrenceType: String? = null,
+    val isSavingsGoal: Boolean = false,
+    val goalTargetAmount: String? = null,
+    val goalDueMonth: String? = null,
+    val goalMonthlyAmount: String? = null,
+    val actualAmount: String? = null,
+    val varianceAmount: String? = null,
+    val progressPercent: String? = null,
+    val progressStatus: String? = null,
+    val status: String? = null,
     val version: Int? = null,
 )
 
@@ -393,6 +407,10 @@ data class PlanningAllocationCreateRequest(
     val comment: String? = null,
     val allocationMode: String,
     val allocationValue: String,
+    val recurrenceType: String? = null,
+    val isSavingsGoal: Boolean = false,
+    val goalTargetAmount: String? = null,
+    val goalDueMonth: String? = null,
 )
 
 data class PlanningAllocationUpdateRequest(
@@ -404,6 +422,10 @@ data class PlanningAllocationUpdateRequest(
     val comment: String? = null,
     val allocationMode: String? = null,
     val allocationValue: String? = null,
+    val recurrenceType: String? = null,
+    val isSavingsGoal: Boolean? = null,
+    val goalTargetAmount: String? = null,
+    val goalDueMonth: String? = null,
     val version: Int? = null,
 )
 
@@ -459,7 +481,7 @@ class LiveFinanceApiClient(
             tokenStore.clear()
             return@safeCall RegistrationResult.Accepted(
                 response.optString("message").takeIf { it.isNotBlank() }
-                    ?: "Registration accepted",
+                    ?: "Заявка на регистрацию принята",
             )
         }
         response.optString("accessToken").takeIf { it.isNotBlank() }?.let {
@@ -1263,6 +1285,8 @@ private fun parsePlanningPlan(json: JSONObject): PlanningPlan {
         householdId = json.optNullableString("householdId"),
         totalPlannedIncome = summary?.optString("totalPlannedIncome", "0")
             ?: json.optString("totalPlannedIncome", "0"),
+        previousMonthSurplus = summary?.optString("previousMonthSurplus", "0")
+            ?: json.optString("previousMonthSurplus", "0"),
         allocatedTotal = summary?.optString("totalAllocatedAmount", "0")
             ?: json.optString("allocatedTotal", "0"),
         remainingAmount = summary?.optString("unallocatedAmount", "0")
@@ -1279,6 +1303,9 @@ private fun parsePlanningPlan(json: JSONObject): PlanningPlan {
             ?: json.optBoolean("isUnderallocated", false),
         isOverallocated = summary?.optBoolean("overallocated", false)
             ?: json.optBoolean("isOverallocated", false),
+        status = json.optNullableString("status") ?: summary?.optNullableString("status"),
+        progressStatus = json.optNullableString("progressStatus") ?: summary?.optNullableString("progressStatus"),
+        progressPercent = json.optNullableString("progressPercent") ?: summary?.optNullableString("progressPercent"),
         incomeSources = json.optJSONArray("incomeSources")?.toObjectList()?.map(::parsePlanningIncomeSource)
             ?: emptyList(),
         allocations = json.optJSONArray("allocations")?.toObjectList()?.map(::parsePlanningAllocation)
@@ -1317,6 +1344,16 @@ private fun parsePlanningAllocation(json: JSONObject): PlanningAllocation {
         allocationMode = json.optString("allocationMode"),
         allocationValue = json.optString("allocationValue"),
         calculatedAmount = json.optString("calculatedAmount"),
+        recurrenceType = json.optNullableString("recurrenceType"),
+        isSavingsGoal = json.optBoolean("isSavingsGoal", json.optBoolean("savingsGoal", false)),
+        goalTargetAmount = json.optNullableString("goalTargetAmount"),
+        goalDueMonth = json.optNullableString("goalDueMonth"),
+        goalMonthlyAmount = json.optNullableString("goalMonthlyAmount"),
+        actualAmount = json.optNullableString("actualAmount"),
+        varianceAmount = json.optNullableString("varianceAmount"),
+        progressPercent = json.optNullableString("progressPercent"),
+        progressStatus = json.optNullableString("progressStatus"),
+        status = json.optNullableString("status"),
         version = json.optIntOrNull("version"),
     )
 }
@@ -1396,6 +1433,12 @@ internal fun PlanningAllocationCreateRequest.toJsonForApi(): JSONObject {
         .apply {
             targetSnapshot?.let { put("targetSnapshot", it) }
             comment?.let { put("comment", it) }
+            recurrenceType?.let { put("recurrenceType", it) }
+            put("isSavingsGoal", isSavingsGoal)
+            if (isSavingsGoal) {
+                goalTargetAmount?.let { put("goalTargetAmount", it) }
+                goalDueMonth?.let { put("goalDueMonth", it) }
+            }
         }
 }
 
@@ -1409,6 +1452,15 @@ internal fun PlanningAllocationUpdateRequest.toJsonForApi(): JSONObject {
         comment?.let { put("comment", it) }
         allocationMode?.let { put("allocationMode", it) }
         allocationValue?.let { put("allocationValue", it) }
+        recurrenceType?.let { put("recurrenceType", it) }
+        isSavingsGoal?.let { put("isSavingsGoal", it) }
+        if (isSavingsGoal == false) {
+            put("goalTargetAmount", JSONObject.NULL)
+            put("goalDueMonth", JSONObject.NULL)
+        } else {
+            goalTargetAmount?.let { put("goalTargetAmount", it) }
+            goalDueMonth?.let { put("goalDueMonth", it) }
+        }
         version?.let { put("version", it) }
     }
 }

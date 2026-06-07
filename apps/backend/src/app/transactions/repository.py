@@ -344,9 +344,17 @@ def _filter_and_sort(
     if filters.status is not None:
         filtered = [record for record in filtered if record.record_status == filters.status]
     if filters.start is not None:
-        filtered = [record for record in filtered if record.occurred_at >= filters.start]
+        start = _comparable_datetime(filters.start)
+        filtered = [
+            record
+            for record in filtered
+            if _comparable_datetime(record.occurred_at) >= start
+        ]
     if filters.end is not None:
-        filtered = [record for record in filtered if record.occurred_at <= filters.end]
+        end = _comparable_datetime(filters.end)
+        filtered = [
+            record for record in filtered if _comparable_datetime(record.occurred_at) <= end
+        ]
     if filters.q:
         needle = filters.q.casefold()
         filtered = [
@@ -391,6 +399,12 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
         deleted_at=model.deleted_at,
         version=int(model.version or 1),
     )
+
+
+def _comparable_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _optional_uuid(value: str | UUID | None) -> UUID | None:

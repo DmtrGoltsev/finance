@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +65,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.time.YearMonth
+import java.time.format.TextStyle
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -146,7 +149,7 @@ fun PlanningUi(
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val month = remember { nextPlanningMonth() }
+    var month by rememberSaveable { mutableStateOf(nextPlanningMonth()) }
     val resolvedScope = selectedMode.toPlanningScope(dashboard?.session?.householdId)
     val currency = remember(dashboard, selectedMode) { dashboard.planningCurrency(selectedMode) }
     var plan by remember { mutableStateOf<PlanningPlan?>(null) }
@@ -249,6 +252,7 @@ fun PlanningUi(
             month = month,
             currency = currency,
             onModeSelected = onModeSelected,
+            onMonthSelected = { month = it },
         )
 
         if (selectedMode == FinanceMode.Overview) {
@@ -257,7 +261,7 @@ fun PlanningUi(
         }
 
         if (resolvedScope == null) {
-            PlanningMessageCard("Для общего планирования нужен активный household. Выберите личный режим или войдите в общий бюджет.")
+            PlanningMessageCard("Для общего планирования нужен активный общий бюджет. Выберите личный режим или войдите в общий бюджет.")
             return@Column
         }
 
@@ -365,7 +369,7 @@ fun PlanningUi(
                                         action = PlanningNotificationCandidateAction.CancelIncomeSource,
                                     ),
                                 )
-                                loadPlanningState("Доход подтверждён через API")
+                                loadPlanningState("Доход подтверждён")
                             }
                             is ApiResult.Failure -> {
                                 message = result.planningMessage()
@@ -468,7 +472,7 @@ fun PlanningUi(
                     }) {
                         is ApiResult.Success -> {
                             plan = result.value
-                            loadPlanningState("План ${historyPlan.month} скопирован на $month")
+                            loadPlanningState("План ${historyPlan.month.localizedPlanningMonth()} скопирован на ${month.localizedPlanningMonth()}")
                         }
                         is ApiResult.Failure -> {
                             message = result.planningMessage()
@@ -535,6 +539,7 @@ private fun PlanningScopeCard(
     month: String,
     currency: String,
     onModeSelected: (FinanceMode) -> Unit,
+    onMonthSelected: (String) -> Unit,
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -546,10 +551,12 @@ private fun PlanningScopeCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Планирование", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("План следующего месяца: $month", style = MaterialTheme.typography.bodySmall)
+                    Text("План на ${month.localizedPlanningMonth()}", style = MaterialTheme.typography.bodySmall)
                 }
                 Text(currency, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
             }
+            Text("Месяц плана", style = MaterialTheme.typography.labelLarge)
+            PlanningMonthPicker(selectedMonth = month, onSelected = onMonthSelected)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(FinanceMode.entries.toList()) { mode ->
                     FilterChip(
@@ -564,6 +571,24 @@ private fun PlanningScopeCard(
 }
 
 @Composable
+private fun PlanningMonthPicker(
+    selectedMonth: String,
+    onSelected: (String) -> Unit,
+    choices: List<PlanningMonthChoice> = planningMonthChoices(),
+) {
+    val rememberedChoices = remember(choices) { choices }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(rememberedChoices) { choice ->
+            FilterChip(
+                selected = selectedMonth == choice.month,
+                onClick = { onSelected(choice.month) },
+                label = { Text(choice.title) },
+            )
+        }
+    }
+}
+
+@Composable
 private fun PlanningOverviewGate(onModeSelected: (FinanceMode) -> Unit) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -572,7 +597,7 @@ private fun PlanningOverviewGate(onModeSelected: (FinanceMode) -> Unit) {
         ) {
             Text("Обзор не создаёт единый план", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                "Планирование работает в одном scope. Выберите личный или общий план, чтобы не смешивать бюджеты небезопасным агрегатом.",
+                "Планирование работает в одном режиме. Выберите личный или общий план, чтобы не смешивать бюджеты небезопасным агрегатом.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -604,7 +629,7 @@ private fun PlanningPlanCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Текущий план", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(plan?.let { "${it.scope.localizedPlanningScope()} • ${it.month} • ${it.currency}" } ?: "План на $month ещё не создан", style = MaterialTheme.typography.bodySmall)
+                    Text(plan?.let { "${it.scope.localizedPlanningScope()} • ${it.month.localizedPlanningMonth()} • ${it.currency}" } ?: "План на ${month.localizedPlanningMonth()} ещё не создан", style = MaterialTheme.typography.bodySmall)
                 }
                 IconButton(onClick = onRefresh, enabled = !isLoading) {
                     Icon(painterResource(R.drawable.ic_refresh_24), contentDescription = "Обновить")
@@ -612,12 +637,15 @@ private fun PlanningPlanCard(
             }
             if (plan == null) {
                 Button(onClick = onCreatePlan, enabled = !isLoading, modifier = Modifier.fillMaxWidth()) {
-                    Text("Создать план на $month")
+                    Text("Создать план на ${month.localizedPlanningMonth()}")
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlanningMetric("Доход", plan.totalPlannedIncome.planningMoney(currency), Modifier.weight(1f))
                     PlanningMetric("Распределено", plan.allocatedTotal.planningMoney(currency), Modifier.weight(1f))
+                }
+                plan.previousMonthSurplus.takeIf { it.isPositivePlanningAmount() }?.let { surplus ->
+                    Text("Сальдо прошлого месяца: ${surplus.planningMoney(currency)}", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlanningMetric("Осталось", plan.remainingAmount.planningMoney(currency), Modifier.weight(1f))
@@ -629,8 +657,38 @@ private fun PlanningPlanCard(
                 if (plan.isOverallocated) {
                     PlanningBanner("План перераспределён сверх дохода. Предупреждение останется до исправления.", Color(0xFFE35D4F))
                 }
+                PlanningHighlights(plan)
             }
         }
+    }
+}
+
+@Composable
+private fun PlanningHighlights(plan: PlanningPlan) {
+    val hasPlanProgress = !plan.progressStatus.isNullOrBlank() || !plan.progressPercent.isNullOrBlank() || !plan.status.isNullOrBlank()
+    val allocationHighlights = plan.allocations.mapNotNull { allocation ->
+        when {
+            allocation.targetType == TARGET_INVESTMENT_ASSET_CATEGORY &&
+                (allocation.progressStatus == "under_plan" || allocation.requiresAttention) ->
+                "Инвестиции ниже плана: ${allocation.targetSnapshot?.planningSnapshotTitle() ?: allocation.targetType.localizedTargetType()}"
+            allocation.targetType == TARGET_EXPENSE_CATEGORY &&
+                (allocation.progressStatus == "over_plan" || allocation.requiresAttention) ->
+                "Расходы выше плана: ${allocation.targetSnapshot?.planningSnapshotTitle() ?: allocation.targetType.localizedTargetType()}"
+            !allocation.progressStatus.isNullOrBlank() ->
+                "${allocation.targetType.localizedTargetType()}: ${allocation.progressStatus.localizedPlanningStatus()}"
+            else -> null
+        }
+    }
+    when {
+        hasPlanProgress -> PlanningBanner(
+            "Статус плана: ${(plan.progressStatus ?: plan.status).orEmpty().localizedPlanningStatus()}${plan.progressPercent?.let { " • $it%" }.orEmpty()}",
+            Color(0xFF227C9D),
+        )
+        allocationHighlights.isEmpty() -> PlanningBanner("Прогресс появится после серверного расчёта", Color(0xFF6D5BD0))
+    }
+    allocationHighlights.take(3).forEach { highlight ->
+        val color = if (highlight.startsWith("Расходы")) Color(0xFFE35D4F) else Color(0xFF8A6A12)
+        PlanningBanner(highlight, color)
     }
 }
 
@@ -851,7 +909,8 @@ private fun AllocationsCard(
     }
     val canCreateAllocation = !isLoading &&
         draft.targetId.isNotBlank() &&
-        draft.allocationValue.trim().normalizedPlanningAmount() != null
+        draft.allocationValue.trim().normalizedPlanningAmount() != null &&
+        draft.hasValidSavingsGoalState()
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -861,6 +920,7 @@ private fun AllocationsCard(
             Text("Распределения", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             PlanningAllocationEditor(
                 draft = draft,
+                currency = plan.currency,
                 targetOptions = targetOptions,
                 onDraftChange = { draft = it },
                 onShowCreateCategory = onShowCreateCategory,
@@ -899,6 +959,7 @@ private fun AllocationsCard(
 @Composable
 private fun PlanningAllocationEditor(
     draft: PlanningAllocationDraft,
+    currency: String,
     targetOptions: List<PlanningTargetOption>,
     onDraftChange: (PlanningAllocationDraft) -> Unit,
     onShowCreateCategory: () -> Unit,
@@ -910,7 +971,18 @@ private fun PlanningAllocationEditor(
             items(listOf(TARGET_EXPENSE_CATEGORY, TARGET_INVESTMENT_ASSET_CATEGORY)) { targetType ->
                 FilterChip(
                     selected = draft.targetType == targetType,
-                    onClick = { onDraftChange(draft.copy(targetType = targetType, targetId = "")) },
+                    onClick = {
+                        val savingsGoalEnabled = draft.isSavingsGoal && targetType == TARGET_INVESTMENT_ASSET_CATEGORY
+                        onDraftChange(
+                            draft.copy(
+                                targetType = targetType,
+                                targetId = "",
+                                isSavingsGoal = savingsGoalEnabled,
+                                goalTargetAmount = draft.goalTargetAmount.takeIf { savingsGoalEnabled }.orEmpty(),
+                                goalDueMonth = draft.goalDueMonth.takeIf { savingsGoalEnabled } ?: nextPlanningMonth(),
+                            ),
+                        )
+                    },
                     label = { Text(targetType.localizedTargetType()) },
                 )
             }
@@ -932,17 +1004,49 @@ private fun PlanningAllocationEditor(
             }
         }
         if (targetOptions.isEmpty()) {
-            Text("Целей этого типа пока нет. Создайте категорию, счёт или актив перед сохранением распределения.", style = MaterialTheme.typography.bodySmall)
+            Text("Целей этого типа пока нет. Создайте категорию перед сохранением распределения.", style = MaterialTheme.typography.bodySmall)
         } else {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(targetOptions) { option ->
-                    FilterChip(
-                        selected = draft.targetId == option.id,
-                        onClick = { onDraftChange(draft.copy(targetId = option.id)) },
-                        modifier = Modifier.width(116.dp),
-                        label = { Text(option.title) },
-                    )
+            Text(if (draft.targetType == TARGET_EXPENSE_CATEGORY) "Категория расходов" else "Категория инвестиций", style = MaterialTheme.typography.labelLarge)
+            if (draft.targetType == TARGET_EXPENSE_CATEGORY) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 144.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(targetOptions) { option ->
+                        FilterChip(
+                            selected = draft.targetId == option.id,
+                            onClick = { onDraftChange(draft.copy(targetId = option.id)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = {
+                                Text(option.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                        )
+                    }
                 }
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(targetOptions) { option ->
+                        FilterChip(
+                            selected = draft.targetId == option.id,
+                            onClick = { onDraftChange(draft.copy(targetId = option.id)) },
+                            modifier = Modifier.width(140.dp),
+                            label = {
+                                Text(option.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf(RECURRENCE_REGULAR, RECURRENCE_ONE_OFF)) { recurrence ->
+                FilterChip(
+                    selected = draft.recurrenceType == recurrence,
+                    onClick = { onDraftChange(draft.copy(recurrenceType = recurrence)) },
+                    label = { Text(recurrence.localizedRecurrenceType()) },
+                )
             }
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -962,6 +1066,48 @@ private fun PlanningAllocationEditor(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        if (draft.targetType == TARGET_INVESTMENT_ASSET_CATEGORY) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(
+                    selected = draft.isSavingsGoal,
+                    onClick = {
+                        val savingsGoalEnabled = !draft.isSavingsGoal
+                        onDraftChange(
+                            draft.copy(
+                                isSavingsGoal = savingsGoalEnabled,
+                                goalTargetAmount = draft.goalTargetAmount.takeIf { savingsGoalEnabled }.orEmpty(),
+                                goalDueMonth = draft.goalDueMonth.takeIf { savingsGoalEnabled } ?: nextPlanningMonth(),
+                            ),
+                        )
+                    },
+                    label = { Text("Цель накопления") },
+                )
+            }
+        } else {
+            Text(
+                "Накопительная цель доступна только для инвестиционных категорий.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (draft.isSavingsGoal && draft.targetType == TARGET_INVESTMENT_ASSET_CATEGORY) {
+            OutlinedTextField(
+                value = draft.goalTargetAmount,
+                onValueChange = { onDraftChange(draft.copy(goalTargetAmount = it.planningDecimalInput())) },
+                label = { Text("Целевая сумма") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Срок цели", style = MaterialTheme.typography.labelLarge)
+            PlanningMonthPicker(
+                selectedMonth = draft.goalDueMonth,
+                onSelected = { onDraftChange(draft.copy(goalDueMonth = it)) },
+                choices = planningGoalMonthChoices(),
+            )
+            draft.estimatedMonthlyAmount()?.let { monthly ->
+                Text("Ориентир в месяц: ${monthly.planningMoney(currency)}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
         OutlinedTextField(
             value = draft.comment,
             onValueChange = { onDraftChange(draft.copy(comment = it)) },
@@ -989,11 +1135,17 @@ private fun AllocationRow(
                 targetId = allocation.targetId.orEmpty(),
                 allocationMode = allocation.allocationMode.ifBlank { ALLOCATION_AMOUNT },
                 allocationValue = allocation.allocationValue,
+                recurrenceType = allocation.recurrenceType.orEmpty().ifBlank { RECURRENCE_REGULAR },
+                isSavingsGoal = allocation.isSavingsGoal && allocation.targetType == TARGET_INVESTMENT_ASSET_CATEGORY,
+                goalTargetAmount = allocation.goalTargetAmount.orEmpty(),
+                goalDueMonth = allocation.goalDueMonth.orEmpty().ifBlank { nextPlanningMonth() },
                 comment = allocation.comment.orEmpty(),
             ),
         )
     }
     val targetOptions = planningTargetOptions(draft.targetType, categories, investments)
+    val targetName = allocation.readableTargetName(targetOptions)
+    val statusText = allocation.readableStatus()
 
     Column(
         modifier = Modifier
@@ -1005,18 +1157,27 @@ private fun AllocationRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = allocation.targetSnapshot?.takeIf { it.isNotBlank() }
-                        ?: targetOptions.firstOrNull { it.id == allocation.targetId }?.title
-                        ?: allocation.targetType.localizedTargetType(),
+                    text = targetName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${allocation.allocationValue} ${allocation.allocationMode.localizedAllocationMode().lowercase(Locale.getDefault())} • ${allocation.calculatedAmount.planningMoney(currency)}",
+                    "${allocation.targetType.localizedTargetType()} • ${allocation.recurrenceType.orEmpty().ifBlank { RECURRENCE_REGULAR }.localizedRecurrenceType()} • ${allocation.allocationMode.localizedAllocationMode()}: ${allocation.allocationValue} • план ${allocation.calculatedAmount.planningMoney(currency)} • $statusText",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                allocation.actualAmount?.takeIf { it.isNotBlank() }?.let {
+                    Text("Факт: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("Факт появится после расчёта прогресса", style = MaterialTheme.typography.bodySmall)
+                if (allocation.isSavingsGoal) {
+                    val goalText = allocation.goalTargetAmount?.takeIf { it.isNotBlank() }?.planningMoney(currency) ?: "не задана"
+                    val dueText = allocation.goalDueMonth?.localizedPlanningMonth() ?: "срок не задан"
+                    val monthlyText = allocation.goalMonthlyAmount?.takeIf { it.isNotBlank() }?.planningMoney(currency)
+                        ?: draft.estimatedMonthlyAmount()?.planningMoney(currency)
+                        ?: "ожидает расчёта"
+                    Text("Цель накопления: $goalText к $dueText • в месяц $monthlyText", style = MaterialTheme.typography.bodySmall)
+                }
                 allocation.comment?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
@@ -1034,6 +1195,7 @@ private fun AllocationRow(
         if (isEditing) {
             PlanningAllocationEditor(
                 draft = draft,
+                currency = currency,
                 targetOptions = targetOptions,
                 onDraftChange = { draft = it },
                 onShowCreateCategory = {},
@@ -1058,12 +1220,18 @@ private fun AllocationRow(
                                 comment = draft.comment.trim().ifBlank { null },
                                 allocationMode = draft.allocationMode,
                                 allocationValue = draft.allocationValue.trim().normalizedPlanningAmount(),
+                                recurrenceType = draft.recurrenceType,
+                                isSavingsGoal = draft.isSavingsGoal && draft.targetType == TARGET_INVESTMENT_ASSET_CATEGORY,
+                                goalTargetAmount = draft.goalTargetAmount.trim().normalizedPlanningAmount().takeIf { draft.isSavingsGoal && draft.targetType == TARGET_INVESTMENT_ASSET_CATEGORY },
+                                goalDueMonth = draft.goalDueMonth.takeIf { draft.isSavingsGoal && draft.targetType == TARGET_INVESTMENT_ASSET_CATEGORY },
                                 version = allocation.version,
                             ),
                         )
                         isEditing = false
                     },
-                    enabled = !isLoading && draft.allocationValue.trim().normalizedPlanningAmount() != null,
+                    enabled = !isLoading &&
+                        draft.allocationValue.trim().normalizedPlanningAmount() != null &&
+                        draft.hasValidSavingsGoalState(),
                     modifier = Modifier.weight(1f),
                 ) {
                     Text("Сохранить")
@@ -1087,27 +1255,23 @@ private fun PlanningHistoryCard(
         ) {
             Text("История", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (history.isEmpty()) {
-                Text("Предыдущих планов пока нет", style = MaterialTheme.typography.bodySmall)
+                Text("Истории планов пока нет", style = MaterialTheme.typography.bodySmall)
             } else {
-                history.sortedByDescending { it.month }.take(6).forEach { item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("${item.month} • ${item.scope.localizedPlanningScope()}", fontWeight = FontWeight.Medium)
-                            Text(
-                                "Доход ${item.totalPlannedIncome.planningMoney(item.currency)} • распределено ${item.allocatedTotal.planningMoney(item.currency)}",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = { onCopy(item) },
-                            enabled = !isLoading && item.month != currentMonth,
-                        ) {
-                            Text("В $currentMonth")
+                history
+                    .filter { it.month != currentMonth }
+                    .take(6)
+                    .forEach { plan ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(plan.month.localizedPlanningMonth(), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text("${plan.scope.localizedPlanningScope()} • ${plan.currency}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { onCopy(plan) }, enabled = !isLoading) {
+                                Text("Копировать")
+                            }
                         }
                     }
-                }
             }
-            Text("Можно взять прошлый план за основу для следующего месяца.", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -1263,6 +1427,11 @@ private data class PlanningScopeInfo(
     val mode: FinanceMode,
 )
 
+private data class PlanningMonthChoice(
+    val month: String,
+    val title: String,
+)
+
 private data class PlanningTargetOption(
     val id: String,
     val title: String,
@@ -1278,17 +1447,32 @@ private data class PlanningAllocationDraft(
     val targetId: String = "",
     val allocationMode: String = ALLOCATION_AMOUNT,
     val allocationValue: String = "",
+    val recurrenceType: String = RECURRENCE_REGULAR,
+    val isSavingsGoal: Boolean = false,
+    val goalTargetAmount: String = "",
+    val goalDueMonth: String = nextPlanningMonth(),
     val comment: String = "",
 ) {
     fun toCreateRequest(): PlanningAllocationCreateRequest {
+        val savingsGoalEnabled = isSavingsGoal && targetType == TARGET_INVESTMENT_ASSET_CATEGORY
         return PlanningAllocationCreateRequest(
             targetType = targetType,
             targetId = targetId.trim(),
             comment = comment.trim().ifBlank { null },
             allocationMode = allocationMode,
             allocationValue = allocationValue.trim().normalizedPlanningAmount().orEmpty(),
+            recurrenceType = recurrenceType,
+            isSavingsGoal = savingsGoalEnabled,
+            goalTargetAmount = goalTargetAmount.trim().normalizedPlanningAmount().takeIf { savingsGoalEnabled },
+            goalDueMonth = goalDueMonth.takeIf { savingsGoalEnabled },
         )
     }
+}
+
+private fun PlanningAllocationDraft.hasValidSavingsGoalState(): Boolean {
+    if (!isSavingsGoal) return true
+    if (targetType != TARGET_INVESTMENT_ASSET_CATEGORY) return false
+    return goalTargetAmount.trim().normalizedPlanningAmount() != null
 }
 
 private const val TARGET_EXPENSE_CATEGORY = "expense_category"
@@ -1297,6 +1481,8 @@ private const val TARGET_ASSET = "asset"
 private const val TARGET_INVESTMENT_ASSET_CATEGORY = "investment_asset_category"
 private const val ALLOCATION_AMOUNT = "amount"
 private const val ALLOCATION_PERCENT = "percent"
+private const val RECURRENCE_REGULAR = "regular"
+private const val RECURRENCE_ONE_OFF = "one_off"
 
 private fun FinanceMode.toPlanningScope(householdId: String?): PlanningScopeInfo? {
     return when (this) {
@@ -1375,14 +1561,16 @@ private fun AssetCategory.planningDisplayName(): String = userFacingSeedText(nam
 private fun String.localizedPlanningScope(): String = when (this) {
     "personal" -> "Личное"
     "household" -> "Общее"
-    else -> this
+    "shared" -> "Общее"
+    else -> "Личное"
 }
 
 private fun String.localizedTargetType(): String = when (this) {
-    TARGET_EXPENSE_CATEGORY -> "Категория расходов"
+    TARGET_EXPENSE_CATEGORY -> "Расходы"
+    TARGET_INVESTMENT_ASSET_CATEGORY -> "Инвестиции"
     TARGET_ACCOUNT -> "Счёт"
-    TARGET_ASSET -> "Актив/инвестиция"
-    else -> this
+    TARGET_ASSET -> "Актив"
+    else -> "Цель"
 }
 
 private fun String.localizedCreateButtonLabel(): String = when (this) {
@@ -1397,6 +1585,7 @@ private fun String.localizedCreatedTargetLabel(): String = when (this) {
 }
 
 private fun String.localizedNewTargetTitle(): String = when (this) {
+    TARGET_INVESTMENT_ASSET_CATEGORY -> "Новая инвестиционная категория"
     TARGET_ASSET -> "Новый актив"
     else -> "Новый счёт"
 }
@@ -1407,7 +1596,7 @@ private fun String.localizedNameLabel(): String = when (this) {
 }
 
 private fun String.planningAccountTypeOptions(): List<PlanningAccountTypeOption> {
-    return if (this == TARGET_ASSET) {
+    return if (this == TARGET_ASSET || this == TARGET_INVESTMENT_ASSET_CATEGORY) {
         listOf(
             PlanningAccountTypeOption("brokerage", "Брокер"),
             PlanningAccountTypeOption("deposit", "Вклад"),
@@ -1428,6 +1617,59 @@ private fun String.localizedAllocationMode(): String = when (this) {
     else -> "Сумма"
 }
 
+private fun String.localizedRecurrenceType(): String = when (this) {
+    RECURRENCE_ONE_OFF -> "Разовая"
+    else -> "Регулярная"
+}
+
+private fun String.localizedPlanningStatus(): String = when (this) {
+    "active", "planned", "on_track" -> "по плану"
+    "confirmed", "completed", "done" -> "выполнено"
+    "needs_attention", "target_attention", "warning", "attention" -> "требует внимания"
+    "no_actuals" -> "нет фактических данных"
+    "not_applicable" -> "не применяется"
+    "under_plan", "underplanned", "behind" -> "ниже плана"
+    "over_plan", "overplanned", "ahead" -> "выше плана"
+    else -> "ожидает данных"
+}
+
+private fun PlanningAllocation.readableStatus(): String {
+    val progress = progressStatus?.takeIf { it.isNotBlank() } ?: status?.takeIf { it.isNotBlank() }
+    val fallback = when {
+        targetType == TARGET_INVESTMENT_ASSET_CATEGORY && requiresAttention -> "Инвестиции ниже плана"
+        targetType == TARGET_EXPENSE_CATEGORY && requiresAttention -> "Расходы выше плана"
+        requiresAttention -> "Нужно внимание"
+        else -> "Прогресс ожидает данных"
+    }
+    return progress?.localizedPlanningStatus() ?: fallback
+}
+
+private fun PlanningAllocation.readableTargetName(options: List<PlanningTargetOption>): String {
+    return options.firstOrNull { it.id == targetId }?.title
+        ?: targetSnapshot?.planningSnapshotTitle()
+        ?: targetType.localizedTargetType()
+}
+
+private fun String.planningSnapshotTitle(): String? {
+    val trimmed = trim().takeIf { it.isNotBlank() && it != "null" } ?: return null
+    if (!trimmed.startsWith("{")) {
+        return userFacingSeedText(trimmed)
+    }
+    val json = runCatching { org.json.JSONObject(trimmed) }.getOrNull() ?: return null
+    return listOf("name", "title", "displayName", "label")
+        .firstNotNullOfOrNull { key -> json.optString(key).takeIf { it.isNotBlank() && it != "null" } }
+        ?.let(::userFacingSeedText)
+}
+
+private fun PlanningAllocationDraft.estimatedMonthlyAmount(): String? {
+    val target = goalTargetAmount.normalizedPlanningAmount()?.let { BigDecimal(it) } ?: return null
+    if (target <= BigDecimal.ZERO) return null
+    val currentMonth = YearMonth.now()
+    val due = runCatching { YearMonth.parse(goalDueMonth) }.getOrNull() ?: return null
+    val months = ((due.year - currentMonth.year) * 12 + due.monthValue - currentMonth.monthValue + 1).coerceAtLeast(1)
+    return target.divide(BigDecimal(months), 2, RoundingMode.HALF_UP).toPlainString()
+}
+
 private fun String.planningDecimalInput(): String {
     return filter { it.isDigit() || it == '.' || it == ',' }.replace(',', '.')
 }
@@ -1438,6 +1680,10 @@ private fun String.normalizedPlanningAmount(): String? {
     val value = runCatching { BigDecimal(normalized) }.getOrNull() ?: return null
     if (value <= BigDecimal.ZERO) return null
     return value.setScale(2, RoundingMode.HALF_UP).toPlainString()
+}
+
+private fun String.isPositivePlanningAmount(): Boolean {
+    return runCatching { BigDecimal(trim().replace(',', '.')) > BigDecimal.ZERO }.getOrDefault(false)
 }
 
 private fun String.toPlanningDay(): Int? {
@@ -1455,12 +1701,70 @@ private fun String.planningMoney(currency: String): String {
 
 private fun nextPlanningMonth(): String = YearMonth.now().plusMonths(1).toString()
 
+private fun planningMonthChoices(): List<PlanningMonthChoice> {
+    val current = YearMonth.now()
+    val next = current.plusMonths(1)
+    val yearMonths = (1..12).map { month -> YearMonth.of(current.year, month) }
+    return (listOf(current, next) + yearMonths)
+        .distinct()
+        .sorted()
+        .map { month ->
+            val title = when (month) {
+                current -> "Текущий: ${month.localizedPlanningMonth()}"
+                next -> "Следующий: ${month.localizedPlanningMonth()}"
+                else -> month.localizedPlanningMonth()
+            }
+            PlanningMonthChoice(month = month.toString(), title = title)
+        }
+}
+
+private fun planningGoalMonthChoices(): List<PlanningMonthChoice> {
+    val current = YearMonth.now()
+    return (1..36)
+        .map { current.plusMonths(it.toLong()) }
+        .map { month ->
+            val monthsAhead = ((month.year - current.year) * 12 + month.monthValue - current.monthValue)
+            val prefix = when (monthsAhead) {
+                1 -> "Следующий"
+                6 -> "6 мес."
+                12 -> "1 год"
+                24 -> "2 года"
+                36 -> "3 года"
+                else -> null
+            }
+            PlanningMonthChoice(
+                month = month.toString(),
+                title = prefix?.let { "$it: ${month.localizedPlanningMonth()}" } ?: month.localizedPlanningMonth(),
+            )
+        }
+}
+
+private fun String.localizedPlanningMonth(): String {
+    return runCatching { YearMonth.parse(this).localizedPlanningMonth() }.getOrDefault(this)
+}
+
+private fun YearMonth.localizedPlanningMonth(): String {
+    val monthName = month.getDisplayName(TextStyle.FULL_STANDALONE, Locale("ru", "RU"))
+    return "${monthName.replaceFirstChar { it.uppercase(Locale("ru", "RU")) }} $year"
+}
+
 private fun ApiResult.Failure.planningMessage(): String {
     return when {
-        message.isNotBlank() -> message
+        message.isNotBlank() -> message.userFacingPlanningFailure()
         statusCode == 401 -> "Сессия истекла. Войдите снова."
         statusCode == 403 -> "Нет доступа к планированию."
         statusCode != null && statusCode >= 500 -> "Ошибка сервера планирования. Попробуйте позже."
         else -> "Не удалось выполнить действие планирования"
+    }
+}
+
+private fun String.userFacingPlanningFailure(): String {
+    return when {
+        contains("not supported", ignoreCase = true) -> "Планирование пока не поддерживается этим клиентом"
+        contains("recurrenceType", ignoreCase = true) -> "Сервер ещё не принял периодичность распределения"
+        contains("goalTargetAmount", ignoreCase = true) || contains("goalDueMonth", ignoreCase = true) -> "Сервер ещё не принял параметры цели накопления"
+        contains("HTTP 401", ignoreCase = true) -> "Сессия истекла. Войдите снова."
+        contains("HTTP 403", ignoreCase = true) -> "Нет доступа к планированию."
+        else -> this
     }
 }

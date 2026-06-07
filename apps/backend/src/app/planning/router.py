@@ -13,6 +13,7 @@ from app.authz import DenialReason
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.config import get_settings
 from app.db.session import sync_session_scope
+from app.transactions.repository import SqlAlchemyTransactionRepository
 
 from .repository import (
     PlanningAllocationRecord,
@@ -59,12 +60,13 @@ def planning_service_for_request() -> Iterator[PlanningService]:
             SqlAlchemyAccountRepository(session),
             SqlAlchemyCategoryRepository(session),
             SqlAlchemyAssetCategoryRepository(session),
+            SqlAlchemyTransactionRepository(session),
         )
 
 
 PlanningServiceDependency = Annotated[PlanningService, Depends(planning_service_for_request)]
 ScopeQuery = Annotated[str, Query(pattern=r"^(personal|household)$")]
-MonthQuery = Annotated[str | None, Query(pattern=r"^[0-9]{4}-[0-9]{2}$")]
+MonthQuery = Annotated[str | None, Query(pattern=r"^[0-9]{4}-[0-9]{2}(-01)?$")]
 HouseholdIdQuery = Annotated[str | None, Query(alias="householdId", min_length=1, max_length=128)]
 
 
@@ -135,6 +137,7 @@ def _summary_dto(view: PlanningPlanView) -> PlanningSummaryDto:
         total_confirmed_income=view.summary.total_confirmed_income,
         total_allocated_amount=view.summary.total_allocated_amount,
         unallocated_amount=view.summary.unallocated_amount,
+        previous_month_surplus=view.summary.previous_month_surplus,
         underallocated=view.summary.underallocated,
         overallocated=view.summary.overallocated,
     )
@@ -171,12 +174,24 @@ def _allocation_dto(item: PlanningAllocationWithAmount) -> PlanningAllocationDto
         target_type=record.target_type,
         target_id=record.target_id,
         target_snapshot=record.target_snapshot,
-        requires_attention=record.requires_attention,
-        attention_reason=record.attention_reason,
         comment=record.comment,
         allocation_mode=record.allocation_mode,
         allocation_value=record.allocation_value,
         calculated_amount=item.calculated_amount,
+        recurrence_type=record.recurrence_type,
+        is_savings_goal=record.is_savings_goal,
+        goal_target_amount=record.goal_target_amount,
+        goal_due_month=(
+            plan_month_text(record.goal_due_month)
+            if record.goal_due_month is not None
+            else None
+        ),
+        goal_monthly_amount=item.goal_monthly_amount,
+        actual_amount=item.actual_amount,
+        variance_amount=item.variance_amount,
+        status=item.status,
+        requires_attention=record.requires_attention or item.status == "needs_attention",
+        attention_reason=record.attention_reason or item.attention_reason,
         created_by_user_id=record.created_by_user_id,
         created_at=record.created_at,
         updated_at=record.updated_at,

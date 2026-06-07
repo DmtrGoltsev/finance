@@ -31,6 +31,12 @@ from app.authz import (
 )
 from app.categories.repository import CategoryRecord, CategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType, RecordStatus
+from app.transactions.repository import (
+    TransactionFilters,
+    TransactionRecord,
+    TransactionRepository,
+    repository as default_transaction_repository,
+)
 
 from .repository import (
     PlanningAllocationRecord,
@@ -52,6 +58,9 @@ MONEY_QUANT = Decimal("0.0001")
 ZERO_MONEY = Decimal("0.0000")
 ACCOUNT_BACKED_TARGET_TYPES = frozenset({"account", "asset"})
 ASSET_ACCOUNT_TYPES = frozenset({"deposit", "brokerage", "metal", "other"})
+INVESTMENT_PROGRESS_TRANSACTION_TYPES = frozenset(
+    {"brokerage", "asset_buy", "interest", "dividend", "adjustment"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +69,7 @@ class PlanningSummary:
     total_confirmed_income: Decimal
     total_allocated_amount: Decimal
     unallocated_amount: Decimal
+    previous_month_surplus: Decimal
     underallocated: bool
     overallocated: bool
 
@@ -68,6 +78,11 @@ class PlanningSummary:
 class PlanningAllocationWithAmount:
     record: PlanningAllocationRecord
     calculated_amount: Decimal
+    goal_monthly_amount: Decimal | None
+    actual_amount: Decimal
+    variance_amount: Decimal
+    status: str
+    attention_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,11 +125,13 @@ class PlanningService:
         accounts: AccountRepository,
         categories: CategoryRepository,
         asset_categories: AssetCategoryRepository,
+        transactions: TransactionRepository = default_transaction_repository,
     ) -> None:
         self._plans = plans
         self._accounts = accounts
         self._categories = categories
         self._asset_categories = asset_categories
+        self._transactions = transactions
 
     def get_plan_for_scope_month(
         self,
@@ -134,7 +151,7 @@ class PlanningService:
         )
         if plan is None:
             raise PlanningNotFoundOrInaccessible()
-        return self._view(self._require_visible_plan(actor, plan.id))
+        return self._view(actor, self._require_visible_plan(actor, plan.id))
 
     def history(
         self,
@@ -149,7 +166,7 @@ class PlanningService:
             owner_user_id=scope_ref.owner_user_id,
             household_id=scope_ref.household_id,
         )
-        return [self._view(self._plans.aggregate(plan)) for plan in plans]
+        return [self._view(actor, self._plans.aggregate(plan)) for plan in plans]
 
     def create_plan(self, *, actor: Actor, request: PlanningPlanCreateRequest) -> PlanningPlanView:
         if actor.user_id is None:
@@ -177,10 +194,10 @@ class PlanningService:
             currency=request.currency,
             created_by_user_id=actor.user_id,
         )
-        return self._view(self._plans.aggregate(plan))
+        return self._view(actor, self._plans.aggregate(plan))
 
     def get_plan(self, *, actor: Actor, plan_id: str) -> PlanningPlanView:
-        return self._view(self._require_visible_plan(actor, plan_id))
+        return self._view(actor, self._require_visible_plan(actor, plan_id))
 
     def add_income_source(
         self,
@@ -263,6 +280,8 @@ class PlanningService:
             target_type=str(request.target_type),
             target_id=request.target_id,
         )
+        if request.is_savings_goal and str(request.target_type) != "investment_asset_category":
+            raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
         return self._plans.create_allocation(
             plan_id=aggregate.plan.id,
             target_type=str(request.target_type),
@@ -273,6 +292,18 @@ class PlanningService:
             comment=request.comment,
             allocation_mode=str(request.allocation_mode),
             allocation_value=money(request.allocation_value),
+            recurrence_type=str(request.recurrence_type),
+            is_savings_goal=request.is_savings_goal,
+            goal_target_amount=(
+                money(request.goal_target_amount)
+                if request.goal_target_amount is not None
+                else None
+            ),
+            goal_due_month=(
+                parse_plan_month(request.goal_due_month)
+                if request.goal_due_month is not None
+                else None
+            ),
             created_by_user_id=actor.user_id,
         )
 
@@ -317,6 +348,29 @@ class PlanningService:
             updated = replace(updated, allocation_mode=str(request.allocation_mode))
         if request.allocation_value is not None:
             updated = replace(updated, allocation_value=money(request.allocation_value))
+        if request.recurrence_type is not None:
+            updated = replace(updated, recurrence_type=str(request.recurrence_type))
+        if request.is_savings_goal is not None:
+            updated = replace(updated, is_savings_goal=request.is_savings_goal)
+        if "goal_target_amount" in request.model_fields_set:
+            updated = replace(
+                updated,
+                goal_target_amount=(
+                    money(request.goal_target_amount)
+                    if request.goal_target_amount is not None
+                    else None
+                ),
+            )
+        if "goal_due_month" in request.model_fields_set:
+            updated = replace(
+                updated,
+                goal_due_month=(
+                    parse_plan_month(request.goal_due_month)
+                    if request.goal_due_month is not None
+                    else None
+                ),
+            )
+        self._validate_savings_goal(updated)
         return self._plans.save_allocation(updated)
 
     def delete_allocation(self, *, actor: Actor, allocation_id: str) -> None:
@@ -375,9 +429,13 @@ class PlanningService:
                 comment=allocation.comment,
                 allocation_mode=allocation.allocation_mode,
                 allocation_value=allocation.allocation_value,
+                recurrence_type=allocation.recurrence_type,
+                is_savings_goal=allocation.is_savings_goal,
+                goal_target_amount=allocation.goal_target_amount,
+                goal_due_month=allocation.goal_due_month,
                 created_by_user_id=actor.user_id,
             )
-        return self._view(self._plans.aggregate(target_plan))
+        return self._view(actor, self._plans.aggregate(target_plan))
 
     def _require_visible_plan(self, actor: Actor, plan_id: str) -> PlanningPlanAggregate:
         plan = self._plans.get_plan(plan_id)
@@ -525,7 +583,7 @@ class PlanningService:
                 attention_reason="TARGET_MISSING_OR_INACCESSIBLE",
             )
 
-    def _view(self, aggregate: PlanningPlanAggregate) -> PlanningPlanView:
+    def _view(self, actor: Actor, aggregate: PlanningPlanAggregate) -> PlanningPlanView:
         total_income = money(sum((item.amount for item in aggregate.income_sources), ZERO_MONEY))
         confirmed_income = money(
             sum(
@@ -537,13 +595,37 @@ class PlanningService:
                 ZERO_MONEY,
             )
         )
-        allocations = [
-            PlanningAllocationWithAmount(
-                record=allocation,
-                calculated_amount=_calculated_allocation_amount(allocation, total_income),
+        visible_accounts = self._visible_plan_accounts(actor, aggregate.plan)
+        month_transactions = self._active_transactions_for_plan_month(
+            actor,
+            aggregate.plan,
+            visible_accounts=visible_accounts,
+        )
+        allocations: list[PlanningAllocationWithAmount] = []
+        for allocation in aggregate.allocations:
+            calculated_amount = _calculated_allocation_amount(allocation, total_income)
+            actual_amount = self._actual_amount_for_allocation(
+                allocation,
+                transactions=month_transactions,
+                plan=aggregate.plan,
+                visible_accounts=visible_accounts,
             )
-            for allocation in aggregate.allocations
-        ]
+            progress = _progress_for_allocation(
+                allocation,
+                calculated_amount=calculated_amount,
+                actual_amount=actual_amount,
+            )
+            allocations.append(
+                PlanningAllocationWithAmount(
+                    record=allocation,
+                    calculated_amount=calculated_amount,
+                    goal_monthly_amount=_goal_monthly_amount(allocation, aggregate.plan.plan_month),
+                    actual_amount=actual_amount,
+                    variance_amount=money(actual_amount - calculated_amount),
+                    status=progress.status,
+                    attention_reason=progress.attention_reason,
+                )
+            )
         allocated = money(
             sum((allocation.calculated_amount for allocation in allocations), ZERO_MONEY)
         )
@@ -553,6 +635,7 @@ class PlanningService:
             total_confirmed_income=confirmed_income,
             total_allocated_amount=allocated,
             unallocated_amount=unallocated,
+            previous_month_surplus=self._previous_month_surplus(actor, aggregate.plan),
             underallocated=allocated < total_income,
             overallocated=allocated > total_income,
         )
@@ -562,6 +645,134 @@ class PlanningService:
             allocations=allocations,
             summary=summary,
         )
+
+    def _validate_savings_goal(self, allocation: PlanningAllocationRecord) -> None:
+        if allocation.is_savings_goal and allocation.target_type != "investment_asset_category":
+            raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
+
+    def _active_transactions_for_plan_month(
+        self,
+        actor: Actor,
+        plan: PlanningPlanRecord,
+        *,
+        visible_accounts: list[AccountRecord] | None = None,
+    ) -> list[TransactionRecord]:
+        accounts = visible_accounts or self._visible_plan_accounts(actor, plan)
+        return self._transactions.list_by_visible_accounts(
+            [account.id for account in accounts],
+            filters=TransactionFilters(
+                status="active",
+                start=_month_start(plan.plan_month),
+                end=_month_end_inclusive(plan.plan_month),
+            ),
+        )
+
+    def _visible_plan_accounts(
+        self,
+        actor: Actor,
+        plan: PlanningPlanRecord,
+    ) -> list[AccountRecord]:
+        accounts: list[AccountRecord] = []
+        for account in self._accounts.list():
+            if account.status != ResourceStatus.ACTIVE:
+                continue
+            if account.currency != plan.currency:
+                continue
+            if not _account_in_plan_scope(account, plan):
+                continue
+            if not canReadAccount(actor, _authz_account(account)).allowed:
+                continue
+            accounts.append(account)
+        return accounts
+
+    def _actual_amount_for_allocation(
+        self,
+        allocation: PlanningAllocationRecord,
+        *,
+        transactions: list[TransactionRecord],
+        plan: PlanningPlanRecord,
+        visible_accounts: list[AccountRecord],
+    ) -> Decimal:
+        if allocation.target_id is None:
+            return ZERO_MONEY
+
+        if allocation.target_type == "expense_category":
+            return money(
+                sum(
+                    (
+                        transaction.amount
+                        for transaction in transactions
+                        if transaction.currency == plan.currency
+                        and transaction.transaction_type == "expense"
+                        and transaction.category_id == allocation.target_id
+                    ),
+                    ZERO_MONEY,
+                )
+            )
+
+        if allocation.target_type == "investment_asset_category":
+            linked_account_ids = {
+                account.id
+                for account in visible_accounts
+                if account.asset_category_id == allocation.target_id
+            }
+            if not linked_account_ids:
+                return ZERO_MONEY
+            return money(
+                sum(
+                    (
+                        transaction.amount
+                        for transaction in transactions
+                        if transaction.currency == plan.currency
+                        and transaction.transaction_type in INVESTMENT_PROGRESS_TRANSACTION_TYPES
+                        and transaction.account_id in linked_account_ids
+                    ),
+                    ZERO_MONEY,
+                )
+            )
+
+        return ZERO_MONEY
+
+    def _previous_month_surplus(self, actor: Actor, plan: PlanningPlanRecord) -> Decimal:
+        previous_month = _add_months(plan.plan_month, -1)
+        previous_plan = self._plans.get_plan_by_scope_month(
+            scope_type=plan.scope_type,
+            owner_user_id=plan.owner_user_id,
+            household_id=plan.household_id,
+            plan_month=previous_month,
+        )
+        if previous_plan is None or previous_plan.currency != plan.currency:
+            return ZERO_MONEY
+
+        aggregate = self._plans.aggregate(previous_plan)
+        previous_income = money(
+            sum((item.amount for item in aggregate.income_sources), ZERO_MONEY)
+        )
+        planned_expenses = money(
+            sum(
+                (
+                    _calculated_allocation_amount(allocation, previous_income)
+                    for allocation in aggregate.allocations
+                    if allocation.target_type == "expense_category"
+                ),
+                ZERO_MONEY,
+            )
+        )
+        actual_expenses = money(
+            sum(
+                (
+                    transaction.amount
+                    for transaction in self._active_transactions_for_plan_month(
+                        actor,
+                        previous_plan,
+                    )
+                    if transaction.currency == previous_plan.currency
+                    and transaction.transaction_type == "expense"
+                ),
+                ZERO_MONEY,
+            )
+        )
+        return max(money(planned_expenses - actual_expenses), ZERO_MONEY)
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,12 +790,18 @@ class _ResolvedTarget:
     attention_reason: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _AllocationProgress:
+    status: str
+    attention_reason: str | None
+
+
 def parse_plan_month(value: str) -> date:
     try:
-        parsed = date.fromisoformat(f"{value}-01")
+        parsed = date.fromisoformat(value if len(value) == 10 else f"{value}-01")
     except ValueError as exc:
         raise PlanningValidationError(DenialReason.VALIDATION_FAILED) from exc
-    if parsed.month < 1 or parsed.month > 12:
+    if parsed.day != 1:
         raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
     return parsed
 
@@ -605,6 +822,22 @@ def next_month(today: date | None = None) -> date:
     return date(current.year, current.month + 1, 1)
 
 
+def _add_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + (value.month - 1) + months
+    return date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def _month_start(value: date) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _month_end_inclusive(value: date) -> datetime:
+    next_value = _add_months(value, 1)
+    return datetime(next_value.year, next_value.month, 1, tzinfo=UTC).replace(microsecond=0) - (
+        datetime.resolution
+    )
+
+
 def money(value: Decimal) -> Decimal:
     return Decimal(value).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
@@ -616,6 +849,51 @@ def _calculated_allocation_amount(
     if allocation.allocation_mode == "percent":
         return money(total_income * allocation.allocation_value / Decimal("100"))
     return money(allocation.allocation_value)
+
+
+def _goal_monthly_amount(
+    allocation: PlanningAllocationRecord,
+    plan_month: date,
+) -> Decimal | None:
+    if (
+        not allocation.is_savings_goal
+        or allocation.goal_target_amount is None
+        or allocation.goal_due_month is None
+    ):
+        return None
+    month_count = max(
+        1,
+        (allocation.goal_due_month.year - plan_month.year) * 12
+        + allocation.goal_due_month.month
+        - plan_month.month
+        + 1,
+    )
+    return money(allocation.goal_target_amount / Decimal(month_count))
+
+
+def _progress_for_allocation(
+    allocation: PlanningAllocationRecord,
+    *,
+    calculated_amount: Decimal,
+    actual_amount: Decimal,
+) -> _AllocationProgress:
+    if allocation.requires_attention:
+        return _AllocationProgress("target_attention", allocation.attention_reason)
+    if allocation.target_type == "expense_category":
+        if actual_amount == ZERO_MONEY:
+            return _AllocationProgress("no_actuals", None)
+        if actual_amount > calculated_amount:
+            return _AllocationProgress("needs_attention", "EXPENSE_OVER_PLAN")
+        return _AllocationProgress("on_track", None)
+    if allocation.target_type == "investment_asset_category":
+        if calculated_amount == ZERO_MONEY:
+            return _AllocationProgress("on_track", None)
+        if actual_amount == ZERO_MONEY:
+            return _AllocationProgress("needs_attention", "INVESTMENT_UNDER_PLAN")
+        if actual_amount < calculated_amount:
+            return _AllocationProgress("needs_attention", "INVESTMENT_UNDER_PLAN")
+        return _AllocationProgress("on_track", None)
+    return _AllocationProgress("not_applicable", None)
 
 
 def _has_active_membership(actor: Actor, household_id: str | None) -> bool:

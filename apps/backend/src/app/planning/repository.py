@@ -63,6 +63,10 @@ class PlanningAllocationRecord:
     comment: str | None
     allocation_mode: str
     allocation_value: Decimal
+    recurrence_type: str
+    is_savings_goal: bool
+    goal_target_amount: Decimal | None
+    goal_due_month: date | None
     created_by_user_id: str
     created_at: datetime
     updated_at: datetime
@@ -274,6 +278,10 @@ class SqlAlchemyPlanningRepository:
         comment: str | None,
         allocation_mode: str,
         allocation_value: Decimal,
+        recurrence_type: str,
+        is_savings_goal: bool,
+        goal_target_amount: Decimal | None,
+        goal_due_month: date | None,
         created_by_user_id: str,
     ) -> PlanningAllocationRecord:
         now = datetime.now(UTC)
@@ -288,6 +296,10 @@ class SqlAlchemyPlanningRepository:
             comment=comment,
             allocation_mode=allocation_mode,
             allocation_value=allocation_value,
+            recurrence_type=recurrence_type,
+            is_savings_goal=is_savings_goal,
+            goal_target_amount=goal_target_amount,
+            goal_due_month=goal_due_month,
             created_by_user_id=_required_uuid(created_by_user_id, "created_by_user_id"),
             created_at=now,
             updated_at=now,
@@ -312,6 +324,10 @@ class SqlAlchemyPlanningRepository:
         model.comment = record.comment
         model.allocation_mode = record.allocation_mode
         model.allocation_value = record.allocation_value
+        model.recurrence_type = record.recurrence_type
+        model.is_savings_goal = record.is_savings_goal
+        model.goal_target_amount = record.goal_target_amount
+        model.goal_due_month = record.goal_due_month
         model.updated_at = datetime.now(UTC)
         model.version = int(record.version) + 1
         self._session.flush()
@@ -377,6 +393,12 @@ def _allocation_from_model(model: PlanningAllocationModel) -> PlanningAllocation
         comment=model.comment,
         allocation_mode=model.allocation_mode,
         allocation_value=Decimal(model.allocation_value),
+        recurrence_type=model.recurrence_type or "regular",
+        is_savings_goal=bool(model.is_savings_goal),
+        goal_target_amount=(
+            Decimal(model.goal_target_amount) if model.goal_target_amount is not None else None
+        ),
+        goal_due_month=model.goal_due_month,
         created_by_user_id=str(model.created_by_user_id),
         created_at=model.created_at,
         updated_at=model.updated_at,

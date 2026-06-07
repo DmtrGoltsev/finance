@@ -50,6 +50,7 @@ from app.db.model_enums import (
     OUTBOX_STATUSES,
     OWNERSHIP_TYPES,
     PLANNING_ALLOCATION_MODES,
+    PLANNING_ALLOCATION_RECURRENCE_TYPES,
     PLANNING_ALLOCATION_TARGET_TYPES,
     PLANNING_INCOME_CONFIRMATION_STATES,
     PLANNING_SCOPE_TYPES,
@@ -554,7 +555,19 @@ class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
             enum_check("allocation_mode", PLANNING_ALLOCATION_MODES),
             name="allocation_mode_valid",
         ),
+        CheckConstraint(
+            enum_check("recurrence_type", PLANNING_ALLOCATION_RECURRENCE_TYPES),
+            name="recurrence_type_valid",
+        ),
         CheckConstraint("allocation_value >= 0", name="non_negative_allocation_value"),
+        CheckConstraint(
+            "goal_target_amount IS NULL OR goal_target_amount > 0",
+            name="positive_goal_target_amount",
+        ),
+        CheckConstraint(
+            "is_savings_goal = false OR target_type = 'investment_asset_category'",
+            name="savings_goal_investment_target",
+        ),
         CheckConstraint(
             "(target_id IS NOT NULL AND requires_attention = false) "
             "OR (target_id IS NULL AND requires_attention = true)",
@@ -587,6 +600,18 @@ class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
     comment: Mapped[str | None] = mapped_column(Text)
     allocation_mode: Mapped[str] = mapped_column(Text, nullable=False)
     allocation_value: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
+    recurrence_type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'regular'"),
+    )
+    is_savings_goal: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    goal_target_amount: Mapped[Decimal | None] = mapped_column(MONEY_NUMERIC)
+    goal_due_month: Mapped[date | None] = mapped_column(Date)
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
 
 

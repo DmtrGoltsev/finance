@@ -56,6 +56,7 @@ class ModelMetadataTests(unittest.TestCase):
             ("capture_drafts", "amount"),
             ("planning_income_sources", "amount"),
             ("planning_allocations", "allocation_value"),
+            ("planning_allocations", "goal_target_amount"),
         ):
             column_type = Base.metadata.tables[table_name].c[column_name].type
             self.assertIsInstance(column_type, Numeric)
@@ -108,6 +109,16 @@ class ModelMetadataTests(unittest.TestCase):
             "planning_allocations",
             "target_type_valid",
             ["expense_category", "account", "asset", "investment_asset_category"],
+        )
+        self.assertCheckContains(
+            "planning_allocations",
+            "recurrence_type_valid",
+            ["recurrence_type", "regular", "one_off"],
+        )
+        self.assertCheckContains(
+            "planning_allocations",
+            "savings_goal_investment_target",
+            ["is_savings_goal", "investment_asset_category"],
         )
 
     def test_transaction_transfer_shape_constraint_is_present(self) -> None:
