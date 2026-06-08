@@ -634,7 +634,7 @@ class LiveFinanceApiClient(
             .put("name", account.name.take(80))
             .put("currentBalance", account.currentBalance)
             .put("currency", account.currency)
-            .apply { account.assetCategoryId?.takeIf { it.isNotBlank() }?.let { put("assetCategoryId", it) } }
+            .put("assetCategoryId", account.assetCategoryId?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
         account.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/accounts/${account.id.urlEncodePath()}",

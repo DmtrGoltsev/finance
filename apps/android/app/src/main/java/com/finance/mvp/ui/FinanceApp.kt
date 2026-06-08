@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,6 +61,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -816,6 +818,107 @@ fun FinanceApp(
                     groupNames = assetGroupNames,
                     onRenameGroup = { kind, newName ->
                         assetGroupNames = assetGroupNames + (kind.apiValue to newName)
+                    },
+                    onMigrateLegacyGroupToInvestment = migrate@ { kind, newName, accounts ->
+                        if (selectedMode == FinanceMode.Overview) {
+                            uiState = uiState.copy(
+                                message = "Переключитесь на Личное или Общее, чтобы сделать legacy-группу инвестиционной категорией.",
+                            )
+                            return@migrate
+                        }
+                        if (selectedMode == FinanceMode.Shared && uiState.session?.householdId.isNullOrBlank()) {
+                            uiState = uiState.copy(
+                                message = "Для общей инвестиционной категории нужна активная семья.",
+                            )
+                            return@migrate
+                        }
+                        val activeAccounts = accounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
+                        if (activeAccounts.isEmpty()) {
+                            assetGroupNames = assetGroupNames + (kind.apiValue to newName)
+                            uiState = uiState.copy(
+                                message = "В legacy-группе «$newName» нет активных счетов для переноса. Название сохранено; добавьте счет перед созданием инвестиционной категории.",
+                            )
+                            return@migrate
+                        }
+                        val currencies = accounts
+                            .filter { it.status == "active" }
+                            .map { it.currency.trim().uppercase(Locale.US) }
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                        if (currencies.size > 1) {
+                            uiState = uiState.copy(
+                                message = "В legacy-группе «$newName» счета в разных валютах. Сначала разделите или переместите счета по валютам.",
+                            )
+                            return@migrate
+                        }
+                        val currency = currencies.singleOrNull()
+                            ?: uiState.dashboard?.viewFor(selectedMode)?.primaryCurrency?.takeIf { it.isNotBlank() }
+                        if (currency.isNullOrBlank()) {
+                            uiState = uiState.copy(
+                                message = "Не удалось выбрать валюту для инвестиционной категории. Добавьте счет или создайте категорию вручную.",
+                            )
+                            return@migrate
+                        }
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Создаём инвестиционную категорию активов")
+                            val result: ApiResult<Unit> = withContext(Dispatchers.IO) {
+                                when (
+                                    val createResult = apiClient.createAssetCategory(
+                                        AssetCategoryCreateRequest(
+                                            name = newName,
+                                            scopeType = if (selectedMode == FinanceMode.Shared) "household" else "personal",
+                                            householdId = if (selectedMode == FinanceMode.Shared) uiState.session?.householdId else null,
+                                            currency = currency,
+                                            manualAmount = "0",
+                                            isInvestment = true,
+                                            assetType = kind.apiValue,
+                                        ),
+                                    )
+                                ) {
+                                    is ApiResult.Failure -> createResult
+                                    is ApiResult.Success -> {
+                                        val categoryId = createResult.value.id
+                                        val linkedAccounts = mutableListOf<AccountSummary>()
+                                        for (account in activeAccounts) {
+                                            when (val updateResult = apiClient.updateAccount(account.copy(assetCategoryId = categoryId))) {
+                                                is ApiResult.Failure -> {
+                                                    val rollbackFailures = mutableListOf<String>()
+                                                    linkedAccounts.asReversed().forEach { linkedAccount ->
+                                                        when (val rollbackResult = apiClient.updateAccount(linkedAccount.copy(assetCategoryId = null))) {
+                                                            is ApiResult.Success -> Unit
+                                                            is ApiResult.Failure -> rollbackFailures += rollbackResult.userFacingMessage()
+                                                        }
+                                                    }
+                                                    when (val archiveResult = apiClient.archiveAssetCategory(categoryId)) {
+                                                        is ApiResult.Success -> Unit
+                                                        is ApiResult.Failure -> rollbackFailures += archiveResult.userFacingMessage()
+                                                    }
+                                                    val rollbackMessage = if (rollbackFailures.isEmpty()) {
+                                                        "Созданная категория архивирована, уже перенесенные счета возвращены в legacy-группу."
+                                                    } else {
+                                                        "Попытка отката выполнена, но часть действий могла не завершиться: ${rollbackFailures.distinct().joinToString("; ")}"
+                                                    }
+                                                    return@withContext ApiResult.Failure(
+                                                        "Не удалось перенести все счета в инвестиционную категорию. ${updateResult.userFacingMessage()} $rollbackMessage",
+                                                        updateResult.cause,
+                                                        updateResult.statusCode,
+                                                    )
+                                                }
+                                                is ApiResult.Success -> linkedAccounts += updateResult.value
+                                            }
+                                        }
+                                        ApiResult.Success(Unit)
+                                    }
+                                }
+                            }
+                            when (result) {
+                                is ApiResult.Success -> {
+                                    assetGroupNames = assetGroupNames - kind.apiValue
+                                    loadDashboard("Legacy-группа «$newName» стала инвестиционной категорией")
+                                }
+                                is ApiResult.Failure -> loadDashboard(result.userFacingMessage())
+                            }
+                        }
                     },
                     onCreateAssetCategory = { showAssetCategorySheet = true },
                     onUpdateAssetCategory = { category ->
@@ -1674,6 +1777,7 @@ private fun LazyListScope.assetsContent(
     onModeSelected: (FinanceMode) -> Unit,
     groupNames: Map<String, String>,
     onRenameGroup: (AssetKind, String) -> Unit,
+    onMigrateLegacyGroupToInvestment: (AssetKind, String, List<AccountSummary>) -> Unit,
     onCreateAssetCategory: () -> Unit,
     onUpdateAssetCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
@@ -1721,7 +1825,14 @@ private fun LazyListScope.assetsContent(
             summary = summary,
             accounts = legacyAccounts.filter { it.assetKind() == summary.kind },
             displayName = groupNames[summary.kind.apiValue] ?: summary.kind.title,
-            onRenameGroup = { onRenameGroup(summary.kind, it) },
+            onSaveGroup = { name, isInvestment ->
+                val groupAccounts = legacyAccounts.filter { it.assetKind() == summary.kind }
+                if (isInvestment) {
+                    onMigrateLegacyGroupToInvestment(summary.kind, name, groupAccounts)
+                } else {
+                    onRenameGroup(summary.kind, name)
+                }
+            },
             onUpdate = onUpdateAccount,
             onArchive = onArchiveAccount,
             onAdd = { onAddAccount(summary.kind) },
@@ -2303,7 +2414,7 @@ private fun AssetCategoryCard(
     summary: AssetSummary,
     accounts: List<AccountSummary>,
     displayName: String,
-    onRenameGroup: (String) -> Unit,
+    onSaveGroup: (String, Boolean) -> Unit,
     onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
     onAdd: () -> Unit,
@@ -2311,6 +2422,7 @@ private fun AssetCategoryCard(
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     var isEditingGroup by rememberSaveable { mutableStateOf(false) }
     var groupNameDraft by rememberSaveable(displayName) { mutableStateOf(displayName) }
+    var groupInvestmentDraft by rememberSaveable(displayName) { mutableStateOf(false) }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -2345,6 +2457,7 @@ private fun AssetCategoryCard(
                 IconButton(
                     onClick = {
                         groupNameDraft = displayName
+                        groupInvestmentDraft = false
                         isEditingGroup = true
                     },
                     modifier = Modifier.size(32.dp),
@@ -2394,20 +2507,29 @@ private fun AssetCategoryCard(
             onDismissRequest = { isEditingGroup = false },
             title = { Text("Название группы") },
             text = {
-                OutlinedTextField(
-                    value = groupNameDraft,
-                    onValueChange = { groupNameDraft = it },
-                    label = { Text("Название") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = groupNameDraft,
+                        onValueChange = { groupNameDraft = it },
+                        label = { Text("Название") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = groupInvestmentDraft,
+                            onCheckedChange = { groupInvestmentDraft = it },
+                        )
+                        Text("Инвестиция")
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         val cleanName = groupNameDraft.trim()
                         if (cleanName.isNotBlank()) {
-                            onRenameGroup(cleanName)
+                            onSaveGroup(cleanName, groupInvestmentDraft)
                             isEditingGroup = false
                         }
                     },
@@ -3051,26 +3173,34 @@ private fun AddAccountSheet(
     }
     val sheetScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val nameBringIntoView = remember { BringIntoViewRequester() }
     val balanceBringIntoView = remember { BringIntoViewRequester() }
-    val centerNudgePx = with(LocalDensity.current) { 72.dp.roundToPx() }
+    val centerNudgePx = with(LocalDensity.current) { 168.dp.roundToPx() }
 
     fun bringFocusedFieldIntoView(requester: BringIntoViewRequester) {
         sheetScope.launch {
-            delay(120)
+            requester.bringIntoView()
+            delay(180)
+            requester.bringIntoView()
+            delay(220)
             requester.bringIntoView()
             scrollState.animateScrollTo((scrollState.value + centerNudgePx).coerceAtMost(scrollState.maxValue))
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(scrollState)
                 .imePadding()
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp),
+                .padding(bottom = 48.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(modifier = Modifier.height(12.dp))
@@ -3150,7 +3280,7 @@ private fun AddAccountSheet(
                     Text("Создать")
                 }
             }
-            Spacer(modifier = Modifier.height(96.dp))
+            Spacer(modifier = Modifier.height(180.dp))
         }
     }
 }
