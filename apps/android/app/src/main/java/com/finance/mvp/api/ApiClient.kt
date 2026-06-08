@@ -53,6 +53,8 @@ interface FinanceApiClient {
         ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
     suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> =
         ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
+    suspend fun archiveAssetCategory(categoryId: String): ApiResult<AssetCategory> =
+        ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
     suspend fun createDemoCategory(
         householdId: String?,
         categoryType: String = "expense",
@@ -668,6 +670,12 @@ class LiveFinanceApiClient(
             method = "PATCH",
             body = body.toString(),
         ).dataObject().let(::parseAssetCategory)
+    }
+
+    override suspend fun archiveAssetCategory(categoryId: String): ApiResult<AssetCategory> = safeCall {
+        request(path = "/api/v1/asset-categories/${categoryId.urlEncodePath()}/archive", method = "POST")
+            .dataObject()
+            .let(::parseAssetCategory)
     }
 
     override suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary> = safeCall {

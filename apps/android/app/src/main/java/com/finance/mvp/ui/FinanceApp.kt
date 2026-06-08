@@ -5,7 +5,10 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,9 +30,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.annotation.DrawableRes
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,15 +66,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.password
@@ -75,6 +87,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.finance.mvp.BuildConfig
 import com.finance.mvp.R
@@ -104,9 +117,30 @@ import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
+
+private val AddAccountStateSaver = Saver<AddAccountState?, List<String>>(
+    save = { state ->
+        state?.let {
+            listOf(it.kind.name, it.mode.name, it.assetCategoryId.orEmpty())
+        }
+    },
+    restore = { saved ->
+        val kind = runCatching { AssetKind.valueOf(saved.getOrNull(0).orEmpty()) }.getOrNull()
+        val mode = runCatching { FinanceMode.valueOf(saved.getOrNull(1).orEmpty()) }.getOrNull()
+        if (kind == null || mode == null) {
+            null
+        } else {
+            AddAccountState(kind, mode, saved.getOrNull(2)?.takeIf { it.isNotBlank() })
+        }
+    },
+)
+
+private const val ASSET_CATEGORY_ORDER_PREFS = "finance_asset_category_order"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -140,7 +174,7 @@ fun FinanceApp(
     var screenshotOcrStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var screenshotAggregateDrafts by remember { mutableStateOf<List<ScreenshotAggregateDraftUi>>(emptyList()) }
     var assetGroupNames by rememberSaveable { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var addAccountState by rememberSaveable { mutableStateOf<AddAccountState?>(null) }
+    var addAccountState by rememberSaveable(stateSaver = AddAccountStateSaver) { mutableStateOf<AddAccountState?>(null) }
     var showAssetCategorySheet by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
@@ -825,23 +859,15 @@ fun FinanceApp(
                             }
                         }
                     },
-                    onArchiveGroup = { accountIds ->
+                    onArchiveAssetCategory = { categoryId ->
                         scope.launch {
-                            uiState = uiState.copy(isLoading = true, message = "Удаляем группу активов")
-                            val failure = withContext(Dispatchers.IO) {
-                                accountIds.firstNotNullOfOrNull { accountId ->
-                                    when (val result = apiClient.archiveAccount(accountId)) {
-                                        is ApiResult.Success -> null
-                                        is ApiResult.Failure -> result
-                                    }
-                                }
-                            }
-                            if (failure == null) {
-                                loadDashboard("Группа активов удалена")
-                            } else {
-                                uiState = uiState.copy(
+                            uiState = uiState.copy(isLoading = true, message = "Удаляем категорию активов")
+                            val result = withContext(Dispatchers.IO) { apiClient.archiveAssetCategory(categoryId) }
+                            when (result) {
+                                is ApiResult.Success -> loadDashboard("Категория активов удалена")
+                                is ApiResult.Failure -> uiState = uiState.copy(
                                     isLoading = false,
-                                    message = failure.userFacingMessage(),
+                                    message = result.userFacingMessage(),
                                 )
                             }
                         }
@@ -1652,7 +1678,7 @@ private fun LazyListScope.assetsContent(
     onUpdateAssetCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
     onArchiveAccount: (String) -> Unit,
-    onArchiveGroup: (List<String>) -> Unit,
+    onArchiveAssetCategory: (String) -> Unit,
     onAddAccount: (AssetKind) -> Unit,
     onAddAccountToCategory: (AssetCategory) -> Unit,
 ) {
@@ -1674,14 +1700,16 @@ private fun LazyListScope.assetsContent(
         }
     }
     if (categoryRows.isNotEmpty()) {
-        items(categoryRows) { row ->
-            AssetCategoryGroupCard(
-                row = row,
-                accounts = modeAccounts.filter { it.status == "active" && it.assetCategoryId == row.category.id },
+        item {
+            ReorderableAssetCategoryList(
+                rows = categoryRows,
+                accounts = modeAccounts,
+                selectedMode = selectedMode,
                 onUpdateCategory = onUpdateAssetCategory,
                 onUpdateAccount = onUpdateAccount,
                 onArchiveAccount = onArchiveAccount,
-                onAddAccount = { onAddAccountToCategory(row.category) },
+                onArchiveCategory = onArchiveAssetCategory,
+                onAddAccountToCategory = onAddAccountToCategory,
             )
         }
     }
@@ -1696,7 +1724,6 @@ private fun LazyListScope.assetsContent(
             onRenameGroup = { onRenameGroup(summary.kind, it) },
             onUpdate = onUpdateAccount,
             onArchive = onArchiveAccount,
-            onArchiveGroup = onArchiveGroup,
             onAdd = { onAddAccount(summary.kind) },
         )
     }
@@ -2015,12 +2042,84 @@ private fun CompactTransactionRow(transaction: TransactionSummary) {
 }
 
 @Composable
+private fun ReorderableAssetCategoryList(
+    rows: List<AssetCategoryUiRow>,
+    accounts: List<AccountSummary>,
+    selectedMode: FinanceMode,
+    onUpdateCategory: (AssetCategory) -> Unit,
+    onUpdateAccount: (AccountSummary) -> Unit,
+    onArchiveAccount: (String) -> Unit,
+    onArchiveCategory: (String) -> Unit,
+    onAddAccountToCategory: (AssetCategory) -> Unit,
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val reorderThresholdPx = with(density) { 72.dp.toPx() }
+    var savedOrder by remember(selectedMode) {
+        mutableStateOf(loadAssetCategoryOrder(context, selectedMode))
+    }
+    val orderedRows = remember(rows, savedOrder) {
+        rows.applyAssetCategoryOrder(savedOrder)
+    }
+
+    fun moveCategory(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in orderedRows.indices || toIndex !in orderedRows.indices || fromIndex == toIndex) return
+        val nextOrder = orderedRows.map { it.category.id }.toMutableList()
+        val moved = nextOrder.removeAt(fromIndex)
+        nextOrder.add(toIndex, moved)
+        savedOrder = nextOrder
+        saveAssetCategoryOrder(context, selectedMode, nextOrder)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        orderedRows.forEachIndexed { index, row ->
+            var dragOffset by remember(row.category.id) { mutableStateOf(0f) }
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(0, dragOffset.roundToInt()) }
+                    .pointerInput(row.category.id, index, orderedRows.size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragCancel = { dragOffset = 0f },
+                            onDragEnd = { dragOffset = 0f },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount.y
+                                when {
+                                    dragOffset > reorderThresholdPx && index < orderedRows.lastIndex -> {
+                                        moveCategory(index, index + 1)
+                                        dragOffset = 0f
+                                    }
+                                    dragOffset < -reorderThresholdPx && index > 0 -> {
+                                        moveCategory(index, index - 1)
+                                        dragOffset = 0f
+                                    }
+                                }
+                            },
+                        )
+                    },
+            ) {
+                AssetCategoryGroupCard(
+                    row = row,
+                    accounts = accounts.filter { it.status == "active" && it.assetCategoryId == row.category.id },
+                    onUpdateCategory = onUpdateCategory,
+                    onUpdateAccount = onUpdateAccount,
+                    onArchiveAccount = onArchiveAccount,
+                    onArchiveCategory = onArchiveCategory,
+                    onAddAccount = { onAddAccountToCategory(row.category) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AssetCategoryGroupCard(
     row: AssetCategoryUiRow,
     accounts: List<AccountSummary>,
     onUpdateCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
     onArchiveAccount: (String) -> Unit,
+    onArchiveCategory: (String) -> Unit,
     onAddAccount: () -> Unit,
 ) {
     val category = row.category
@@ -2031,13 +2130,14 @@ private fun AssetCategoryGroupCard(
     var editManual by rememberSaveable(category.id, category.manualAmount) { mutableStateOf(category.manualAmount) }
     var editInvestment by rememberSaveable(category.id, category.isInvestment) { mutableStateOf(category.isInvestment) }
     var editAssetType by rememberSaveable(category.id, category.assetType) { mutableStateOf(category.assetType) }
+    var confirmArchiveCategory by rememberSaveable(category.id) { mutableStateOf(false) }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .tapOrLongPress(onTap = { isExpanded = !isExpanded }, onLongPress = { isEditing = true }),
+                    .clickable { isExpanded = !isExpanded },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconBubble(kind.icon, if (category.isInvestment) Color(0xFF227C9D) else kind.tint)
@@ -2068,6 +2168,14 @@ private fun AssetCategoryGroupCard(
                     Icon(
                         painter = painterResource(R.drawable.ic_edit_24),
                         contentDescription = "Изменить",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(onClick = { confirmArchiveCategory = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_delete_24),
+                        contentDescription = "Удалить категорию активов",
+                        tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(18.dp),
                     )
                 }
@@ -2103,6 +2211,13 @@ private fun AssetCategoryGroupCard(
                     Text("Инвестиционная категория")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(onClick = { confirmArchiveCategory = true }, modifier = Modifier.size(48.dp)) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_delete_24),
+                            contentDescription = "Удалить категорию активов",
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     OutlinedButton(onClick = { isEditing = false }, modifier = Modifier.weight(1f)) {
                         Text("Отмена")
                     }
@@ -2140,6 +2255,47 @@ private fun AssetCategoryGroupCard(
             }
         }
     }
+
+    if (confirmArchiveCategory) {
+        val activeAccountCount = accounts.size
+        AlertDialog(
+            onDismissRequest = { confirmArchiveCategory = false },
+            title = {
+                Text(if (activeAccountCount == 0) "Удалить категорию активов?" else "Категория не пуста")
+            },
+            text = {
+                if (activeAccountCount == 0) {
+                    Text("Категория «${category.name}» будет архивирована.")
+                } else {
+                    Text("В категории «${category.name}» есть активные счета: $activeAccountCount. Сначала переместите или удалите счета категории.")
+                }
+            },
+            confirmButton = {
+                if (activeAccountCount == 0) {
+                    TextButton(
+                        onClick = {
+                            confirmArchiveCategory = false
+                            isEditing = false
+                            onArchiveCategory(category.id)
+                        },
+                    ) {
+                        Text("Удалить")
+                    }
+                } else {
+                    TextButton(onClick = { confirmArchiveCategory = false }) {
+                        Text("Понятно")
+                    }
+                }
+            },
+            dismissButton = {
+                if (activeAccountCount == 0) {
+                    TextButton(onClick = { confirmArchiveCategory = false }) {
+                        Text("Отмена")
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -2150,14 +2306,11 @@ private fun AssetCategoryCard(
     onRenameGroup: (String) -> Unit,
     onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
-    onArchiveGroup: (List<String>) -> Unit,
     onAdd: () -> Unit,
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     var isEditingGroup by rememberSaveable { mutableStateOf(false) }
     var groupNameDraft by rememberSaveable(displayName) { mutableStateOf(displayName) }
-    var confirmArchiveGroup by rememberSaveable { mutableStateOf(false) }
-    val activeAccountIds = remember(accounts) { accounts.map { it.id }.filter { it.isNotBlank() } }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -2170,11 +2323,7 @@ private fun AssetCategoryCard(
                         .weight(1f)
                         .tapOrLongPress(
                             onTap = { isExpanded = !isExpanded },
-                            onLongPress = {
-                                if (activeAccountIds.isNotEmpty()) {
-                                    confirmArchiveGroup = true
-                                }
-                            },
+                            onLongPress = {},
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2275,30 +2424,6 @@ private fun AssetCategoryCard(
         )
     }
 
-    if (confirmArchiveGroup) {
-        AlertDialog(
-            onDismissRequest = { confirmArchiveGroup = false },
-            title = { Text("Удалить группу?") },
-            text = {
-                Text("Будут архивированы все активные счета группы «$displayName»: ${activeAccountIds.size} ${pluralItems(activeAccountIds.size)}.")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmArchiveGroup = false
-                        onArchiveGroup(activeAccountIds)
-                    },
-                ) {
-                    Text("Удалить")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmArchiveGroup = false }) {
-                    Text("Отмена")
-                }
-            },
-        )
-    }
 }
 
 private val CURRENCIES = listOf("RUB", "USD", "EUR", "XAU")
@@ -2908,7 +3033,7 @@ private fun EmptyState(text: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun AddAccountSheet(
     kind: AssetKind,
@@ -2924,15 +3049,31 @@ private fun AddAccountSheet(
     var mode by rememberSaveable(initialMode, hasHousehold) {
         mutableStateOf(initialMode.takeIf { it in modeOptions })
     }
+    val sheetScope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    val nameBringIntoView = remember { BringIntoViewRequester() }
+    val balanceBringIntoView = remember { BringIntoViewRequester() }
+    val centerNudgePx = with(LocalDensity.current) { 72.dp.roundToPx() }
+
+    fun bringFocusedFieldIntoView(requester: BringIntoViewRequester) {
+        sheetScope.launch {
+            delay(120)
+            requester.bringIntoView()
+            scrollState.animateScrollTo((scrollState.value + centerNudgePx).coerceAtMost(scrollState.maxValue))
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .imePadding()
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconBubble(kind.icon, kind.tint, size = 36)
                 Spacer(modifier = Modifier.width(10.dp))
@@ -2948,7 +3089,14 @@ private fun AddAccountSheet(
                 onValueChange = { name = it },
                 label = { Text("Название") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bringIntoViewRequester(nameBringIntoView)
+                    .onFocusChanged {
+                        if (it.isFocused) {
+                            bringFocusedFieldIntoView(nameBringIntoView)
+                        }
+                    },
             )
             OutlinedTextField(
                 value = balance,
@@ -2956,7 +3104,14 @@ private fun AddAccountSheet(
                 label = { Text("Начальный баланс") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bringIntoViewRequester(balanceBringIntoView)
+                    .onFocusChanged {
+                        if (it.isFocused) {
+                            bringFocusedFieldIntoView(balanceBringIntoView)
+                        }
+                    },
             )
             Text("Валюта", style = MaterialTheme.typography.labelLarge)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2995,6 +3150,7 @@ private fun AddAccountSheet(
                     Text("Создать")
                 }
             }
+            Spacer(modifier = Modifier.height(96.dp))
         }
     }
 }
@@ -3568,6 +3724,43 @@ private fun FinanceDashboard?.assetCategoryRows(mode: FinanceMode): List<AssetCa
             )
         }
     return (rowsFromGroups + emptyCategoryRows).sortedWith(compareBy<AssetCategoryUiRow> { it.scopeTitle }.thenBy { it.category.name })
+}
+
+private fun List<AssetCategoryUiRow>.applyAssetCategoryOrder(savedOrder: List<String>): List<AssetCategoryUiRow> {
+    val activeIds = map { it.category.id }.toSet()
+    val savedIndex = savedOrder
+        .filter { it in activeIds }
+        .distinct()
+        .withIndex()
+        .associate { it.value to it.index }
+    return sortedWith(
+        compareBy<AssetCategoryUiRow> { savedIndex[it.category.id] ?: Int.MAX_VALUE }
+            .thenBy { it.scopeTitle }
+            .thenBy { it.category.name }
+            .thenBy { it.category.id },
+    )
+}
+
+private fun loadAssetCategoryOrder(context: Context, mode: FinanceMode): List<String> {
+    return context
+        .getSharedPreferences(ASSET_CATEGORY_ORDER_PREFS, Context.MODE_PRIVATE)
+        .getString(assetCategoryOrderKey(mode), null)
+        ?.split('|')
+        ?.map { it.trim() }
+        ?.filter { it.isNotBlank() }
+        ?: emptyList()
+}
+
+private fun saveAssetCategoryOrder(context: Context, mode: FinanceMode, ids: List<String>) {
+    context
+        .getSharedPreferences(ASSET_CATEGORY_ORDER_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(assetCategoryOrderKey(mode), ids.filter { it.isNotBlank() }.distinct().joinToString("|"))
+        .apply()
+}
+
+private fun assetCategoryOrderKey(mode: FinanceMode): String {
+    return "asset_category_order_${mode.name.lowercase(Locale.US)}"
 }
 
 private fun topCategories(
