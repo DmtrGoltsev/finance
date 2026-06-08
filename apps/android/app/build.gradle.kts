@@ -21,7 +21,7 @@ android {
         buildConfigField(
             "String",
             "FINANCE_API_BASE_URL",
-            "\"${providers.gradleProperty("financeApiBaseUrl").orNull ?: "http://10.0.2.2:8000"}\"",
+            "\"${providers.gradleProperty("financeApiBaseUrl").orNull ?: "http://45.10.110.42/finance-api"}\"",
         )
     }
 

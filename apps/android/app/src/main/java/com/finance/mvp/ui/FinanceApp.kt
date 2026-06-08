@@ -76,6 +76,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.finance.mvp.BuildConfig
 import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiConfig
@@ -3888,7 +3889,7 @@ private fun FinanceAppPreview() {
 }
 
 private class PreviewFinanceApiClient : FinanceApiClient {
-    override val config: ApiConfig = ApiConfig("http://10.0.2.2:8000")
+    override val config: ApiConfig = ApiConfig(BuildConfig.FINANCE_API_BASE_URL)
 
     override suspend fun login(email: String, password: String): ApiResult<SessionStatus> {
         return sessionStatus()
