@@ -51,6 +51,7 @@ def test_asset_category_crud_list_archive_restore_contract() -> None:
                 "scopeType": "personal",
                 "currency": "RUB",
                 "assetType": "brokerage",
+                "iconKey": "wallet",
                 "manualAmount": "123.4500",
                 "isInvestment": True,
             },
@@ -70,24 +71,39 @@ def test_asset_category_crud_list_archive_restore_contract() -> None:
     assert personal.status_code == 201, personal.text
     data = personal.json()["data"]
     assert data["ownerUserId"] == USER_A
+    assert data["iconKey"] == "wallet"
     assert data["manualAmount"] == "123.4500"
     assert data["isInvestment"] is True
     assert household.status_code == 201, household.text
+    assert household.json()["data"]["iconKey"] is None
     assert household.json()["data"]["manualAmount"] == "0.0000"
     assert household.json()["data"]["isInvestment"] is False
     assert [item["id"] for item in items.json()["items"]] == [data["id"]]
+    assert items.json()["items"][0]["iconKey"] == "wallet"
 
     with _client_for(_actor(USER_A)) as client:
         updated = client.patch(
             f"/api/v1/asset-categories/{data['id']}",
-            json={"manualAmount": "200.0000", "isInvestment": False, "version": 1},
+            json={
+                "manualAmount": "200.0000",
+                "isInvestment": False,
+                "iconKey": "briefcase",
+                "version": 1,
+            },
+        )
+        cleared_icon = client.patch(
+            f"/api/v1/asset-categories/{data['id']}",
+            json={"iconKey": None, "version": 2},
         )
         archived = client.post(f"/api/v1/asset-categories/{data['id']}/archive")
         restored = client.post(f"/api/v1/asset-categories/{data['id']}/restore")
 
     assert updated.status_code == 200, updated.text
     assert updated.json()["data"]["manualAmount"] == "200.0000"
+    assert updated.json()["data"]["iconKey"] == "briefcase"
     assert updated.json()["data"]["isInvestment"] is False
+    assert cleared_icon.status_code == 200, cleared_icon.text
+    assert cleared_icon.json()["data"]["iconKey"] is None
     assert archived.status_code == 200
     assert archived.json()["data"]["recordStatus"] == "archived"
     assert restored.status_code == 200

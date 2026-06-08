@@ -270,11 +270,15 @@ def test_openapi_manual_first_enum_boundaries() -> None:
 
 def test_openapi_asset_category_contract_uses_record_status() -> None:
     asset_category = "\n".join(_schema_block("AssetCategoryDto"))
+    asset_category_create = "\n".join(_schema_block("AssetCategoryCreateRequest"))
     asset_category_update = "\n".join(_schema_block("AssetCategoryUpdateRequest"))
     contract = _contract_text()
 
     assert "recordStatus" in asset_category
     assert "recordStatus" in asset_category_update
+    assert "iconKey" in asset_category
+    assert "iconKey" in asset_category_create
+    assert "iconKey" in asset_category_update
     assert (
         "required: [id, name, scopeType, currency, assetType, manualAmount, "
         "isInvestment, recordStatus"

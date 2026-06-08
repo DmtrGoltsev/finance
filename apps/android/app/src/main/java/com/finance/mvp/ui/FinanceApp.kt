@@ -872,6 +872,7 @@ fun FinanceApp(
                                             manualAmount = "0",
                                             isInvestment = true,
                                             assetType = kind.apiValue,
+                                            iconKey = defaultAssetCategoryIconKey(kind.apiValue),
                                         ),
                                     )
                                 ) {
@@ -1810,8 +1811,6 @@ private fun LazyListScope.assetsContent(
                 accounts = modeAccounts,
                 selectedMode = selectedMode,
                 onUpdateCategory = onUpdateAssetCategory,
-                onUpdateAccount = onUpdateAccount,
-                onArchiveAccount = onArchiveAccount,
                 onArchiveCategory = onArchiveAssetCategory,
                 onAddAccountToCategory = onAddAccountToCategory,
             )
@@ -2158,8 +2157,6 @@ private fun ReorderableAssetCategoryList(
     accounts: List<AccountSummary>,
     selectedMode: FinanceMode,
     onUpdateCategory: (AssetCategory) -> Unit,
-    onUpdateAccount: (AccountSummary) -> Unit,
-    onArchiveAccount: (String) -> Unit,
     onArchiveCategory: (String) -> Unit,
     onAddAccountToCategory: (AssetCategory) -> Unit,
 ) {
@@ -2213,8 +2210,6 @@ private fun ReorderableAssetCategoryList(
                     row = row,
                     accounts = accounts.filter { it.status == "active" && it.assetCategoryId == row.category.id },
                     onUpdateCategory = onUpdateCategory,
-                    onUpdateAccount = onUpdateAccount,
-                    onArchiveAccount = onArchiveAccount,
                     onArchiveCategory = onArchiveCategory,
                     onAddAccount = { onAddAccountToCategory(row.category) },
                 )
@@ -2228,20 +2223,25 @@ private fun AssetCategoryGroupCard(
     row: AssetCategoryUiRow,
     accounts: List<AccountSummary>,
     onUpdateCategory: (AssetCategory) -> Unit,
-    onUpdateAccount: (AccountSummary) -> Unit,
-    onArchiveAccount: (String) -> Unit,
     onArchiveCategory: (String) -> Unit,
     onAddAccount: () -> Unit,
 ) {
     val category = row.category
-    val kind = category.assetType.assetKindOrBank()
     var isExpanded by rememberSaveable(category.id) { mutableStateOf(false) }
     var isEditing by rememberSaveable(category.id) { mutableStateOf(false) }
     var editName by rememberSaveable(category.id, category.name) { mutableStateOf(category.name) }
     var editManual by rememberSaveable(category.id, category.manualAmount) { mutableStateOf(category.manualAmount) }
     var editInvestment by rememberSaveable(category.id, category.isInvestment) { mutableStateOf(category.isInvestment) }
-    var editAssetType by rememberSaveable(category.id, category.assetType) { mutableStateOf(category.assetType) }
+    var editIconKey by rememberSaveable(category.id, category.iconKey, category.assetType) {
+        mutableStateOf(category.iconKey.ifBlank { defaultAssetCategoryIconKey(category.assetType) })
+    }
     var confirmArchiveCategory by rememberSaveable(category.id) { mutableStateOf(false) }
+    val iconOption = assetCategoryIcon(category.iconKey, category.assetType)
+    val subtitle = if (accounts.isNotEmpty()) {
+        "${accounts.size} ${pluralItems(accounts.size)}"
+    } else {
+        "Ручная ${row.manualAmount.toMoney().formatMoney(row.currency)}"
+    }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2251,26 +2251,31 @@ private fun AssetCategoryGroupCard(
                     .clickable { isExpanded = !isExpanded },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconBubble(kind.icon, if (category.isInvestment) Color(0xFF227C9D) else kind.tint)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(category.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (category.isInvestment) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Инвестиция",
-                                color = Color(0xFF227C9D),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier
-                                    .background(Color(0xFF227C9D).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                Box {
+                    IconBubble(iconOption.icon, iconOption.tint)
+                    if (category.isInvestment) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF227C9D)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_trending_up_24),
+                                contentDescription = "Инвестиция",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(12.dp),
                             )
                         }
                     }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(category.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        text = "${row.scopeTitle} • ${accounts.size} ${pluralItems(accounts.size)} • Ручная ${row.manualAmount.toMoney().formatMoney(row.currency)}",
+                        text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -2300,65 +2305,65 @@ private fun AssetCategoryGroupCard(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = editManual,
-                    onValueChange = { editManual = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' } },
-                    label = { Text("Ручная сумма") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(AssetKind.entries.toList()) { option ->
-                        FilterChip(
-                            selected = editAssetType == option.apiValue,
-                            onClick = { editAssetType = option.apiValue },
-                            label = { Text(option.title) },
-                        )
-                    }
+                if (accounts.isEmpty()) {
+                    OutlinedTextField(
+                        value = editManual,
+                        onValueChange = { editManual = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' } },
+                        label = { Text("Ручная сумма") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
+                AssetCategoryIconPicker(selectedKey = editIconKey, onSelected = { editIconKey = it })
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = editInvestment, onCheckedChange = { editInvestment = it })
                     Text("Инвестиционная категория")
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconButton(onClick = { confirmArchiveCategory = true }, modifier = Modifier.size(48.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { confirmArchiveCategory = true }, modifier = Modifier.size(40.dp)) {
                         Icon(
                             painter = painterResource(R.drawable.ic_delete_24),
                             contentDescription = "Удалить категорию активов",
                             tint = MaterialTheme.colorScheme.error,
                         )
                     }
-                    OutlinedButton(onClick = { isEditing = false }, modifier = Modifier.weight(1f)) {
-                        Text("Отмена")
+                    OutlinedButton(
+                        onClick = { isEditing = false },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text("Отмена", maxLines = 1)
                     }
                     Button(
                         onClick = {
                             onUpdateCategory(
                                 category.copy(
                                     name = editName.trim().ifBlank { category.name },
-                                    manualAmount = editManual.normalizedBalanceAmount() ?: "0",
+                                    manualAmount = if (accounts.isEmpty()) editManual.normalizedBalanceAmount() ?: "0" else category.manualAmount,
                                     isInvestment = editInvestment,
-                                    assetType = editAssetType,
+                                    assetType = category.assetType,
+                                    iconKey = editIconKey,
                                 ),
                             )
                             isEditing = false
                         },
-                        enabled = editManual.normalizedBalanceAmount() != null,
-                        modifier = Modifier.weight(1f),
+                        enabled = editName.isNotBlank() && (accounts.isNotEmpty() || editManual.normalizedBalanceAmount() != null),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     ) {
-                        Text("Сохранить")
+                        Text("Сохранить", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
 
-            if (isExpanded) {
+            if (isExpanded && !isEditing) {
                 if (accounts.isEmpty()) {
                     Text("Счетов в этой категории нет", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    accounts.forEach { account ->
-                        AccountRow(account = account, onUpdate = onUpdateAccount, onArchive = onArchiveAccount)
-                    }
                 }
                 OutlinedButton(onClick = onAddAccount, modifier = Modifier.fillMaxWidth()) {
                     Text("Добавить счет в категорию")
@@ -2574,6 +2579,7 @@ private fun AssetCategorySheet(
     var manualAmount by rememberSaveable { mutableStateOf("0") }
     var isInvestment by rememberSaveable { mutableStateOf(false) }
     var assetKind by rememberSaveable { mutableStateOf(AssetKind.Bank) }
+    var iconKey by rememberSaveable { mutableStateOf(defaultAssetCategoryIconKey(AssetKind.Bank.apiValue)) }
     val modeOptions = if (householdId.isNullOrBlank()) {
         listOf(FinanceMode.Personal)
     } else {
@@ -2602,7 +2608,11 @@ private fun AssetCategorySheet(
             Text("Доступ", style = MaterialTheme.typography.labelLarge)
             ChipRow(modeOptions, selectedMode, { selectedMode = it }, { it.title }, { it.icon() })
             Text("Тип актива", style = MaterialTheme.typography.labelLarge)
-            ChipRow(AssetKind.entries.toList(), assetKind, { assetKind = it }, { it.title }, { it.icon })
+            ChipRow(AssetKind.entries.toList(), assetKind, {
+                assetKind = it
+                iconKey = defaultAssetCategoryIconKey(it.apiValue)
+            }, { it.title }, { it.icon })
+            AssetCategoryIconPicker(selectedKey = iconKey, onSelected = { iconKey = it })
             Text("Валюта", style = MaterialTheme.typography.labelLarge)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(CURRENCIES) { cur ->
@@ -2625,9 +2635,15 @@ private fun AssetCategorySheet(
                 Checkbox(checked = isInvestment, onCheckedChange = { isInvestment = it })
                 Text("Инвестиционная категория")
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                    Text("Отмена")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text("Отмена", maxLines = 1)
                 }
                 Button(
                     onClick = {
@@ -2640,13 +2656,48 @@ private fun AssetCategorySheet(
                                 manualAmount = manualAmount.normalizedBalanceAmount() ?: "0",
                                 isInvestment = isInvestment,
                                 assetType = assetKind.apiValue,
+                                iconKey = iconKey.ifBlank { defaultAssetCategoryIconKey(assetKind.apiValue) },
                             ),
                         )
                     },
                     enabled = name.isNotBlank() && manualAmount.normalizedBalanceAmount() != null,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 ) {
-                    Text("Создать")
+                    Text("Создать", maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssetCategoryIconPicker(
+    selectedKey: String,
+    onSelected: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Иконка", style = MaterialTheme.typography.labelLarge)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(AssetCategoryIconOptions) { option ->
+                val selected = selectedKey == option.key
+                IconButton(
+                    onClick = { onSelected(option.key) },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (selected) option.tint.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        ),
+                ) {
+                    Icon(
+                        painter = painterResource(option.icon),
+                        contentDescription = option.title,
+                        tint = option.tint,
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
             }
         }
@@ -4074,6 +4125,7 @@ private fun AssetCategoryGroup.toAssetCategory(): AssetCategory {
         manualAmount = manualAmount,
         isInvestment = isInvestment,
         assetType = assetType,
+        iconKey = iconKey,
     )
 }
 

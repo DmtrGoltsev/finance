@@ -105,6 +105,7 @@ def _dto(record: AssetCategoryRecord) -> AssetCategoryDto:
         household_id=record.household_id,
         currency=record.currency,
         asset_type=record.asset_type,
+        iconKey=record.icon_key,
         manual_amount=Decimal(record.manual_amount),
         is_investment=record.is_investment,
         record_status=record.status,
@@ -189,6 +190,7 @@ class AssetCategoryService:
                 household_id=household_id,
                 currency=request.currency,
                 asset_type=asset_type,
+                icon_key=request.icon_key,
                 manual_amount=Decimal(request.manual_amount),
                 is_investment=request.is_investment,
                 created_by_user_id=actor.user_id,
@@ -225,6 +227,8 @@ class AssetCategoryService:
             updated = replace(updated, manual_amount=Decimal(request.manual_amount))
         if request.asset_type is not None:
             updated = replace(updated, asset_type=AssetCategoryType(request.asset_type))
+        if "icon_key" in request.model_fields_set:
+            updated = replace(updated, icon_key=request.icon_key)
         if request.is_investment is not None:
             updated = replace(updated, is_investment=request.is_investment)
         if request.record_status is not None:

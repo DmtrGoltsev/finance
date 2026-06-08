@@ -25,6 +25,7 @@ class ApiModel(BaseModel):
 ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
 MoneyDecimal = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=4)]
+IconKey = Annotated[str, StringConstraints(min_length=1, max_length=80)]
 
 
 class AssetCategoryScope(StrEnum):
@@ -56,6 +57,7 @@ class AssetCategoryDto(ApiModel):
     household_id: ResourceId | None = None
     currency: CurrencyCode
     asset_type: AssetCategoryType
+    icon_key: str | None = Field(default=None, alias="iconKey", max_length=80)
     manual_amount: MoneyDecimal
     is_investment: bool
     record_status: RecordStatus
@@ -73,6 +75,7 @@ class AssetCategoryCreateRequest(ApiModel):
     household_id: ResourceId | None = None
     currency: CurrencyCode
     asset_type: AssetCategoryType = AssetCategoryType.OTHER
+    icon_key: IconKey | None = Field(default=None, alias="iconKey")
     manual_amount: MoneyDecimal = Decimal("0.0000")
     is_investment: bool = False
 
@@ -81,6 +84,7 @@ class AssetCategoryUpdateRequest(ApiModel):
     name: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
     manual_amount: MoneyDecimal | None = None
     asset_type: AssetCategoryType | None = None
+    icon_key: IconKey | None = Field(default=None, alias="iconKey")
     is_investment: bool | None = None
     record_status: RecordStatus | None = None
     version: Annotated[int, Field(ge=1)] | None = None

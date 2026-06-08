@@ -2037,6 +2037,9 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         assetType:
           $ref: '#/components/schemas/AssetCategoryType'
+        iconKey:
+          type: [string, 'null']
+          maxLength: 80
         manualAmount:
           $ref: '#/components/schemas/DecimalString'
         isInvestment:
@@ -2079,6 +2082,10 @@ components:
         assetType:
           $ref: '#/components/schemas/AssetCategoryType'
           default: other
+        iconKey:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
         manualAmount:
           $ref: '#/components/schemas/DecimalString'
           default: '0.0000'
@@ -2097,6 +2104,10 @@ components:
           $ref: '#/components/schemas/DecimalString'
         assetType:
           $ref: '#/components/schemas/AssetCategoryType'
+        iconKey:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
         isInvestment:
           type: boolean
         recordStatus:

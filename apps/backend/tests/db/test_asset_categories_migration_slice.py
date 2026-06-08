@@ -13,6 +13,13 @@ REVISION_PATH = (
     / "versions"
     / "20260607_0012_asset_categories_contract.py"
 )
+ICON_KEY_REVISION_PATH = (
+    REPO_ROOT
+    / "db"
+    / "migrations"
+    / "versions"
+    / "20260608_0014_asset_category_icon_key.py"
+)
 
 
 class AssetCategoriesMigrationTests(unittest.TestCase):
@@ -49,6 +56,24 @@ class AssetCategoriesMigrationTests(unittest.TestCase):
             'PREVIOUS_TARGET_TYPES = ("expense_category", "account", "asset")',
             self.source,
         )
+
+    def test_icon_key_revision_is_additive_and_chains_after_planning_iteration(self) -> None:
+        py_compile.compile(str(ICON_KEY_REVISION_PATH), doraise=True)
+
+        spec = importlib.util.spec_from_file_location(
+            "asset_category_icon_key",
+            ICON_KEY_REVISION_PATH,
+        )
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source = ICON_KEY_REVISION_PATH.read_text(encoding="utf-8")
+
+        self.assertEqual("20260608_0014", module.revision)
+        self.assertEqual("20260607_0013", module.down_revision)
+        self.assertIn('batch_op.add_column(sa.Column("icon_key"', source)
+        self.assertIn('batch_op.drop_column("icon_key")', source)
 
 
 if __name__ == "__main__":

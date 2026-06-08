@@ -26,6 +26,7 @@ class AssetCategoryRecord:
     household_id: str | None
     currency: str
     asset_type: AssetCategoryType
+    icon_key: str | None
     manual_amount: Decimal
     is_investment: bool
     status: RecordStatus
@@ -56,6 +57,7 @@ class AssetCategoryRepository(Protocol):
         manual_amount: Decimal,
         is_investment: bool,
         created_by_user_id: str,
+        icon_key: str | None = None,
     ) -> AssetCategoryRecord:
         """Persist a new asset category."""
 
@@ -95,6 +97,7 @@ class InMemoryAssetCategoryRepository:
         manual_amount: Decimal,
         is_investment: bool,
         created_by_user_id: str,
+        icon_key: str | None = None,
     ) -> AssetCategoryRecord:
         now = datetime.now(UTC)
         with self._lock:
@@ -110,6 +113,7 @@ class InMemoryAssetCategoryRepository:
                 household_id=household_id,
                 currency=currency,
                 asset_type=asset_type,
+                icon_key=icon_key,
                 manual_amount=manual_amount,
                 is_investment=is_investment,
                 status=RecordStatus.ACTIVE,
@@ -157,6 +161,7 @@ class SqlAlchemyAssetCategoryRepository:
         manual_amount: Decimal,
         is_investment: bool,
         created_by_user_id: str,
+        icon_key: str | None = None,
     ) -> AssetCategoryRecord:
         now = datetime.now(UTC)
         model = AssetCategoryModel(
@@ -167,6 +172,7 @@ class SqlAlchemyAssetCategoryRepository:
             household_id=_nullable_uuid(household_id, "household_id"),
             currency=currency,
             asset_type=asset_type.value,
+            icon_key=icon_key,
             manual_amount=manual_amount,
             is_investment=is_investment,
             record_status=RecordStatus.ACTIVE.value,
@@ -188,6 +194,7 @@ class SqlAlchemyAssetCategoryRepository:
 
         model.name = record.name
         model.asset_type = record.asset_type.value
+        model.icon_key = record.icon_key
         model.manual_amount = record.manual_amount
         model.is_investment = record.is_investment
         model.record_status = record.status.value
@@ -208,6 +215,7 @@ def _record_from_model(model: AssetCategoryModel) -> AssetCategoryRecord:
         household_id=str(model.household_id) if model.household_id is not None else None,
         currency=model.currency,
         asset_type=AssetCategoryType(model.asset_type),
+        icon_key=model.icon_key,
         manual_amount=Decimal(model.manual_amount),
         is_investment=bool(model.is_investment),
         status=RecordStatus(model.record_status),

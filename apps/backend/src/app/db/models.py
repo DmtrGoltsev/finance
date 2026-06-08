@@ -271,6 +271,7 @@ class AssetCategory(TimestampMixin, VersionedMixin, Base):
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     asset_type: Mapped[str] = mapped_column(Text, nullable=False)
+    icon_key: Mapped[str | None] = mapped_column(Text)
     manual_amount: Mapped[Decimal] = mapped_column(
         MONEY_NUMERIC,
         nullable=False,

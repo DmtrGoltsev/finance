@@ -184,6 +184,7 @@ data class AssetCategory(
     val manualAmount: String,
     val isInvestment: Boolean,
     val assetType: String,
+    val iconKey: String = "",
     val recordStatus: String = "active",
     val version: Int? = null,
 )
@@ -199,6 +200,7 @@ data class AssetCategoryGroup(
     val totalAmount: String,
     val isInvestment: Boolean,
     val assetType: String,
+    val iconKey: String = "",
     val accountCount: Int = 0,
 )
 
@@ -215,6 +217,7 @@ data class AssetCategoryCreateRequest(
     val manualAmount: String = "0",
     val isInvestment: Boolean = false,
     val assetType: String = "bank",
+    val iconKey: String = "",
 )
 
 data class CategorySummary(
@@ -515,7 +518,7 @@ class LiveFinanceApiClient(
                     } else {
                         mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
                     }
-                    ) + mapOf("currency" to (accounts.firstOrNull()?.currency ?: "USD")),
+                    ),
             ).optJSONObject("data")
         }.getOrNull()
         val totals = reportData
@@ -534,7 +537,7 @@ class LiveFinanceApiClient(
                     } else {
                         mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
                     }
-                    ) + mapOf("currency" to (accounts.firstOrNull()?.currency ?: "USD")),
+                    ),
             ).optJSONObject("data")
         }.getOrNull()
         val assetCategoryGroups = accountBalancesData
@@ -546,6 +549,8 @@ class LiveFinanceApiClient(
             ?.optJSONArray("investmentsByCurrency")
             ?.toObjectList()
             ?.map(::parseMoneyAmount)
+            ?.ifEmpty { reportData?.investmentTotalsByCurrency().orEmpty() }
+            ?: reportData?.investmentTotalsByCurrency()
             ?: emptyList()
         val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
             ?: accountBalancesData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
@@ -664,6 +669,7 @@ class LiveFinanceApiClient(
             .put("manualAmount", category.manualAmount)
             .put("isInvestment", category.isInvestment)
             .put("assetType", category.assetType)
+            .apply { category.iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) } }
         category.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/asset-categories/${category.id.urlEncodePath()}",
@@ -1162,6 +1168,7 @@ private fun parseAssetCategory(json: JSONObject): AssetCategory {
         manualAmount = json.optString("manualAmount", "0"),
         isInvestment = json.optBoolean("isInvestment", false),
         assetType = json.optString("assetType", json.optString("accountType", "bank")),
+        iconKey = json.optString("iconKey", ""),
         recordStatus = json.optString("recordStatus", json.optString("status", "active")),
         version = json.optIntOrNull("version"),
     )
@@ -1205,6 +1212,7 @@ private fun parseAssetCategoryGroup(json: JSONObject): AssetCategoryGroup {
         ),
         isInvestment = json.optBoolean("isInvestment", category?.optBoolean("isInvestment", false) ?: false),
         assetType = json.optString("assetType", category?.optString("assetType", "bank") ?: "bank"),
+        iconKey = json.optString("iconKey", category?.optString("iconKey", "") ?: ""),
         accountCount = json.optInt("accountCount", json.optJSONArray("accounts")?.length() ?: 0),
     )
 }
@@ -1366,6 +1374,24 @@ private fun parsePlanningAllocation(json: JSONObject): PlanningAllocation {
     )
 }
 
+private fun JSONObject.investmentTotalsByCurrency(): List<MoneyAmount> {
+    return optJSONArray("totalsByCurrency")
+        ?.toObjectList()
+        ?.filter { item ->
+            item.has("investmentsTotal") || item.has("investmentTotal") || item.has("investmentsAmount")
+        }
+        ?.map { item ->
+            MoneyAmount(
+                currency = item.optString("currency", "USD"),
+                amount = item.optString(
+                    "investmentsTotal",
+                    item.optString("investmentTotal", item.optString("investmentsAmount", "0")),
+                ),
+            )
+        }
+        ?: emptyList()
+}
+
 private fun CaptureDraftCreateRequest.toJson(): JSONObject {
     return JSONObject()
         .put("amount", amount)
@@ -1405,6 +1431,7 @@ private fun AssetCategoryCreateRequest.toJson(): JSONObject {
         .put("isInvestment", isInvestment)
         .put("assetType", assetType)
         .apply {
+            iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
             householdId?.takeIf { it.isNotBlank() && scopeType == "household" }?.let { put("householdId", it) }
         }
 }

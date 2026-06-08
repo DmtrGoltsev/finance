@@ -65,6 +65,7 @@ class ModelMetadataTests(unittest.TestCase):
 
     def test_scope_and_source_constraints_are_present(self) -> None:
         self.assertIn("color", Base.metadata.tables["categories"].c)
+        self.assertIn("icon_key", Base.metadata.tables["asset_categories"].c)
         self.assertCheckContains(
             "accounts",
             "exactly_one_scope",
