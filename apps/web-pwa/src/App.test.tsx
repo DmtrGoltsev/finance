@@ -334,8 +334,11 @@ describe("PWA finance experience", () => {
     await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
     const sheet = screen.getByRole("form", { name: "Быстро добавить" });
 
+    expect(within(sheet).getByLabelText("Сумма")).toHaveValue(null);
     await user.clear(within(sheet).getByLabelText("Сумма"));
     await user.type(within(sheet).getByLabelText("Сумма"), "345");
+    await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
+    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -349,6 +352,50 @@ describe("PWA finance experience", () => {
       );
     });
     expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears stale quick add category after switching expense to income", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "345");
+    await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
+    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
+    await user.click(within(sheet).getByRole("button", { name: /Доход/i }));
+
+    await waitFor(() => {
+      expect(within(sheet).getByLabelText("Категория")).toHaveValue("");
+    });
+
+    expect(within(sheet).getByTestId("quick-add-submit")).toBeDisabled();
+    await user.click(within(sheet).getByTestId("quick-add-submit"));
+    expect(client.createDemoOperation).not.toHaveBeenCalled();
+
+    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-2");
+    await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
+
+    await waitFor(() => {
+      expect(client.createDemoOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: "account-1",
+          amount: 345,
+          categoryId: "category-2",
+          transactionType: "income"
+        })
+      );
+    });
+    expect(client.createDemoOperation).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        categoryId: "category-1",
+        transactionType: "income"
+      })
+    );
   });
 
   it("adds a transfer from quick add without routing it through expense creation", async () => {
@@ -483,7 +530,57 @@ describe("PWA finance experience", () => {
 
     expect(spendingMetric).toHaveTextContent("70");
     expect(spendingMetric).not.toHaveTextContent("95");
-    expect(screen.getByText("Карта Мир → Вклад")).toBeInTheDocument();
+    expect(screen.getByText("Перевод между счетами")).toBeInTheDocument();
+    expect(screen.getByText(/Карта Мир → Вклад/)).toBeInTheDocument();
+  });
+
+  it("does not fall back to another report mode when overview report is absent", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        client={makeClient({
+          ...financeSnapshot,
+          reports: financeSnapshot.reports.filter(
+            (report) => report.mode === "shared_family_report"
+          )
+        })}
+      />
+    );
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByRole("button", { name: /Обзор/i }));
+
+    const spendingMetric = screen.getByText("Расходы месяца").closest("article");
+    expect(spendingMetric).toHaveTextContent("0 $");
+    expect(spendingMetric).not.toHaveTextContent("30");
+  });
+
+  it("hides transfers when only one side is visible in the current scope", async () => {
+    render(
+      <App
+        client={makeClient({
+          ...financeSnapshot,
+          transfers: [
+            {
+              id: "transfer-hidden-side",
+              date: "2026-05-18T12:45:00Z",
+              accountId: "account-1",
+              counterpartyAccountId: "account-3",
+              version: 1,
+              transferScope: "cross_scope",
+              transferStatus: "posted",
+              fromAccountName: "Карта Мир",
+              toAccountName: "Семейный счет",
+              amount: { value: 50, currency: "USD" }
+            }
+          ]
+        })}
+      />
+    );
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    expect(screen.queryByText("Перевод между счетами")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Семейный счет/)).not.toBeInTheDocument();
   });
 
   it("navigates to assets, categories and analytics", async () => {
@@ -565,6 +662,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByLabelText("Категория для Products")).toHaveValue("category-1");
     expect(client.createCaptureDraft).not.toHaveBeenCalled();
 
+    await user.selectOptions(screen.getByLabelText("Счет для черновиков"), "account-1");
     await user.click(screen.getByRole("button", { name: /Создать черновики/i }));
 
     await waitFor(() => {
@@ -739,6 +837,8 @@ describe("PWA finance experience", () => {
     expect(within(sheet).getByLabelText("Дата")).toBeInTheDocument();
     await user.clear(within(sheet).getByLabelText("Сумма"));
     await user.type(within(sheet).getByLabelText("Сумма"), "456");
+    await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
+    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
     await user.click(screen.getByTestId("quick-add-submit"));
 
     await waitFor(() => {
@@ -769,7 +869,7 @@ describe("PWA finance experience", () => {
     expect(screen.queryByText("Покупка продуктов")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Обзор/i }));
-    expect(screen.getByText("Сводный обзор")).toBeInTheDocument();
+    expect(screen.getByText("Мой обзор: личное + общее, без личных данных других участников")).toBeInTheDocument();
     expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
     expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/combined_viewer_overview|shared_family_report/i);

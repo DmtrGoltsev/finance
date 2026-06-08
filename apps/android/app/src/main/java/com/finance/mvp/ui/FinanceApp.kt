@@ -154,7 +154,7 @@ fun FinanceApp(
     fun processScreenshotCapture(uri: Uri) {
         scope.launch {
             captureIsLoading = true
-            screenshotOcrStatus = "Отправляем скриншот на распознавание"
+            screenshotOcrStatus = "Отправляем скриншот в backend OCR. Операции не создаются автоматически."
             screenshotAggregateDrafts = emptyList()
             val capturedAtMillis = System.currentTimeMillis()
             val capturedAt = java.time.Instant.ofEpochMilli(capturedAtMillis).toString()
@@ -177,8 +177,8 @@ fun FinanceApp(
                 val errorMsg = (result as? ApiResult.Failure)?.message
                     ?: ocrResult.exceptionOrNull()?.message
                     ?: "Неизвестная ошибка"
-                screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
-                captureMessage = "$errorMsg. Выберите другой скриншот или добавьте операцию вручную"
+                screenshotOcrStatus = "Backend OCR не вернул кандидатов для проверки"
+                captureMessage = "$errorMsg. Выберите другой скриншот или добавьте расход вручную."
                 captureIsLoading = false
                 return@launch
             }
@@ -187,8 +187,8 @@ fun FinanceApp(
                 is ApiResult.Success -> {
                     val items = result.value.items
                     if (items.isEmpty()) {
-                        screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
-                        captureMessage = "Выберите другой скриншот или добавьте операцию вручную"
+                        screenshotOcrStatus = "Backend OCR не нашёл расходов на скриншоте"
+                        captureMessage = "Выберите другой скриншот или добавьте расход вручную."
                         captureIsLoading = false
                         return@launch
                     }
@@ -222,12 +222,12 @@ fun FinanceApp(
                         )
                     }
                     screenshotAggregateDrafts = drafts
-                    screenshotOcrStatus = "Найдено ${drafts.size} категорий. Проверьте перед созданием."
-                    captureMessage = "Выберите категории и подтвердите черновики"
+                    screenshotOcrStatus = "Backend OCR сформировал ${drafts.size} кандидатов. Проверьте их перед созданием черновиков."
+                    captureMessage = "Выберите категории и создайте черновики для ручной проверки."
                     captureIsLoading = false
                 }
                 is ApiResult.Failure -> {
-                    screenshotOcrStatus = "Не удалось распознать платёж на скриншоте"
+                    screenshotOcrStatus = "Backend OCR не вернул черновики для проверки"
                     captureMessage = result.userFacingMessage()
                     captureIsLoading = false
                 }
@@ -259,12 +259,12 @@ fun FinanceApp(
         val selectedDrafts = screenshotAggregateDrafts
             .filter { it.include && it.selectedCategoryId.isNotBlank() }
         if (selectedDrafts.isEmpty()) {
-            captureMessage = "Выберите хотя бы одну категорию"
+            captureMessage = "Выберите хотя бы одну категорию, чтобы создать черновик для проверки."
             return
         }
         scope.launch {
             captureIsLoading = true
-            screenshotOcrStatus = "Создаём ${selectedDrafts.size} черновиков"
+            screenshotOcrStatus = "Создаём ${selectedDrafts.size} черновиков для проверки"
             val mappingContext = aggregateMappingContext(uiState.session)
             val result = withContext(Dispatchers.IO) {
                 var failure: ApiResult.Failure? = null
@@ -296,8 +296,8 @@ fun FinanceApp(
                         captureDrafts = refreshResult.value
                     }
                     screenshotAggregateDrafts = emptyList()
-                    screenshotOcrStatus = "Черновики созданы: ${selectedDrafts.size}"
-                    captureMessage = "Проверьте и подтвердите созданные черновики"
+                    screenshotOcrStatus = "Черновики для проверки созданы: ${selectedDrafts.size}"
+                    captureMessage = "Проверьте каждый черновик и только потом подтвердите операцию."
                     captureIsLoading = false
                 }
                 is ApiResult.Failure -> {
@@ -488,6 +488,11 @@ fun FinanceApp(
 
     fun submitQuickAdd(draft: QuickAddDraft) {
         val dashboard = uiState.dashboard ?: return
+        if (draft.visibility == FinanceMode.Overview) {
+            quickAddError = "Мой обзор только показывает видимые вам данные. Выберите Личное или Общее перед сохранением."
+            uiState = uiState.copy(message = quickAddError.orEmpty())
+            return
+        }
         val amount = draft.amount.normalizedAmount()
         if (amount == null) {
             quickAddError = "Проверьте сумму"
@@ -503,40 +508,33 @@ fun FinanceApp(
                     QuickEntryType.Expense,
                     QuickEntryType.Income,
                     -> {
-                        val account = dashboard.accounts.firstByIdOrFirst(draft.accountId)
-                            ?: when (
-                                val created = apiClient.createDemoAccount(
-                                    householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
-                                    currency = dashboard.accounts.firstOrNull()?.currency ?: "RUB",
-                                )
-                            ) {
-                                is ApiResult.Success -> created.value
-                                is ApiResult.Failure -> return@withContext created
-                            }
-                        val category = dashboard.categories.quickAddCategoryFor(
-                            categoryId = draft.categoryId,
-                            transactionType = draft.type.apiValue,
-                        )
-                        val resolvedCategory = category ?: when (
-                            val createdCategory = apiClient.createDemoCategory(
-                                householdId = if (draft.visibility == FinanceMode.Shared) uiState.session?.householdId else null,
-                                categoryType = draft.type.apiValue,
+                        val account = dashboard.accounts
+                            .filter { it.matchesWritableMode(draft.visibility) }
+                            .firstByIdOrFirst(draft.accountId)
+                            ?: return@withContext ApiResult.Failure(
+                                "В режиме ${draft.visibility.title} нет активного счёта. Создайте счёт в «Активы» и повторите сохранение.",
                             )
-                        ) {
-                            is ApiResult.Success -> createdCategory.value
-                            is ApiResult.Failure -> return@withContext createdCategory
-                        }
+                        val category = dashboard.categories
+                            .filter { it.matchesWritableMode(draft.visibility) }
+                            .quickAddCategoryFor(
+                                categoryId = draft.categoryId,
+                                transactionType = draft.type.apiValue,
+                            )
+                            ?: return@withContext ApiResult.Failure(
+                                "В режиме ${draft.visibility.title} нет категории для ${draft.type.title.lowercase(Locale.getDefault())}. Создайте категорию и повторите сохранение.",
+                            )
                         apiClient.createDemoTransaction(
                             account = account,
-                            category = resolvedCategory,
+                            category = category,
                             transactionType = draft.type.apiValue,
                             amount = amount,
                         )
                     }
                     QuickEntryType.Transfer -> {
-                        val source = dashboard.accounts.firstByIdOrFirst(draft.accountId)
+                        val scopedAccounts = dashboard.accounts.filter { it.matchesWritableMode(draft.visibility) }
+                        val source = scopedAccounts.firstByIdOrFirst(draft.accountId)
                         val destination = dashboard.accounts
-                            .filter { it.id != source?.id }
+                            .filter { it.matchesWritableMode(draft.visibility) && it.id != source?.id }
                             .firstByIdOrFirst(draft.destinationAccountId)
                         val validationMessage = transferPairValidationMessage(source, destination)
                         if (validationMessage != null) {
@@ -546,14 +544,8 @@ fun FinanceApp(
                         }
                     }
                     QuickEntryType.Asset -> {
-                        val currency = dashboard.accounts.firstOrNull()?.currency ?: "RUB"
-                        val ownershipType = if (draft.visibility == FinanceMode.Shared) "shared" else "personal"
-                        apiClient.createDemoAccount(
-                            householdId = if (ownershipType == "shared") uiState.session?.householdId else null,
-                            currency = currency,
-                            initialBalance = amount,
-                            accountType = draft.assetKind.apiValue,
-                            ownershipType = ownershipType,
+                        ApiResult.Failure(
+                            "Актив создаётся из раздела «Активы», чтобы выбрать название, валюту и доступ. Быстрое добавление не создаёт демо-счета.",
                         )
                     }
                 }
@@ -564,7 +556,7 @@ fun FinanceApp(
                     quickAddError = null
                     showQuickAdd = false
                     quickAddOpenKey += 1
-                    loadDashboard("Сохранено")
+                    loadDashboard("Сохранено в ${draft.visibility.title.lowercase(Locale("ru", "RU"))}")
                 }
                 is ApiResult.Failure -> {
                     val message = result.userFacingMessage()
@@ -706,9 +698,19 @@ fun FinanceApp(
             }
 
             when (selectedSection) {
-                AppSection.Home -> homeContent(dashboard, selectedMode) { selectedMode = it }
+                AppSection.Home -> homeContent(
+                    dashboard = dashboard,
+                    selectedMode = selectedMode,
+                    onModeSelected = { selectedMode = it },
+                    onOpenPlanning = {
+                        selectedSection = AppSection.Analytics
+                        selectedAnalyticsSubsection = AnalyticsSubsection.Planning
+                    },
+                )
                 AppSection.Operations -> operationsContent(
                     dashboard = dashboard,
+                    selectedMode = selectedMode,
+                    onModeSelected = { selectedMode = it },
                     captureDrafts = captureDrafts,
                     screenshotAggregateDrafts = screenshotAggregateDrafts,
                     captureIsLoading = captureIsLoading,
@@ -725,26 +727,30 @@ fun FinanceApp(
                     onAggregateCategorySelected = ::updateScreenshotAggregateCategory,
                     onAggregateIncludedChanged = ::updateScreenshotAggregateIncluded,
                     onAggregateCreateCategory = { draftKey, categoryName ->
-                        scope.launch {
-                            uiState = uiState.copy(isLoading = true, message = "Создаём категорию")
-                            val result = withContext(Dispatchers.IO) {
-                                apiClient.createCategory(
-                                    name = categoryName,
-                                    householdId = uiState.session?.householdId,
-                                    categoryType = "expense",
-                                )
-                            }
-                            when (result) {
-                                is ApiResult.Success -> {
-                                    val newCategoryId = result.value.id
-                                    updateScreenshotAggregateCategory(draftKey, newCategoryId)
-                                    updateScreenshotAggregateIncluded(draftKey, true)
-                                    loadDashboard("Категория «$categoryName» создана")
+                        if (selectedMode == FinanceMode.Overview) {
+                            captureMessage = "Мой обзор read-only. Переключитесь на Личное или Общее, чтобы создать категорию для OCR-черновика."
+                        } else {
+                            scope.launch {
+                                uiState = uiState.copy(isLoading = true, message = "Создаём категорию")
+                                val result = withContext(Dispatchers.IO) {
+                                    apiClient.createCategory(
+                                        name = categoryName,
+                                        householdId = if (selectedMode == FinanceMode.Shared) uiState.session?.householdId else null,
+                                        categoryType = "expense",
+                                    )
                                 }
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                when (result) {
+                                    is ApiResult.Success -> {
+                                        val newCategoryId = result.value.id
+                                        updateScreenshotAggregateCategory(draftKey, newCategoryId)
+                                        updateScreenshotAggregateIncluded(draftKey, true)
+                                        loadDashboard("Категория «$categoryName» создана в ${selectedMode.title.lowercase(Locale("ru", "RU"))}")
+                                    }
+                                    is ApiResult.Failure -> uiState = uiState.copy(
+                                        isLoading = false,
+                                        message = result.userFacingMessage(),
+                                    )
+                                }
                             }
                         }
                     },
@@ -946,6 +952,7 @@ fun FinanceApp(
         QuickAddSheet(
             sheetKey = quickAddOpenKey,
             dashboard = uiState.dashboard,
+            selectedMode = selectedMode,
             errorMessage = quickAddError,
             onDismiss = {
                 quickAddError = null
@@ -960,8 +967,10 @@ fun FinanceApp(
         val kind = state.kind
         AddAccountSheet(
             kind = kind,
+            initialMode = state.mode,
+            hasHousehold = !uiState.session?.householdId.isNullOrBlank(),
             onDismiss = { addAccountState = null },
-            onSubmit = { name, balance, currency ->
+            onSubmit = { name, balance, currency, mode ->
                 scope.launch {
                     uiState = uiState.copy(isLoading = true, message = "Добавляем актив")
                     val result = withContext(Dispatchers.IO) {
@@ -970,14 +979,14 @@ fun FinanceApp(
                             currency = currency,
                             initialBalance = balance,
                             accountType = kind.apiValue,
-                            householdId = if (state.mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                            householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
                             assetCategoryId = state.assetCategoryId,
                         )
                     }
                     when (result) {
                         is ApiResult.Success -> {
                             addAccountState = null
-                            loadDashboard("Актив добавлен")
+                            loadDashboard("Актив добавлен в ${mode.title.lowercase(Locale("ru", "RU"))}")
                         }
                         is ApiResult.Failure -> uiState = uiState.copy(
                             isLoading = false,
@@ -1214,6 +1223,7 @@ private fun LazyListScope.homeContent(
     dashboard: FinanceDashboard?,
     selectedMode: FinanceMode,
     onModeSelected: (FinanceMode) -> Unit,
+    onOpenPlanning: () -> Unit,
 ) {
     val view = dashboard.viewFor(selectedMode)
     item {
@@ -1222,6 +1232,7 @@ private fun LazyListScope.homeContent(
             onModeSelected = onModeSelected,
         )
     }
+    item { PlanningEntryCard(selectedMode, onOpenPlanning) }
     item { CapitalCard(view) }
     item { AssetChips(view.assetSummaries) }
     item { MonthExpenseCard(view) }
@@ -1231,6 +1242,8 @@ private fun LazyListScope.homeContent(
 
 private fun LazyListScope.operationsContent(
     dashboard: FinanceDashboard?,
+    selectedMode: FinanceMode,
+    onModeSelected: (FinanceMode) -> Unit,
     captureDrafts: List<CaptureDraft>,
     screenshotAggregateDrafts: List<ScreenshotAggregateDraftUi>,
     captureIsLoading: Boolean,
@@ -1247,14 +1260,27 @@ private fun LazyListScope.operationsContent(
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
     onDeleteTransaction: (String) -> Unit,
 ) {
-    val items = dashboard?.transactions.orEmpty()
+    val view = dashboard.viewFor(selectedMode)
+    val items = dashboard.transactionsFor(selectedMode)
+    val reviewAccounts = dashboard?.accounts.orEmpty()
+        .filter { it.status == "active" && it.id.isNotBlank() }
+        .filter { it.matchesWritableMode(selectedMode) }
+    val reviewCategories = dashboard?.categories.orEmpty()
+        .filter { it.status == "active" && it.id.isNotBlank() }
+        .filter { it.matchesWritableMode(selectedMode) }
+    item {
+        ModeChips(
+            selectedMode = selectedMode,
+            onModeSelected = onModeSelected,
+        )
+    }
     item {
         CaptureDraftReviewCard(
             isAuthenticated = dashboard?.session?.isAuthenticated == true,
             drafts = captureDrafts,
             screenshotAggregateDrafts = screenshotAggregateDrafts,
-            accounts = dashboard?.accounts.orEmpty(),
-            categories = dashboard?.categories.orEmpty(),
+            accounts = reviewAccounts,
+            categories = reviewCategories,
             isLoading = captureIsLoading,
             message = captureMessage,
             screenshotOcrStatus = screenshotOcrStatus,
@@ -1270,9 +1296,13 @@ private fun LazyListScope.operationsContent(
         )
     }
     if (items.isEmpty()) {
-        item { EmptyState("Операций пока нет") }
+        item {
+            EmptyState(
+                "${view.scopeTitle}: операций пока нет. Добавьте расход, доход или переключитесь на другой scope.",
+            )
+        }
     }
-    item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+    item { Text("Операции • ${view.scopeTitle}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
     items(items.sortedByDescending { it.occurredAt }) { transaction ->
         TransactionRow(transaction, dashboard?.categories.orEmpty()) {
             onDeleteTransaction(transaction.id)
@@ -1359,8 +1389,14 @@ private fun CaptureDraftReviewCard(
 
             if (!isAuthenticated) {
                 Text("Войдите, чтобы синхронизировать черновики.", style = MaterialTheme.typography.bodySmall)
+            } else if ((drafts.isNotEmpty() || screenshotAggregateDrafts.isNotEmpty()) && (accounts.isEmpty() || categories.isEmpty())) {
+                Text(
+                    "Для проверки OCR-черновиков выберите Личное или Общее: Мой обзор не сохраняет операции и категории.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             } else if (drafts.isEmpty() && screenshotAggregateDrafts.isEmpty()) {
-                Text("Нет ожидающих черновиков.", style = MaterialTheme.typography.bodySmall)
+                Text("В выбранном scope нет черновиков на проверку. Отправьте скрин в backend OCR или обновите список.", style = MaterialTheme.typography.bodySmall)
             } else {
                 drafts.forEach { draft ->
                     CaptureDraftRow(
@@ -1756,6 +1792,36 @@ private fun ModeChips(
 }
 
 @Composable
+private fun PlanningEntryCard(
+    selectedMode: FinanceMode,
+    onOpenPlanning: () -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBubble(R.drawable.ic_analytics_24, Color(0xFF4267D5))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("План месяца", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (selectedMode == FinanceMode.Overview) {
+                        "Мой обзор read-only. Для плана выберите Личное или Общее."
+                    } else {
+                        "${selectedMode.title}: доходы и распределения на месяц."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedButton(onClick = onOpenPlanning) {
+                Text("Открыть")
+            }
+        }
+    }
+}
+
+@Composable
 private fun CapitalCard(view: DashboardView) {
     ElevatedCard(
         modifier = Modifier
@@ -1770,7 +1836,7 @@ private fun CapitalCard(view: DashboardView) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "Капитал",
+                text = "Капитал • ${view.scopeTitle}",
                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.labelLarge,
             )
@@ -1818,7 +1884,7 @@ private fun MonthExpenseCard(view: DashboardView) {
             IconBubble(R.drawable.ic_receipt_24, Color(0xFFE35D4F))
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("Расходы месяца", style = MaterialTheme.typography.labelLarge)
+                Text("Расходы месяца • ${view.scopeTitle}", style = MaterialTheme.typography.labelLarge)
                 Text(
                     text = view.monthExpenses.formatMoney(view.primaryCurrency),
                     style = MaterialTheme.typography.titleLarge,
@@ -1842,7 +1908,7 @@ private fun TopCategoriesCard(categories: List<CategorySpend>) {
         ) {
             Text("Топ категории", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (categories.isEmpty()) {
-                Text("Расходов пока нет", style = MaterialTheme.typography.bodySmall)
+                Text("В выбранном scope расходов пока нет. Добавьте расход или переключитесь на другой scope.", style = MaterialTheme.typography.bodySmall)
             } else {
                 categories.take(3).forEach { category ->
                     CategorySpendRow(category)
@@ -1861,7 +1927,7 @@ private fun RecentOperationsCard(transactions: List<TransactionSummary>) {
         ) {
             Text("Последние операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (transactions.isEmpty()) {
-                Text("Движений пока нет", style = MaterialTheme.typography.bodySmall)
+                Text("В выбранном scope движений пока нет. Быстрое добавление предложит Личное или Общее перед сохранением.", style = MaterialTheme.typography.bodySmall)
             } else {
                 transactions.take(4).forEach { transaction ->
                     CompactTransactionRow(transaction)
@@ -2275,6 +2341,9 @@ private fun AssetCategorySheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Новая категория активов", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (mode == FinanceMode.Overview) {
+                Text("Мой обзор read-only: выберите Личное или Общее для новой категории активов.", style = MaterialTheme.typography.bodySmall)
+            }
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -2842,12 +2911,18 @@ private fun EmptyState(text: String) {
 @Composable
 private fun AddAccountSheet(
     kind: AssetKind,
+    initialMode: FinanceMode,
+    hasHousehold: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (String, String, String) -> Unit,
+    onSubmit: (String, String, String, FinanceMode) -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf("") }
     var balance by rememberSaveable { mutableStateOf("") }
     var currency by rememberSaveable { mutableStateOf("RUB") }
+    val modeOptions = writableFinanceModes(hasHousehold)
+    var mode by rememberSaveable(initialMode, hasHousehold) {
+        mutableStateOf(initialMode.takeIf { it in modeOptions })
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -2862,6 +2937,11 @@ private fun AddAccountSheet(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("Новый ${kind.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
+            if (initialMode == FinanceMode.Overview) {
+                Text("Мой обзор read-only: выберите Личное или Общее для нового актива.", style = MaterialTheme.typography.bodySmall)
+            }
+            Text("Доступ", style = MaterialTheme.typography.labelLarge)
+            ChipRow(modeOptions, mode, { mode = it }, { it.title }, { it.icon() })
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -2906,9 +2986,9 @@ private fun AddAccountSheet(
                 Button(
                     onClick = {
                         val cleanBalance = balance.trim().ifBlank { "0" }
-                        onSubmit(name.trim().ifBlank { kind.title }, cleanBalance, currency)
+                        onSubmit(name.trim().ifBlank { kind.title }, cleanBalance, currency, mode ?: FinanceMode.Overview)
                     },
-                    enabled = name.isNotBlank() || balance.isNotBlank(),
+                    enabled = mode != null && (name.isNotBlank() || balance.isNotBlank()),
                     modifier = Modifier.weight(1f),
                 ) {
                     Text("Создать")
@@ -2923,6 +3003,7 @@ private fun AddAccountSheet(
 private fun QuickAddSheet(
     sheetKey: Int,
     dashboard: FinanceDashboard?,
+    selectedMode: FinanceMode,
     errorMessage: String?,
     onDismiss: () -> Unit,
     onSubmit: (QuickAddDraft) -> Unit,
@@ -2933,11 +3014,40 @@ private fun QuickAddSheet(
     var destinationAccountId by rememberSaveable(sheetKey) { mutableStateOf("") }
     var categoryId by rememberSaveable(sheetKey) { mutableStateOf("") }
     var assetKind by rememberSaveable(sheetKey) { mutableStateOf(AssetKind.Bank) }
-    var visibility by rememberSaveable(sheetKey) { mutableStateOf(FinanceMode.Personal) }
+    val writableModes = writableFinanceModes(!dashboard?.session?.householdId.isNullOrBlank())
+    var visibility by rememberSaveable(sheetKey) {
+        mutableStateOf(selectedMode.takeIf { it in writableModes })
+    }
     val accounts = dashboard?.accounts.orEmpty().filter { it.status == "active" }
-    val categories = dashboard?.categories.orEmpty().filter { it.type == type.apiValue && it.status == "active" }
-    val firstAccountId = accounts.firstOrNull()?.id.orEmpty()
+    val scopedAccounts = accounts.filter { mode -> visibility?.let { mode.matchesWritableMode(it) } == true }
+    val categories = dashboard?.categories.orEmpty()
+        .filter { it.type == type.apiValue && it.status == "active" }
+        .filter { category -> visibility?.let { category.matchesWritableMode(it) } == true }
+    val firstAccountId = scopedAccounts.firstOrNull()?.id.orEmpty()
     val firstCategoryId = categories.firstOrNull()?.id.orEmpty()
+    val selectedSource = scopedAccounts.firstByIdOrFirst(accountId)
+    val compatibleDestinations = scopedAccounts.compatibleTransferDestinations(selectedSource)
+    val selectedDestination = compatibleDestinations.firstByIdOrFirst(destinationAccountId)
+    val transferPreflight = if (type == QuickEntryType.Transfer) {
+        transferPairValidationMessage(selectedSource, selectedDestination)
+            ?: "Перевод будет сохранён нейтрально: между счетами одного scope и одной валюты."
+    } else {
+        null
+    }
+    val submitLabel = when (type) {
+        QuickEntryType.Expense -> "Сохранить расход"
+        QuickEntryType.Income -> "Сохранить доход"
+        QuickEntryType.Transfer -> "Сохранить перевод"
+        QuickEntryType.Asset -> "Перейти к активам"
+    }
+    val disabledReason = quickAddDisabledReason(
+        type = type,
+        amount = amount,
+        visibility = visibility,
+        accounts = scopedAccounts,
+        categories = categories,
+        transferValidation = if (type == QuickEntryType.Transfer) transferPairValidationMessage(selectedSource, selectedDestination) else null,
+    )
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -2948,7 +3058,7 @@ private fun QuickAddSheet(
                 .testTag("quick-add-sheet"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Добавить", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Быстрое добавление", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = amount,
                 onValueChange = { amount = it.filter { char -> char.isDigit() || char == '.' || char == ',' } },
@@ -2957,7 +3067,11 @@ private fun QuickAddSheet(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            ChipRow(QuickEntryType.entries.toList(), type, { type = it }, { it.title }, { it.icon() })
+            ChipRow(quickAddEntryTypes(), type, { nextType ->
+                type = nextType
+                categoryId = ""
+                destinationAccountId = ""
+            }, { it.title }, { it.icon() })
             if (!errorMessage.isNullOrBlank()) {
                 Text(
                     text = errorMessage,
@@ -2968,22 +3082,39 @@ private fun QuickAddSheet(
                         .testTag("quick-add-error"),
                 )
             }
+            if (selectedMode == FinanceMode.Overview) {
+                Text(
+                    "Мой обзор read-only: перед сохранением выберите Личное или Общее.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text("Куда сохранить", style = MaterialTheme.typography.labelLarge)
+            ChipRow(writableModes, visibility, { mode ->
+                visibility = mode
+                accountId = ""
+                destinationAccountId = ""
+                categoryId = ""
+            }, { it.title }, { it.icon() })
             if (type == QuickEntryType.Asset) {
                 ChipRow(AssetKind.entries.toList(), assetKind, { assetKind = it }, { it.title }, { it.icon })
             } else {
                 AccountPicker(
                     title = if (type == QuickEntryType.Transfer) "Со счета" else "Счет",
-                    accounts = accounts,
+                    accounts = scopedAccounts,
                     selectedId = accountId.ifBlank { firstAccountId },
                     onSelected = { accountId = it },
                 )
                 if (type == QuickEntryType.Transfer) {
                     AccountPicker(
                         title = "На счет",
-                        accounts = accounts.filter { it.id != accountId.ifBlank { firstAccountId } },
+                        accounts = compatibleDestinations,
                         selectedId = destinationAccountId,
                         onSelected = { destinationAccountId = it },
                     )
+                    transferPreflight?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 if (type != QuickEntryType.Transfer && categories.isNotEmpty()) {
                     CategoryPicker(
@@ -2993,7 +3124,9 @@ private fun QuickAddSheet(
                     )
                 }
             }
-            ChipRow(FinanceMode.entries.toList(), visibility, { visibility = it }, { it.title }, { it.icon() })
+            disabledReason?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             Text("Сегодня", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
@@ -3012,14 +3145,14 @@ private fun QuickAddSheet(
                                 destinationAccountId = destinationAccountId,
                                 categoryId = categoryId.ifBlank { firstCategoryId },
                                 assetKind = assetKind,
-                                visibility = visibility,
+                                visibility = visibility ?: FinanceMode.Overview,
                             ),
                         )
                     },
-                    enabled = amount.normalizedAmount() != null,
+                    enabled = disabledReason == null,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Сохранить")
+                    Text(submitLabel)
                 }
             }
         }
@@ -3029,7 +3162,7 @@ private fun QuickAddSheet(
 @Composable
 private fun <T> ChipRow(
     values: List<T>,
-    selected: T,
+    selected: T?,
     onSelected: (T) -> Unit,
     title: (T) -> String,
     icon: (T) -> Int,
@@ -3052,6 +3185,60 @@ private fun <T> ChipRow(
     }
 }
 
+internal fun writableFinanceModes(hasHousehold: Boolean): List<FinanceMode> {
+    return if (hasHousehold) {
+        listOf(FinanceMode.Personal, FinanceMode.Shared)
+    } else {
+        listOf(FinanceMode.Personal)
+    }
+}
+
+internal fun quickAddEntryTypes(): List<QuickEntryType> {
+    return listOf(QuickEntryType.Expense, QuickEntryType.Income, QuickEntryType.Transfer)
+}
+
+internal fun quickAddDisabledReason(
+    type: QuickEntryType,
+    amount: String,
+    visibility: FinanceMode?,
+    accounts: List<AccountSummary>,
+    categories: List<CategorySummary>,
+    transferValidation: String?,
+): String? {
+    if (amount.normalizedAmount() == null) {
+        return "Укажите сумму перед сохранением."
+    }
+    if (visibility == null || visibility == FinanceMode.Overview) {
+        return "Мой обзор read-only. Выберите Личное или Общее."
+    }
+    if (type == QuickEntryType.Asset) {
+        return "Актив создаётся в разделе «Активы», где можно выбрать название, валюту и доступ."
+    }
+    if (accounts.isEmpty()) {
+        return "В режиме ${visibility.title} нет активного счёта. Создайте счёт в «Активы»."
+    }
+    if (type == QuickEntryType.Transfer) {
+        return transferValidation
+    }
+    if (categories.isEmpty()) {
+        return "В режиме ${visibility.title} нет категории для ${type.title.lowercase(Locale("ru", "RU"))}. Создайте категорию в «Категории»."
+    }
+    return null
+}
+
+private fun List<AccountSummary>.compatibleTransferDestinations(source: AccountSummary?): List<AccountSummary> {
+    if (source == null) return emptyList()
+    return filter { candidate ->
+        candidate.id != source.id &&
+            candidate.currency == source.currency &&
+            candidate.ownershipType == source.ownershipType &&
+            (
+                source.ownershipType != "shared" ||
+                    candidate.householdId.orEmpty() == source.householdId.orEmpty()
+                )
+    }
+}
+
 @Composable
 private fun AccountPicker(
     title: String,
@@ -3061,20 +3248,24 @@ private fun AccountPicker(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(accounts) { account ->
-                FilterChip(
-                    selected = selectedId == account.id,
-                    onClick = { onSelected(account.id) },
-                    label = { Text(account.displayName()) },
-                    leadingIcon = {
-                        Icon(
-                            painter = painterResource(account.assetKind().icon),
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
+        if (accounts.isEmpty()) {
+            Text("Нет совместимых счетов для выбранного scope.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(accounts) { account ->
+                    FilterChip(
+                        selected = selectedId == account.id,
+                        onClick = { onSelected(account.id) },
+                        label = { Text("${account.displayName()} • ${account.scopeTitle()}") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(account.assetKind().icon),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -3088,20 +3279,24 @@ private fun CategoryPicker(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Категория", style = MaterialTheme.typography.labelLarge)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(categories) { category ->
-                FilterChip(
-                    selected = selectedId == category.id,
-                    onClick = { onSelected(category.id) },
-                    label = { Text(category.displayName()) },
-                    leadingIcon = {
-                        Icon(
-                            painter = painterResource(category.icon()),
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
+        if (categories.isEmpty()) {
+            Text("Нет категории в выбранном scope. Создайте её в разделе «Категории».", style = MaterialTheme.typography.bodySmall)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(categories) { category ->
+                    FilterChip(
+                        selected = selectedId == category.id,
+                        onClick = { onSelected(category.id) },
+                        label = { Text("${category.displayName()} • ${category.localizedScope()}") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(category.icon()),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -3168,6 +3363,7 @@ data class SectionCard(
 )
 
 data class DashboardView(
+    val scopeTitle: String,
     val primaryCurrency: String,
     val capital: BigDecimal,
     val monthIncome: BigDecimal,
@@ -3222,7 +3418,7 @@ data class AddAccountState(
 enum class FinanceMode(val title: String) {
     Personal("Личное"),
     Shared("Общее"),
-    Overview("Обзор"),
+    Overview("Мой обзор"),
 }
 
 enum class QuickEntryType(
@@ -3267,7 +3463,9 @@ fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<Sectio
         }.ifEmpty {
             listOf(SectionCard("Категории", "Нет категорий", "пусто"))
         }
-        AppSection.Analytics -> view.topCategories.map {
+        AppSection.Analytics -> listOf(
+            SectionCard("План месяца", view.scopeTitle, "явный вход Android"),
+        ) + view.topCategories.map {
             SectionCard(it.name, it.amount.formatMoney(it.currency), "категория")
         }.ifEmpty {
             listOf(SectionCard("Категории", "Нет расходов", "пусто"))
@@ -3281,8 +3479,7 @@ fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
         .filter { it.status == "active" }
         .filterByMode(mode)
     val accountIds = accounts.map { it.id }.toSet()
-    val transactions = dashboard?.transactions.orEmpty()
-        .filter { tx -> tx.matchesMode(mode, accountIds) }
+    val transactions = dashboard.transactionsFor(mode, accountIds)
     val currency = accounts.firstOrNull()?.currency
         ?: transactions.firstOrNull()?.currency
         ?: dashboard?.totals?.firstOrNull()?.currency
@@ -3298,6 +3495,7 @@ fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
         .sumMoney()
 
     return DashboardView(
+        scopeTitle = mode.scopeTitle(),
         primaryCurrency = currency,
         capital = accounts.fold(BigDecimal.ZERO) { total, account -> total + account.currentBalance.toMoney() },
         monthIncome = income,
@@ -3309,6 +3507,19 @@ fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
         topCategories = topCategories(transactions, dashboard?.categories.orEmpty(), currency),
         recentTransactions = transactions.sortedByDescending { it.occurredAt }.take(6),
     )
+}
+
+private fun FinanceDashboard?.transactionsFor(
+    mode: FinanceMode,
+    scopedAccountIds: Set<String>? = null,
+): List<TransactionSummary> {
+    val dashboard = this ?: return emptyList()
+    val accountIds = scopedAccountIds ?: dashboard.accounts
+        .filter { it.status == "active" }
+        .filterByMode(mode)
+        .map { it.id }
+        .toSet()
+    return dashboard.transactions.filter { tx -> tx.matchesMode(accountIds) }
 }
 
 private fun assetSummaries(accounts: List<AccountSummary>): List<AssetSummary> {
@@ -3388,14 +3599,27 @@ private fun List<AccountSummary>.filterByMode(mode: FinanceMode): List<AccountSu
     }
 }
 
-private fun TransactionSummary.matchesMode(mode: FinanceMode, accountIds: Set<String>): Boolean {
-    if (mode == FinanceMode.Overview) {
-        return accountId in accountIds || counterpartyAccountId in accountIds
-    }
+private fun TransactionSummary.matchesMode(accountIds: Set<String>): Boolean {
     if (type == "transfer") {
         return accountId in accountIds && counterpartyAccountId in accountIds
     }
     return accountId in accountIds
+}
+
+private fun AccountSummary.matchesWritableMode(mode: FinanceMode): Boolean {
+    return when (mode) {
+        FinanceMode.Personal -> ownershipType != "shared"
+        FinanceMode.Shared -> ownershipType == "shared"
+        FinanceMode.Overview -> false
+    }
+}
+
+private fun CategorySummary.matchesWritableMode(mode: FinanceMode): Boolean {
+    return when (mode) {
+        FinanceMode.Personal -> scope != "household"
+        FinanceMode.Shared -> scope == "household"
+        FinanceMode.Overview -> false
+    }
 }
 
 internal fun transferPairValidationMessage(
@@ -3403,22 +3627,22 @@ internal fun transferPairValidationMessage(
     destination: AccountSummary?,
 ): String? {
     if (source == null || destination == null) {
-        return "Нужны два счета для перевода"
+        return "Для перевода нужны два совместимых счета в одном scope и одной валюте."
     }
     if (source.id == destination.id) {
         return "Выберите два разных счета"
     }
     if (source.currency != destination.currency) {
-        return "Перевод между разными валютами недоступен"
+        return "Перед отправкой выберите счета в одной валюте: конвертация в переводе недоступна."
     }
     if (source.ownershipType != destination.ownershipType) {
-        return "Перевод между личным и общим недоступен. Выберите счета одного режима."
+        return "Перед отправкой выберите счета одного scope: Личное с Личным или Общее с Общим."
     }
     if (
         source.ownershipType == "shared" &&
         source.householdId.orEmpty() != destination.householdId.orEmpty()
     ) {
-        return "Перевод между разными общими бюджетами недоступен"
+        return "Перед отправкой выберите счета одного общего бюджета."
     }
     return null
 }
@@ -3484,7 +3708,7 @@ private fun TransactionSummary.icon(): Int = when (type) {
 
 private fun TransactionSummary.tint(): Color = when (type) {
     "income" -> Color(0xFF2E7D62)
-    "transfer" -> Color(0xFF5B6EE1)
+    "transfer" -> Color(0xFF6A6F7A)
     "brokerage", "asset_buy", "asset_sell" -> Color(0xFF227C9D)
     "interest", "dividend" -> Color(0xFF2E7D62)
     "adjustment" -> Color(0xFF6D5BD0)
@@ -3598,20 +3822,28 @@ internal fun List<CategorySummary>.quickAddCategoryFor(
 
 private fun AccountSummary.displayName(): String = userFacingSeedText(name)
 
+private fun AccountSummary.scopeTitle(): String = if (ownershipType == "shared") "Общее" else "Личное"
+
 private fun CategorySummary.displayName(): String = userFacingSeedText(name)
 
 private fun CategorySummary.localizedType(): String = if (type == "income") "Доход" else "Расход"
 
 private fun CategorySummary.localizedScope(): String = if (scope == "household") "Общее" else "Личное"
 
+private fun FinanceMode.scopeTitle(): String = when (this) {
+    FinanceMode.Personal -> "Личное"
+    FinanceMode.Shared -> "Общее"
+    FinanceMode.Overview -> "Мой обзор"
+}
+
 private fun TransactionSummary.displayDescription(): String {
     return userFacingSeedText(description).ifBlank { localizedType() }
 }
 
 private fun String.localizedCaptureSource(): String = when (this) {
-    "screenshot_ocr" -> "Скриншот"
-    "manual" -> "Ручной ввод"
-    else -> "Импорт"
+    "screenshot_ocr" -> "OCR-черновик со скрина"
+    "manual" -> "Черновик вручную"
+    else -> "Черновик"
 }
 
 private fun ApiResult.Failure.userFacingMessage(): String {

@@ -58,6 +58,7 @@ type SectionId =
 
 type ViewMode = "personal" | "shared" | "overview";
 type VisibilityMode = "personal" | "shared";
+type DraftVisibilityMode = VisibilityMode | "";
 type QuickKind = "expense" | "income" | "transfer" | "asset";
 
 type QuickAddInput = {
@@ -238,9 +239,48 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     }
 
     const sourceAccount = snapshot.accounts.find((account) => account.id === input.accountId);
+    const destinationAccount = snapshot.accounts.find(
+      (account) => account.id === input.toAccountId
+    );
     const currency = sourceAccount?.balance.currency ?? "RUB";
     const occurredAt = new Date(`${input.date || todayInputValue()}T12:00:00`).toISOString();
     const sharedHouseholdId = input.visibility === "shared" ? snapshot.session.householdId : null;
+    const expectedOwnership = input.visibility === "shared" ? "shared" : "personal";
+
+    if (input.kind !== "asset") {
+      if (!sourceAccount || accountOwnership(sourceAccount) !== expectedOwnership) {
+        setSaveStatus("Выберите счет в нужном scope");
+        return;
+      }
+    }
+
+    if (input.kind === "transfer") {
+      if (
+        !destinationAccount ||
+        accountOwnership(destinationAccount) !== expectedOwnership ||
+        destinationAccount.balance.currency !== currency
+      ) {
+        setSaveStatus("Для перевода нужны два совместимых счета одного scope и валюты");
+        return;
+      }
+    }
+
+    const selectedOperationCategory =
+      input.kind === "expense" || input.kind === "income"
+        ? snapshot.categories.find(
+            (category) =>
+              category.id === input.categoryId &&
+              category.status !== "deleted" &&
+              category.status !== "archived" &&
+              categoryScopeVisibility(category) === input.visibility &&
+              category.direction === input.kind
+          )
+        : null;
+
+    if ((input.kind === "expense" || input.kind === "income") && !selectedOperationCategory) {
+      setSaveStatus("Выберите категорию в нужном scope");
+      return;
+    }
 
     setSaveStatus("Сохраняем");
     if (input.kind === "asset") {
@@ -268,7 +308,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     } else {
       await client.createDemoOperation({
         accountId: input.accountId,
-        categoryId: input.categoryId || null,
+        categoryId: selectedOperationCategory?.id ?? null,
         currency,
         transactionType: input.kind,
         amount: input.amount,
@@ -278,7 +318,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     }
 
     await loadSnapshot();
-    setSaveStatus("Добавлено");
+    setSaveStatus(input.visibility === "shared" ? "Сохранено в общее" : "Сохранено в личное");
     setQuickAddOpen(false);
   };
 
@@ -355,6 +395,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           <div className="titleGroup">
             <p>{viewModeDescription(viewMode)}</p>
             <h2>{sectionTitle(activeSection)}</h2>
+            <ScopeBadge mode={viewMode} />
           </div>
           <div className="topActions">
             <ViewSwitch value={viewMode} onChange={setViewMode} />
@@ -431,11 +472,10 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
 
       {isQuickAddOpen && (
         <QuickAdd
-          accounts={visibleAccounts(snapshot.accounts, viewMode)}
           allAccounts={snapshot.accounts.filter((account) => account.status !== "deleted")}
-          categories={visibleCategories(snapshot.categories, viewMode)}
+          categories={snapshot.categories.filter((category) => category.status !== "deleted")}
           canUseShared={Boolean(snapshot.session.householdId)}
-          defaultVisibility={viewMode === "shared" ? "shared" : "personal"}
+          defaultVisibility={viewMode === "overview" ? "" : viewMode}
           onClose={() => setQuickAddOpen(false)}
           onSubmit={saveQuickAdd}
           saveStatus={saveStatus}
@@ -571,6 +611,11 @@ function ViewSwitch({
   );
 }
 
+function ScopeBadge({ mode }: { mode: ViewMode | VisibilityMode }) {
+  const label = mode === "overview" ? "Мой обзор" : mode === "shared" ? "Общее" : "Личное";
+  return <span className={`scopeBadge ${mode}`}>{label}</span>;
+}
+
 function MoneyDashboard({
   snapshot,
   report,
@@ -589,7 +634,7 @@ function MoneyDashboard({
   const capital = accounts.reduce((sum, account) => sum + account.balance.value, 0);
   const groups = groupAssets(accounts, currency);
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
-  const recentItems = recentTimeline(operations, transfers).slice(0, 6);
+  const recentItems = recentTimeline(operations, transfers, accounts).slice(0, 6);
 
   return (
     <section className="screenStack" aria-labelledby="money-title">
@@ -600,6 +645,7 @@ function MoneyDashboard({
           Операция
         </button>
       </div>
+      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
 
       <div className="metricGrid">
         <Metric label="Капитал" value={formatMoney({ value: capital, currency })} />
@@ -617,7 +663,9 @@ function MoneyDashboard({
             {groups.map((group) => (
               <AssetGroupRow key={group.kind} group={group} />
             ))}
-            {groups.length === 0 && <EmptyState text="Нет активов в этом режиме" />}
+            {groups.length === 0 && (
+              <EmptyState text={scopeEmptyText(viewMode, "активов", "добавьте актив в выбранный scope или переключите режим")} />
+            )}
           </div>
         </section>
 
@@ -629,7 +677,9 @@ function MoneyDashboard({
             {topCategories.map((category) => (
               <CategoryTotalRow key={category.name} category={category} />
             ))}
-            {topCategories.length === 0 && <EmptyState text="Пока нет расходов" />}
+            {topCategories.length === 0 && (
+              <EmptyState text={scopeEmptyText(viewMode, "расходов", "добавьте расход или проверьте другой scope")} />
+            )}
           </div>
         </section>
       </div>
@@ -638,7 +688,10 @@ function MoneyDashboard({
         <div className="sectionHead compact">
           <h3 id="latest-title">Последние операции</h3>
         </div>
-        <TimelineList items={recentItems} />
+        <TimelineList
+          emptyText={scopeEmptyText(viewMode, "записей", "добавьте операцию или выберите другой scope")}
+          items={recentItems}
+        />
       </section>
     </section>
   );
@@ -675,7 +728,7 @@ function OperationsPage({
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
   const operations = visibleOperations(snapshot.operations, accounts);
   const transfers = visibleTransfers(snapshot.transfers, accounts);
-  const timeline = recentTimeline(operations, transfers);
+  const timeline = recentTimeline(operations, transfers, accounts);
   const categories = visibleCategories(snapshot.categories, viewMode);
   const expenseCategories = categories.filter(
     (category) => category.direction === "expense"
@@ -694,6 +747,7 @@ function OperationsPage({
         <h3 id="operations-title">Операции</h3>
         <span>{timeline.length} записей</span>
       </div>
+      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       <ScreenshotOcrCapture
         accounts={accounts}
         canUseHousehold={Boolean(snapshot.session.householdId)}
@@ -709,7 +763,10 @@ function OperationsPage({
         onChanged={refreshAfterDraftChange}
         refreshKey={draftsRefreshKey}
       />
-      <TimelineList items={timeline} />
+      <TimelineList
+        emptyText={scopeEmptyText(viewMode, "операций", "добавьте расход, доход или выберите другой scope")}
+        items={timeline}
+      />
     </section>
   );
 }
@@ -852,6 +909,9 @@ function PendingCaptureDraftsPanel({
           {isLoading ? "Обновляем" : "Обновить"}
         </button>
       </div>
+      <p className="scopeCopy">
+        Черновики из OCR не являются операциями, пока вы не проверите счет, категорию и не подтвердите их.
+      </p>
 
       {error && <p className="formError">{error}</p>}
       {status && <p className="formHint">{status}</p>}
@@ -988,7 +1048,7 @@ function PendingCaptureDraftsPanel({
           );
         })}
         {!isLoading && drafts.length === 0 && (
-          <EmptyState text="Нет черновиков для подтверждения" />
+          <EmptyState text="Черновиков OCR для проверки нет. Загрузите скрин расходов или обновите список после OCR-запроса." />
         )}
       </div>
     </section>
@@ -1050,7 +1110,7 @@ function ScreenshotOcrCapture({
   householdId: string | null;
   onSaved: () => Promise<DashboardSnapshot>;
 }) {
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [accountId, setAccountId] = useState("");
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [rows, setRows] = useState<OcrReviewRow[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -1063,7 +1123,7 @@ function ScreenshotOcrCapture({
     setAccountId((current) =>
       current && accounts.some((account) => account.id === current)
         ? current
-        : accounts[0]?.id ?? ""
+        : ""
     );
   }, [accounts]);
 
@@ -1108,7 +1168,9 @@ function ScreenshotOcrCapture({
           : "Категории расходов на скриншоте не найдены."
       );
     } catch {
-      setError("Не удалось распознать скрин расходов. Попробуйте другой скриншот.");
+      setError(
+        "OCR-запрос не выполнен: проверьте сеть, сессию и формат скриншота. Черновики не созданы."
+      );
     } finally {
       setRecognizing(false);
     }
@@ -1187,11 +1249,15 @@ function ScreenshotOcrCapture({
           />
         </label>
       </div>
+      <p className="scopeCopy">
+        Скриншот отправляется как OCR-запрос. Результат сохраняется только как черновики для проверки, без импорта и автосоздания операций.
+      </p>
 
       {accounts.length > 0 && (
         <label className="field compactField">
           <span>Счет для черновиков</span>
           <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+            <option value="">Выберите счет</option>
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {account.name}
@@ -1199,6 +1265,9 @@ function ScreenshotOcrCapture({
             ))}
           </select>
         </label>
+      )}
+      {accounts.length === 0 && (
+        <EmptyState text="В выбранном scope нет счета для черновиков OCR. Сначала добавьте счет или переключите режим." />
       )}
 
       {error && <p className="formError">{error}</p>}
@@ -1254,7 +1323,7 @@ function ScreenshotOcrCapture({
           ))}
           <button className="submitButton" disabled={!canConfirm} type="button" onClick={confirmRows}>
             <Check size={18} aria-hidden="true" />
-            {isSaving ? "Сохраняем" : "Создать черновики"}
+            {isSaving ? "Сохраняем" : "Создать черновики для проверки"}
           </button>
         </div>
       )}
@@ -1277,11 +1346,14 @@ function AssetsPage({
         <h3 id="assets-title">Счета и активы</h3>
         <span>{accounts.length} активов</span>
       </div>
+      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       <div className="assetGrid">
         {accounts.map((account) => (
           <AssetTile key={account.id} account={account} />
         ))}
-        {accounts.length === 0 && <EmptyState text="Нет активов в этом режиме" />}
+        {accounts.length === 0 && (
+          <EmptyState text={scopeEmptyText(viewMode, "активов", "добавьте актив через Quick Add или переключите режим")} />
+        )}
       </div>
     </section>
   );
@@ -1305,16 +1377,21 @@ function CategoriesPage({
         <h3 id="categories-title">Категории</h3>
         <span>{categories.length} категорий</span>
       </div>
-      <CategoryForm
-        category={editingCategory}
-        defaultScope={viewMode === "shared" ? "household" : "personal"}
-        householdId={snapshot.session.householdId}
-        onCancel={() => setEditingCategory(null)}
-        onSave={async (input) => {
-          await onSave(input);
-          setEditingCategory(null);
-        }}
-      />
+      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
+      {viewMode === "overview" ? (
+        <EmptyState text="Обзор показывает видимые категории только для чтения. Для создания или редактирования выберите личное или общее." />
+      ) : (
+        <CategoryForm
+          category={editingCategory}
+          defaultScope={viewMode === "shared" ? "household" : "personal"}
+          householdId={snapshot.session.householdId}
+          onCancel={() => setEditingCategory(null)}
+          onSave={async (input) => {
+            await onSave(input);
+            setEditingCategory(null);
+          }}
+        />
+      )}
       <div className="categoryGrid">
         {categories.map((category, index) => (
           <CategoryTile
@@ -1324,7 +1401,9 @@ function CategoriesPage({
             onEdit={() => setEditingCategory(category)}
           />
         ))}
-        {categories.length === 0 && <EmptyState text="Нет категорий в этом режиме" />}
+        {categories.length === 0 && (
+          <EmptyState text={scopeEmptyText(viewMode, "категорий", "создайте категорию в личном или общем режиме")} />
+        )}
       </div>
     </section>
   );
@@ -1476,6 +1555,7 @@ function AnalyticsPage({
         <h3 id="analytics-title">Аналитика</h3>
         <span>{report.periodLabel}</span>
       </div>
+      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       <div className="metricGrid three">
         <Metric label="Доходы" value={formatMoney(report.income)} tone="success" />
         <Metric label="Расходы" value={formatMoney(report.expense)} tone="danger" />
@@ -1505,6 +1585,13 @@ function AnalyticsPage({
           </div>
         </section>
       </div>
+      <section className="plainSection" aria-labelledby="planning-pwa-title">
+        <div className="sectionHead compact">
+          <h3 id="planning-pwa-title">План месяца</h3>
+          <ScopeBadge mode={viewMode} />
+        </div>
+        <EmptyState text="В PWA планирование пока не является рабочим путем. Для этой итерации планирование Android-first; PWA-путь будет добавлен отдельно." />
+      </section>
     </section>
   );
 }
@@ -1542,7 +1629,6 @@ function SettingsPage({
 }
 
 function QuickAdd({
-  accounts,
   allAccounts,
   canUseShared,
   categories,
@@ -1551,29 +1637,48 @@ function QuickAdd({
   onSubmit,
   saveStatus
 }: {
-  accounts: AccountSummary[];
   allAccounts: AccountSummary[];
   canUseShared: boolean;
   categories: CategorySummary[];
-  defaultVisibility: VisibilityMode;
+  defaultVisibility: DraftVisibilityMode;
   onClose: () => void;
   onSubmit: (input: QuickAddInput) => Promise<void>;
   saveStatus: string;
 }) {
-  const firstAccount = accounts[0] ?? allAccounts[0];
-  const secondAccount = allAccounts.find((account) => account.id !== firstAccount?.id);
   const [kind, setKind] = useState<QuickKind>("expense");
-  const [amount, setAmount] = useState("1000");
-  const [accountId, setAccountId] = useState(firstAccount?.id ?? "");
-  const [toAccountId, setToAccountId] = useState(secondAccount?.id ?? "");
-  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [toAccountId, setToAccountId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [assetKind, setAssetKind] = useState<AccountKind>("card");
   const [date, setDate] = useState(todayInputValue());
   const [comment, setComment] = useState("");
-  const [visibility, setVisibility] = useState<VisibilityMode>(defaultVisibility);
+  const [visibility, setVisibility] = useState<DraftVisibilityMode>(defaultVisibility);
   const [isSaving, setSaving] = useState(false);
 
+  const writableAccounts = allAccounts.filter(
+    (account) =>
+      visibility &&
+      account.status !== "deleted" &&
+      account.status !== "archived" &&
+      accountOwnership(account) === visibility
+  );
+  const sourceAccount = writableAccounts.find((account) => account.id === accountId);
+  const transferTargets = writableAccounts.filter(
+    (account) =>
+      account.id !== accountId &&
+      Boolean(sourceAccount) &&
+      account.balance.currency === sourceAccount?.balance.currency
+  );
+  const selectedTransferTarget = transferTargets.find((account) => account.id === toAccountId);
+
   const filteredCategories = categories.filter((category) => {
+    if (category.status === "deleted" || category.status === "archived") {
+      return false;
+    }
+    if (!visibility || categoryScopeVisibility(category) !== visibility) {
+      return false;
+    }
     if (kind === "income") {
       return category.direction === "income";
     }
@@ -1582,11 +1687,24 @@ function QuickAdd({
     }
     return false;
   });
+  const selectedCategory = filteredCategories.find((category) => category.id === categoryId);
+
+  useEffect(() => {
+    if (categoryId && !selectedCategory) {
+      setCategoryId("");
+    }
+  }, [categoryId, selectedCategory]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return;
+    }
+    if (!visibility) {
+      return;
+    }
+    if ((kind === "expense" || kind === "income") && !selectedCategory) {
       return;
     }
 
@@ -1597,7 +1715,7 @@ function QuickAdd({
         amount: parsedAmount,
         accountId,
         toAccountId,
-        categoryId,
+        categoryId: selectedCategory?.id ?? "",
         assetKind,
         date,
         comment,
@@ -1608,11 +1726,22 @@ function QuickAdd({
     }
   };
 
+  const hasAmount = amount.trim() !== "" && Number(amount) > 0;
+  const hasVisibility = visibility === "personal" || visibility === "shared";
+  const isSharedBlocked = visibility === "shared" && !canUseShared;
+  const transferNeedsCompatibleTarget =
+    kind === "transfer" && Boolean(accountId) && transferTargets.length === 0;
+  const hasValidOperationCategory =
+    (kind !== "expense" && kind !== "income") || Boolean(selectedCategory);
   const canSubmit =
-    Number(amount) > 0 &&
-    !(kind === "asset" && visibility === "shared" && !canUseShared) &&
-    (kind === "asset" ||
-      (kind === "transfer" ? accountId && toAccountId && accountId !== toAccountId : accountId));
+    hasAmount &&
+    hasVisibility &&
+    !isSharedBlocked &&
+    hasValidOperationCategory &&
+      (kind === "asset" ||
+      (kind === "transfer"
+        ? Boolean(accountId) && Boolean(selectedTransferTarget) && !transferNeedsCompatibleTarget
+        : Boolean(accountId)));
 
   return (
     <div className="modalLayer" role="presentation">
@@ -1649,10 +1778,50 @@ function QuickAdd({
             min="0"
             inputMode="decimal"
             type="number"
+            placeholder="Введите сумму"
             value={amount}
             onChange={(event) => setAmount(event.target.value)}
           />
         </label>
+
+        <fieldset className="visibilityGroup prominent">
+          <legend>Куда сохранить</legend>
+          <label>
+            <input
+              checked={visibility === "personal"}
+              name="visibility"
+              type="radio"
+              onChange={() => {
+                setVisibility("personal");
+                setAccountId("");
+                setToAccountId("");
+                setCategoryId("");
+              }}
+            />
+            Личное
+          </label>
+          <label>
+            <input
+              checked={visibility === "shared"}
+              disabled={!canUseShared}
+              name="visibility"
+              type="radio"
+              onChange={() => {
+                setVisibility("shared");
+                setAccountId("");
+                setToAccountId("");
+                setCategoryId("");
+              }}
+            />
+            Общее
+          </label>
+        </fieldset>
+        {!visibility && (
+          <p className="formError">Обзор только читает данные. Выберите личное или общее для записи.</p>
+        )}
+        {isSharedBlocked && (
+          <p className="formError">Для общего режима нужен семейный доступ.</p>
+        )}
 
         {kind === "asset" ? (
           <label className="field">
@@ -1672,7 +1841,8 @@ function QuickAdd({
           <label className="field">
             <span>{kind === "transfer" ? "Откуда" : "Счет"}</span>
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
-              {allAccounts.map((account) => (
+              <option value="">Выберите счет</option>
+              {writableAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -1680,20 +1850,27 @@ function QuickAdd({
             </select>
           </label>
         )}
+        {hasVisibility && kind !== "asset" && writableAccounts.length === 0 && (
+          <EmptyState text="В выбранном scope нет счета для записи. Сначала добавьте актив или выберите другой scope." />
+        )}
 
         {kind === "transfer" && (
           <label className="field">
             <span>Куда</span>
             <select value={toAccountId} onChange={(event) => setToAccountId(event.target.value)}>
-              {allAccounts
-                .filter((account) => account.id !== accountId)
-                .map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
+              <option value="">Выберите совместимый счет</option>
+              {transferTargets.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
             </select>
           </label>
+        )}
+        {transferNeedsCompatibleTarget && (
+          <p className="formError">
+            Для перевода нужны два счета одного scope и валюты. Создайте совместимый счет или выберите другой.
+          </p>
         )}
 
         {(kind === "expense" || kind === "income") && (
@@ -1724,32 +1901,9 @@ function QuickAdd({
             <span>Комментарий</span>
             <input value={comment} onChange={(event) => setComment(event.target.value)} />
           </label>
-          <fieldset className="visibilityGroup">
-            <legend>Видимость</legend>
-            <label>
-              <input
-                checked={visibility === "personal"}
-                name="visibility"
-                type="radio"
-                onChange={() => setVisibility("personal")}
-              />
-              Личное
-            </label>
-            <label>
-              <input
-                checked={visibility === "shared"}
-                disabled={!canUseShared}
-                name="visibility"
-                type="radio"
-                onChange={() => setVisibility("shared")}
-              />
-              Общее
-            </label>
-          </fieldset>
-          {visibility === "shared" && !canUseShared && (
-            <p className="formError">Для общего режима нужен семейный доступ.</p>
-          )}
         </details>
+
+        {!hasAmount && <p className="formError">Введите сумму вручную: опасные значения по умолчанию отключены.</p>}
 
         <button
           className="submitButton"
@@ -1794,6 +1948,7 @@ function AssetTile({ account }: { account: AccountSummary }) {
         <span>
           {accountKindLabels[account.kind]} · {account.ownerName}
         </span>
+        <ScopeBadge mode={accountOwnership(account)} />
       </div>
       <b>{formatMoney(account.balance)}</b>
     </article>
@@ -1823,6 +1978,7 @@ function CategoryTile({
           {category.direction === "income" ? "Доход" : "Расход"} ·{" "}
           {category.scope === "household" ? "Общее" : "Личное"}
         </span>
+        <ScopeBadge mode={categoryScopeVisibility(category)} />
       </div>
       <button className="tileAction" type="button" onClick={onEdit}>
         Изменить
@@ -1902,7 +2058,13 @@ type TimelineItem =
       amount: MoneyAmount;
     };
 
-function TimelineList({ items }: { items: TimelineItem[] }) {
+function TimelineList({
+  emptyText = "Записей пока нет",
+  items
+}: {
+  emptyText?: string;
+  items: TimelineItem[];
+}) {
   return (
     <div className="listStack">
       {items.map((item) => {
@@ -1925,13 +2087,29 @@ function TimelineList({ items }: { items: TimelineItem[] }) {
           </article>
         );
       })}
-      {items.length === 0 && <EmptyState text="Записей пока нет" />}
+      {items.length === 0 && <EmptyState text={emptyText} />}
     </div>
   );
 }
 
 function EmptyState({ text }: { text: string }) {
   return <div className="emptyState">{text}</div>;
+}
+
+function accountOwnership(account: AccountSummary): VisibilityMode {
+  return account.ownershipType === "shared" ? "shared" : "personal";
+}
+
+function categoryScopeVisibility(category: CategorySummary): VisibilityMode {
+  return category.scope === "household" ? "shared" : "personal";
+}
+
+function scopeLabelForAccount(account: AccountSummary | undefined): string {
+  if (!account) {
+    return "Личное";
+  }
+
+  return accountOwnership(account) === "shared" ? "Общее" : "Личное";
 }
 
 function visibleAccounts(accounts: AccountSummary[], mode: ViewMode): AccountSummary[] {
@@ -1944,9 +2122,7 @@ function visibleAccounts(accounts: AccountSummary[], mode: ViewMode): AccountSum
       return true;
     }
 
-    return mode === "shared"
-      ? account.ownershipType === "shared"
-      : account.ownershipType !== "shared";
+    return accountOwnership(account) === mode;
   });
 }
 
@@ -1960,7 +2136,7 @@ function visibleCategories(categories: CategorySummary[], mode: ViewMode): Categ
       return true;
     }
 
-    return mode === "shared" ? category.scope === "household" : category.scope !== "household";
+    return categoryScopeVisibility(category) === mode;
   });
 }
 
@@ -1979,7 +2155,7 @@ function visibleTransfers(
   const accountIds = new Set(accounts.map((account) => account.id));
   return transfers.filter(
     (transfer) =>
-      accountIds.has(transfer.accountId) ||
+      accountIds.has(transfer.accountId) &&
       (transfer.counterpartyAccountId ? accountIds.has(transfer.counterpartyAccountId) : false)
   );
 }
@@ -2030,22 +2206,24 @@ function categoryTotals(
 
 function recentTimeline(
   operations: OperationSummary[],
-  transfers: TransferSummary[]
+  transfers: TransferSummary[],
+  accounts: AccountSummary[]
 ): TimelineItem[] {
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
   const operationItems: TimelineItem[] = operations.map((operation) => ({
     type: "operation",
     id: operation.id,
     date: operation.date,
     title: operation.title,
-    subtitle: `${formatDate(operation.date)} · ${operation.categoryName} · ${operation.accountName}`,
+    subtitle: `${formatDate(operation.date)} · ${scopeLabelForAccount(accountById.get(operation.accountId))} · ${operation.categoryName} · ${operation.accountName}`,
     amount: operation.amount
   }));
   const transferItems: TimelineItem[] = transfers.map((transfer) => ({
     type: "transfer",
     id: transfer.id,
     date: transfer.date,
-    title: `${transfer.fromAccountName} → ${transfer.toAccountName}`,
-    subtitle: `${formatDate(transfer.date)} · Перевод`,
+    title: "Перевод между счетами",
+    subtitle: `${formatDate(transfer.date)} · ${scopeLabelForAccount(accountById.get(transfer.accountId))} · ${transfer.fromAccountName} → ${transfer.toAccountName}`,
     amount: transfer.amount
   }));
 
@@ -2071,10 +2249,27 @@ function viewModeDescription(mode: ViewMode): string {
   const descriptions: Record<ViewMode, string> = {
     personal: "Личное видно только вам",
     shared: "Общее для семьи",
-    overview: "Сводный обзор"
+    overview: "Мой обзор: личное + общее, без личных данных других участников"
   };
 
   return descriptions[mode];
+}
+
+function scopeDescription(mode: ViewMode): string {
+  const descriptions: Record<ViewMode, string> = {
+    personal: "Scope: личное. Записи и счета видны только вам.",
+    shared: "Scope: общее. Данные доступны участникам семейного доступа.",
+    overview:
+      "Scope: мой обзор. Это read-only срез видимого вам личного и общего, без записи в скрытый scope."
+  };
+
+  return descriptions[mode];
+}
+
+function scopeEmptyText(mode: ViewMode, subject: string, nextAction: string): string {
+  const prefix =
+    mode === "overview" ? "В моем обзоре" : mode === "shared" ? "В общем scope" : "В личном scope";
+  return `${prefix} нет видимых ${subject}. Следующий шаг: ${nextAction}.`;
 }
 
 function shortCategoryName(name: string): string {
@@ -2091,11 +2286,7 @@ function reportForView(snapshot: DashboardSnapshot, mode: ViewMode): ReportSumma
   }
 
   const reportMode = reportModeByView[mode];
-  return (
-    snapshot.reports.find((report) => report.mode === reportMode) ??
-    snapshot.reports[0] ??
-    emptyReport(mode, currency)
-  );
+  return snapshot.reports.find((report) => report.mode === reportMode) ?? emptyReport(mode, currency);
 }
 
 function reportFromOperations(

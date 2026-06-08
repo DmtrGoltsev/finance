@@ -126,6 +126,32 @@ class AppSectionTest {
     }
 
     @Test
+    fun overviewHidesOneSidedTransfersButKeepsBothSidedTransfers() {
+        val dashboard = dashboardFixture().copy(
+            transactions = dashboardFixture().transactions + TransactionSummary(
+                type = "transfer",
+                amount = "40.00",
+                currency = "USD",
+                occurredAt = "2026-05-18T10:00:00Z",
+                description = "External transfer",
+                transferScope = "personal_same_owner",
+                transferStatus = "posted",
+                id = "txn-one-sided-transfer",
+                accountId = "acc-card",
+                counterpartyAccountId = "acc-hidden",
+            ),
+        )
+
+        val overview = dashboard.viewFor(FinanceMode.Overview)
+        val overviewTransactionIds = overview.recentTransactions.map { it.id }
+
+        assertEquals(BigDecimal("25.00"), overview.transferTotal)
+        assertEquals(2, overview.operationCount)
+        assertTrue(overviewTransactionIds.contains("txn-transfer"))
+        assertFalse(overviewTransactionIds.contains("txn-one-sided-transfer"))
+    }
+
+    @Test
     fun reportModeAggregationDoesNotFallbackAcrossPersonalAndSharedScopes() {
         val dashboard = dashboardFixture().copy(
             accounts = listOf(
@@ -192,11 +218,52 @@ class AppSectionTest {
         )
         val eur = personal.copy(id = "eur", currency = "EUR")
 
-        assertEquals("Нужны два счета для перевода", transferPairValidationMessage(personal, null))
+        assertEquals("Для перевода нужны два совместимых счета в одном scope и одной валюте.", transferPairValidationMessage(personal, null))
         assertEquals("Выберите два разных счета", transferPairValidationMessage(personal, personal))
-        assertEquals("Перевод между личным и общим недоступен. Выберите счета одного режима.", transferPairValidationMessage(personal, shared))
-        assertEquals("Перевод между разными валютами недоступен", transferPairValidationMessage(personal, eur))
+        assertEquals("Перед отправкой выберите счета одного scope: Личное с Личным или Общее с Общим.", transferPairValidationMessage(personal, shared))
+        assertEquals("Перед отправкой выберите счета в одной валюте: конвертация в переводе недоступна.", transferPairValidationMessage(personal, eur))
         assertEquals(null, transferPairValidationMessage(personal, personal.copy(id = "personal-2")))
+    }
+
+    @Test
+    fun writableModesExcludeOverviewForWriteFlows() {
+        assertEquals(listOf(FinanceMode.Personal), writableFinanceModes(hasHousehold = false))
+        assertEquals(listOf(FinanceMode.Personal, FinanceMode.Shared), writableFinanceModes(hasHousehold = true))
+        assertFalse(writableFinanceModes(hasHousehold = true).contains(FinanceMode.Overview))
+    }
+
+    @Test
+    fun quickAddRequiresExplicitWritableScope() {
+        val account = AccountSummary("Личная карта", "card", "personal", "USD", "10.00", id = "personal")
+        val category = CategorySummary("Продукты", "expense", "personal", id = "cat-food")
+
+        val overviewReason = quickAddDisabledReason(
+            type = QuickEntryType.Expense,
+            amount = "10",
+            visibility = FinanceMode.Overview,
+            accounts = listOf(account),
+            categories = listOf(category),
+            transferValidation = null,
+        )
+        val missingCategoryReason = quickAddDisabledReason(
+            type = QuickEntryType.Expense,
+            amount = "10",
+            visibility = FinanceMode.Personal,
+            accounts = listOf(account),
+            categories = emptyList(),
+            transferValidation = null,
+        )
+
+        assertTrue(overviewReason.orEmpty().contains("Мой обзор read-only"))
+        assertTrue(missingCategoryReason.orEmpty().contains("нет категории"))
+        assertFalse(quickAddEntryTypes().contains(QuickEntryType.Asset))
+    }
+
+    @Test
+    fun analyticsCardsExposeMonthPlanEntry() {
+        val cards = sectionCards(AppSection.Analytics, dashboardFixture())
+
+        assertTrue(cards.any { it.title == "План месяца" && it.status.contains("Android") })
     }
 
     @Test

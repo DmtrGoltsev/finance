@@ -6,6 +6,8 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 Это не является full security GO и не является безусловным public production GO. Статус фиксирует, что восстановленная production-сборка проходит финальные функциональные проверки MVP в заявленных средах с явно описанными ограничениями и остаточными решениями владельцев.
 
+`newDis` copy alignment находится в плановом состоянии и не означает, что редизайн уже выпущен, задеплоен или прошел релизные проверки. Любые утверждения о новом UX, Planning parity, OCR smoke, release-signed APK или public/security GO должны появляться только после отдельного release-agent evidence.
+
 ## Production
 
 - Commit: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a` / short `808f727`.
@@ -26,10 +28,11 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - PWA service worker на plain HTTP IP ограничен средой: приложение работает online, но штатный service worker/PWA install требует HTTPS/domain.
 - CVE scans, backup/restore, physical iPhone/Safari требуют отдельного proof или waiver.
 - Import endpoints не входят в текущий mounted backend/OpenAPI MVP scope; реальные импорт, парсинг файлов и создание операций/категорий/переводов остаются вне scope.
-- SMS and push/notification interception are no longer part of the documented product state. The remaining capture-draft flow is user-initiated OCR from a user-selected screenshot: Android uses on-device OCR without screenshot upload, while PWA/iOS browser uses temporary upload to the self-hosted backend OCR endpoint. Screenshots and raw OCR text are not persisted, and transactions are created only after user confirm/edit.
+- SMS and push/notification interception are no longer part of the documented product state. The remaining capture-draft flow is user-initiated OCR from a user-selected screenshot through a backend OCR request. Screenshots and raw OCR text are not expected to be persisted, and transactions are created only after user confirm/edit. Authenticated production login/OCR smoke and OCR retention/privacy evidence remain separate release evidence.
+- Planning copy for `newDis` is Android-first unless release evidence proves a usable PWA Planning path. Overview is read-only and cannot be claimed as a write scope for accounts, categories, operations, transfers or plans.
 - Investment detailed UI ограничен; подтвержден smoke-уровень brokerage/investment API.
 - Production QA data cleanup/retention остается отдельным xhigh owner decision.
-- Безопасность, комплаенс, домен/HTTPS и публичный запуск остаются отдельными gate, а не частью этого functional GO.
+- Android APK/public distribution status must not be overclaimed: debug-signed APK, release signing, безопасность, комплаенс, домен/HTTPS и публичный запуск остаются отдельными gate, а не частью этого functional GO.
 
 ## Измененные файлы
 

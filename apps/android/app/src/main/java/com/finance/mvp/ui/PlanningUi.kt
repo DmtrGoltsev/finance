@@ -73,7 +73,7 @@ import kotlinx.coroutines.withContext
 
 enum class AnalyticsSubsection(val title: String) {
     Summary("Сводка"),
-    Planning("Планирование"),
+    Planning("План месяца"),
 }
 
 enum class PlanningNotificationCandidateAction {
@@ -249,6 +249,7 @@ fun PlanningUi(
     ) {
         PlanningScopeCard(
             selectedMode = selectedMode,
+            hasHousehold = !dashboard?.session?.householdId.isNullOrBlank(),
             month = month,
             currency = currency,
             onModeSelected = onModeSelected,
@@ -261,7 +262,7 @@ fun PlanningUi(
         }
 
         if (resolvedScope == null) {
-            PlanningMessageCard("Для общего планирования нужен активный общий бюджет. Выберите личный режим или войдите в общий бюджет.")
+            PlanningMessageCard("Общее планирование недоступно без активного общего бюджета. Выберите Личное или подключите общий бюджет.")
             return@Column
         }
 
@@ -536,6 +537,7 @@ fun PlanningUi(
 @Composable
 private fun PlanningScopeCard(
     selectedMode: FinanceMode,
+    hasHousehold: Boolean,
     month: String,
     currency: String,
     onModeSelected: (FinanceMode) -> Unit,
@@ -550,7 +552,7 @@ private fun PlanningScopeCard(
                 PlanningIcon(R.drawable.ic_analytics_24, Color(0xFF4267D5))
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Планирование", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("План месяца", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("План на ${month.localizedPlanningMonth()}", style = MaterialTheme.typography.bodySmall)
                 }
                 Text(currency, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
@@ -558,7 +560,7 @@ private fun PlanningScopeCard(
             Text("Месяц плана", style = MaterialTheme.typography.labelLarge)
             PlanningMonthPicker(selectedMonth = month, onSelected = onMonthSelected)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(FinanceMode.entries.toList()) { mode ->
+                items(writableFinanceModes(hasHousehold)) { mode ->
                     FilterChip(
                         selected = selectedMode == mode,
                         onClick = { onModeSelected(mode) },
@@ -645,17 +647,17 @@ private fun PlanningPlanCard(
                     PlanningMetric("Распределено", plan.allocatedTotal.planningMoney(currency), Modifier.weight(1f))
                 }
                 plan.previousMonthSurplus.takeIf { it.isPositivePlanningAmount() }?.let { surplus ->
-                    Text("Сальдо прошлого месяца: ${surplus.planningMoney(currency)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Предложение к учету из прошлого месяца: ${surplus.planningMoney(currency)}. Это подсказка, не перенос денег.", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlanningMetric("Осталось", plan.remainingAmount.planningMoney(currency), Modifier.weight(1f))
                     PlanningMetric("Сверх", plan.overallocatedAmount.planningMoney(currency), Modifier.weight(1f))
                 }
                 if (plan.isUnderallocated) {
-                    PlanningBanner("Не весь доход распределён", Color(0xFF8A6A12))
+                    PlanningBanner("Есть доход без распределений. Добавьте allocation или уменьшите плановый доход.", Color(0xFF8A6A12))
                 }
                 if (plan.isOverallocated) {
-                    PlanningBanner("План перераспределён сверх дохода. Предупреждение останется до исправления.", Color(0xFFE35D4F))
+                    PlanningBanner("Распределения выше планового дохода. Исправьте allocations, чтобы снять предупреждение.", Color(0xFFE35D4F))
                 }
                 PlanningHighlights(plan)
             }
@@ -665,7 +667,6 @@ private fun PlanningPlanCard(
 
 @Composable
 private fun PlanningHighlights(plan: PlanningPlan) {
-    val hasPlanProgress = !plan.progressStatus.isNullOrBlank() || !plan.progressPercent.isNullOrBlank() || !plan.status.isNullOrBlank()
     val allocationHighlights = plan.allocations.mapNotNull { allocation ->
         when {
             allocation.targetType == TARGET_INVESTMENT_ASSET_CATEGORY &&
@@ -679,12 +680,8 @@ private fun PlanningHighlights(plan: PlanningPlan) {
             else -> null
         }
     }
-    when {
-        hasPlanProgress -> PlanningBanner(
-            "Статус плана: ${(plan.progressStatus ?: plan.status).orEmpty().localizedPlanningStatus()}${plan.progressPercent?.let { " • $it%" }.orEmpty()}",
-            Color(0xFF227C9D),
-        )
-        allocationHighlights.isEmpty() -> PlanningBanner("Прогресс появится после серверного расчёта", Color(0xFF6D5BD0))
+    if (allocationHighlights.isEmpty()) {
+        PlanningBanner("Статусы появятся в строках распределений после расчета по allocation.", Color(0xFF6D5BD0))
     }
     allocationHighlights.take(3).forEach { highlight ->
         val color = if (highlight.startsWith("Расходы")) Color(0xFFE35D4F) else Color(0xFF8A6A12)
@@ -936,9 +933,16 @@ private fun AllocationsCard(
             ) {
                 Text("Добавить распределение")
             }
+            if (!canCreateAllocation) {
+                Text(
+                    "Чтобы добавить allocation, выберите цель этого scope и укажите сумму или процент.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             if (plan.allocations.isEmpty()) {
-                Text("Распределений пока нет", style = MaterialTheme.typography.bodySmall)
+                Text("В плане ${plan.scope.localizedPlanningScope()} пока нет распределений. Добавьте расходную или инвестиционную цель.", style = MaterialTheme.typography.bodySmall)
             } else {
                 plan.allocations.forEach { allocation ->
                     AllocationRow(
@@ -1168,8 +1172,8 @@ private fun AllocationRow(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 allocation.actualAmount?.takeIf { it.isNotBlank() }?.let {
-                    Text("Факт: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                } ?: Text("Факт появится после расчёта прогресса", style = MaterialTheme.typography.bodySmall)
+                    Text("Факт allocation: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("Факт по этому allocation появится после расчета", style = MaterialTheme.typography.bodySmall)
                 if (allocation.isSavingsGoal) {
                     val goalText = allocation.goalTargetAmount?.takeIf { it.isNotBlank() }?.planningMoney(currency) ?: "не задана"
                     val dueText = allocation.goalDueMonth?.localizedPlanningMonth() ?: "срок не задан"
@@ -1639,7 +1643,7 @@ private fun PlanningAllocation.readableStatus(): String {
         targetType == TARGET_INVESTMENT_ASSET_CATEGORY && requiresAttention -> "Инвестиции ниже плана"
         targetType == TARGET_EXPENSE_CATEGORY && requiresAttention -> "Расходы выше плана"
         requiresAttention -> "Нужно внимание"
-        else -> "Прогресс ожидает данных"
+        else -> "Статус allocation ожидает факта"
     }
     return progress?.localizedPlanningStatus() ?: fallback
 }
