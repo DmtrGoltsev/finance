@@ -150,6 +150,7 @@ fun PlanningUi(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var month by rememberSaveable { mutableStateOf(nextPlanningMonth()) }
+    val boundedMonth = month.coercePlanningMonthAtLeastCurrent()
     val resolvedScope = selectedMode.toPlanningScope(dashboard?.session?.householdId)
     val currency = remember(dashboard, selectedMode) { dashboard.planningCurrency(selectedMode) }
     var plan by remember { mutableStateOf<PlanningPlan?>(null) }
@@ -166,7 +167,7 @@ fun PlanningUi(
             isLoading = true
             message = null
             val result = withContext(Dispatchers.IO) {
-                when (val currentResult = apiClient.listPlanningPlans(scopeInfo.apiScope, month, scopeInfo.householdId)) {
+                when (val currentResult = apiClient.listPlanningPlans(scopeInfo.apiScope, boundedMonth, scopeInfo.householdId)) {
                     is ApiResult.Success -> {
                         val current = currentResult.value
                         if (current == null) {
@@ -205,6 +206,10 @@ fun PlanningUi(
         plan = null
         history = emptyList()
         message = null
+        if (month != boundedMonth) {
+            month = boundedMonth
+            return@LaunchedEffect
+        }
         if (resolvedScope != null) {
             loadPlanningState()
         }
@@ -250,10 +255,10 @@ fun PlanningUi(
         PlanningScopeCard(
             selectedMode = selectedMode,
             hasHousehold = !dashboard?.session?.householdId.isNullOrBlank(),
-            month = month,
+            month = boundedMonth,
             currency = currency,
             onModeSelected = onModeSelected,
-            onMonthSelected = { month = it },
+            onMonthSelected = { month = it.coercePlanningMonthAtLeastCurrent() },
         )
 
         if (selectedMode == FinanceMode.Overview) {
@@ -272,7 +277,7 @@ fun PlanningUi(
 
         PlanningPlanCard(
             plan = plan,
-            month = month,
+            month = boundedMonth,
             currency = currency,
             isLoading = isLoading,
             onRefresh = { loadPlanningState("План обновлён") },
@@ -283,7 +288,7 @@ fun PlanningUi(
                         apiClient.createPlanningPlan(
                             PlanningPlanCreateRequest(
                                 scope = resolvedScope.apiScope,
-                                month = month,
+                                month = boundedMonth,
                                 currency = currency,
                                 householdId = resolvedScope.householdId,
                             ),
@@ -460,7 +465,7 @@ fun PlanningUi(
 
         PlanningHistoryCard(
             history = history,
-            currentMonth = month,
+            currentMonth = boundedMonth,
             isLoading = isLoading,
             onCopy = { historyPlan ->
                 coroutineScope.launch {
@@ -468,12 +473,12 @@ fun PlanningUi(
                     when (val result = withContext(Dispatchers.IO) {
                         apiClient.copyPlanningPlan(
                             historyPlan.id,
-                            PlanningPlanCopyRequest(targetMonth = month),
+                            PlanningPlanCopyRequest(targetMonth = boundedMonth),
                         )
                     }) {
                         is ApiResult.Success -> {
                             plan = result.value
-                            loadPlanningState("План ${historyPlan.month.localizedPlanningMonth()} скопирован на ${month.localizedPlanningMonth()}")
+                            loadPlanningState("План ${historyPlan.month.localizedPlanningMonth()} скопирован на ${boundedMonth.localizedPlanningMonth()}")
                         }
                         is ApiResult.Failure -> {
                             message = result.planningMessage()
@@ -1705,13 +1710,21 @@ private fun String.planningMoney(currency: String): String {
 
 private fun nextPlanningMonth(): String = YearMonth.now().plusMonths(1).toString()
 
+private fun String.coercePlanningMonthAtLeastCurrent(): String {
+    val current = YearMonth.now()
+    val parsed = runCatching { YearMonth.parse(this) }.getOrNull()
+    return when {
+        parsed == null -> current
+        parsed < current -> current
+        else -> parsed
+    }.toString()
+}
+
 private fun planningMonthChoices(): List<PlanningMonthChoice> {
     val current = YearMonth.now()
     val next = current.plusMonths(1)
-    val yearMonths = (1..12).map { month -> YearMonth.of(current.year, month) }
-    return (listOf(current, next) + yearMonths)
-        .distinct()
-        .sorted()
+    return (0..12)
+        .map { current.plusMonths(it.toLong()) }
         .map { month ->
             val title = when (month) {
                 current -> "Текущий: ${month.localizedPlanningMonth()}"
@@ -1757,6 +1770,7 @@ private fun ApiResult.Failure.planningMessage(): String {
         message.isNotBlank() -> message.userFacingPlanningFailure()
         statusCode == 401 -> "Сессия истекла. Войдите снова."
         statusCode == 403 -> "Нет доступа к планированию."
+        statusCode == 404 -> "План для выбранного месяца ещё не создан"
         statusCode != null && statusCode >= 500 -> "Ошибка сервера планирования. Попробуйте позже."
         else -> "Не удалось выполнить действие планирования"
     }
@@ -1764,6 +1778,8 @@ private fun ApiResult.Failure.planningMessage(): String {
 
 private fun String.userFacingPlanningFailure(): String {
     return when {
+        contains("Resource not found or not accessible", ignoreCase = true) ||
+            contains("HTTP 404", ignoreCase = true) -> "План для выбранного месяца ещё не создан"
         contains("not supported", ignoreCase = true) -> "Планирование пока не поддерживается этим клиентом"
         contains("recurrenceType", ignoreCase = true) -> "Сервер ещё не принял периодичность распределения"
         contains("goalTargetAmount", ignoreCase = true) || contains("goalDueMonth", ignoreCase = true) -> "Сервер ещё не принял параметры цели накопления"

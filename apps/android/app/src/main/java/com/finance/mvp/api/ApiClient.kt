@@ -664,17 +664,10 @@ class LiveFinanceApiClient(
     }
 
     override suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> = safeCall {
-        val body = JSONObject()
-            .put("name", category.name.take(80))
-            .put("manualAmount", category.manualAmount)
-            .put("isInvestment", category.isInvestment)
-            .put("assetType", category.assetType)
-            .apply { category.iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) } }
-        category.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/asset-categories/${category.id.urlEncodePath()}",
             method = "PATCH",
-            body = body.toString(),
+            body = category.toUpdateJsonForApi().toString(),
         ).dataObject().let(::parseAssetCategory)
     }
 
@@ -924,7 +917,10 @@ class LiveFinanceApiClient(
             path = "/api/v1/planning/plans",
             method = "GET",
             query = planningScopeQuery(scope, householdId) + mapOf("month" to month),
-        ).planningPlanObjectOrNull()?.let(::parsePlanningPlan)
+            expectedCodes = setOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_NOT_FOUND),
+        ).takeUnless { it.length() == 0 || it.optJSONObject("error") != null }
+            ?.planningPlanObjectOrNull()
+            ?.let(::parsePlanningPlan)
     }
 
     override suspend fun listPlanningPlanHistory(
@@ -1433,6 +1429,18 @@ private fun AssetCategoryCreateRequest.toJson(): JSONObject {
         .apply {
             iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
             householdId?.takeIf { it.isNotBlank() && scopeType == "household" }?.let { put("householdId", it) }
+        }
+}
+
+internal fun AssetCategory.toUpdateJsonForApi(): JSONObject {
+    return JSONObject()
+        .put("name", name.take(80))
+        .put("manualAmount", manualAmount)
+        .put("isInvestment", isInvestment)
+        .put("assetType", assetType)
+        .apply {
+            iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
+            version?.let { put("version", it) }
         }
 }
 

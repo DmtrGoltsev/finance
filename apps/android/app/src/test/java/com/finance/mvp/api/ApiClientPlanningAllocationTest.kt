@@ -11,6 +11,51 @@ import org.junit.Test
 
 class ApiClientPlanningAllocationTest {
     @Test
+    fun listPlanningPlansTreatsMissingMonthAsEmptyPlan() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 404,
+            body = """
+                {
+                  "error": {
+                    "message": "Resource not found or not accessible."
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.listPlanningPlans(scope = "personal", month = "2026-06")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            assertEquals(null, (result as ApiResult.Success).value)
+            val requestLine = capturedRequest.get().lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("GET "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/planning/plans"))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("month=2026-06"))
+        }
+    }
+
+    @Test
+    fun updateAssetCategoryPayloadPersistsInvestmentAndIconKey() {
+        val json = AssetCategory(
+            id = "asset-cat-broker",
+            name = "Broker",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "0",
+            isInvestment = true,
+            assetType = "brokerage",
+            iconKey = "chart",
+            version = 1,
+        ).toUpdateJsonForApi()
+
+        assertEquals(true, json.getBoolean("isInvestment"))
+        assertEquals("chart", json.getString("iconKey"))
+        assertEquals("brokerage", json.getString("assetType"))
+        assertEquals(1, json.getInt("version"))
+    }
+
+    @Test
     fun createPlanningAllocationPostsInvestmentAssetCategoryTargetTypeAndParsesAssetCategoryFallback() = runBlocking {
         withJsonPlanningServer(
             statusCode = 201,

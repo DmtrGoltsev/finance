@@ -927,7 +927,14 @@ fun FinanceApp(
                             uiState = uiState.copy(isLoading = true, message = "Обновляем категорию активов")
                             val result = withContext(Dispatchers.IO) { apiClient.updateAssetCategory(category) }
                             when (result) {
-                                is ApiResult.Success -> loadDashboard("Категория активов обновлена")
+                                is ApiResult.Success -> {
+                                    uiState = uiState.copy(
+                                        isLoading = false,
+                                        dashboard = uiState.dashboard?.withUpdatedAssetCategory(result.value),
+                                        message = "Категория активов обновлена",
+                                    )
+                                    loadDashboard("Категория активов обновлена")
+                                }
                                 is ApiResult.Failure -> uiState = uiState.copy(
                                     isLoading = false,
                                     message = result.userFacingMessage(),
@@ -1791,7 +1798,10 @@ private fun LazyListScope.assetsContent(
     val categoryRows = dashboard.assetCategoryRows(selectedMode)
     val modeAccounts = allAccounts.filterByMode(selectedMode)
     val legacyAccounts = modeAccounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
-    val summaries = assetSummaries(legacyAccounts).filter { categoryRows.isEmpty() || it.count > 0 }
+    val representedAssetTypes = categoryRows.map { it.category.assetType }.toSet()
+    val summaries = assetSummaries(legacyAccounts).filter { summary ->
+        summary.count > 0 || summary.kind.apiValue !in representedAssetTypes
+    }
     item {
         ModeChips(
             selectedMode = selectedMode,
@@ -1812,6 +1822,8 @@ private fun LazyListScope.assetsContent(
                 selectedMode = selectedMode,
                 onUpdateCategory = onUpdateAssetCategory,
                 onArchiveCategory = onArchiveAssetCategory,
+                onUpdateAccount = onUpdateAccount,
+                onArchiveAccount = onArchiveAccount,
                 onAddAccountToCategory = onAddAccountToCategory,
             )
         }
@@ -2158,6 +2170,8 @@ private fun ReorderableAssetCategoryList(
     selectedMode: FinanceMode,
     onUpdateCategory: (AssetCategory) -> Unit,
     onArchiveCategory: (String) -> Unit,
+    onUpdateAccount: (AccountSummary) -> Unit,
+    onArchiveAccount: (String) -> Unit,
     onAddAccountToCategory: (AssetCategory) -> Unit,
 ) {
     val context = LocalContext.current
@@ -2211,6 +2225,8 @@ private fun ReorderableAssetCategoryList(
                     accounts = accounts.filter { it.status == "active" && it.assetCategoryId == row.category.id },
                     onUpdateCategory = onUpdateCategory,
                     onArchiveCategory = onArchiveCategory,
+                    onUpdateAccount = onUpdateAccount,
+                    onArchiveAccount = onArchiveAccount,
                     onAddAccount = { onAddAccountToCategory(row.category) },
                 )
             }
@@ -2224,6 +2240,8 @@ private fun AssetCategoryGroupCard(
     accounts: List<AccountSummary>,
     onUpdateCategory: (AssetCategory) -> Unit,
     onArchiveCategory: (String) -> Unit,
+    onUpdateAccount: (AccountSummary) -> Unit,
+    onArchiveAccount: (String) -> Unit,
     onAddAccount: () -> Unit,
 ) {
     val category = row.category
@@ -2364,6 +2382,17 @@ private fun AssetCategoryGroupCard(
             if (isExpanded && !isEditing) {
                 if (accounts.isEmpty()) {
                     Text("Счетов в этой категории нет", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    accounts.forEach { account ->
+                        AccountRow(
+                            account = account,
+                            onUpdate = onUpdateAccount,
+                            onArchive = onArchiveAccount,
+                        )
+                        if (account != accounts.last()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                    }
                 }
                 OutlinedButton(onClick = onAddAccount, modifier = Modifier.fillMaxWidth()) {
                     Text("Добавить счет в категорию")
@@ -3871,6 +3900,34 @@ private fun assetSummaries(accounts: List<AccountSummary>): List<AssetSummary> {
             count = matching.size,
         )
     }
+}
+
+private fun FinanceDashboard.withUpdatedAssetCategory(category: AssetCategory): FinanceDashboard {
+    val updatedCategories = if (assetCategories.any { it.id == category.id }) {
+        assetCategories.map { existing -> if (existing.id == category.id) category else existing }
+    } else {
+        assetCategories + category
+    }
+    val updatedGroups = assetCategoryGroups.map { group ->
+        if (group.assetCategoryId == category.id) {
+            group.copy(
+                name = category.name,
+                scopeType = category.scopeType,
+                householdId = category.householdId,
+                currency = category.currency,
+                manualAmount = category.manualAmount,
+                isInvestment = category.isInvestment,
+                assetType = category.assetType,
+                iconKey = category.iconKey,
+            )
+        } else {
+            group
+        }
+    }
+    return copy(
+        assetCategories = updatedCategories,
+        assetCategoryGroups = updatedGroups,
+    )
 }
 
 private fun FinanceDashboard?.assetCategoryRows(mode: FinanceMode): List<AssetCategoryUiRow> {
