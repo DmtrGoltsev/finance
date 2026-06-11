@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,62 @@ class ApiClientPlanningAllocationTest {
         assertEquals("chart", json.getString("iconKey"))
         assertEquals("brokerage", json.getString("assetType"))
         assertEquals(1, json.getInt("version"))
+    }
+
+    @Test
+    fun createAssetCategoryOmitsIconKeyForStrictCreateContract() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "id": "asset-cat-broker",
+                    "name": "Broker",
+                    "scopeType": "personal",
+                    "ownerUserId": "user-1",
+                    "householdId": null,
+                    "currency": "RUB",
+                    "assetType": "brokerage",
+                    "manualAmount": "0.0000",
+                    "isInvestment": true,
+                    "recordStatus": "active",
+                    "createdByUserId": "user-1",
+                    "createdAt": "2026-06-12T00:00:00Z",
+                    "updatedAt": "2026-06-12T00:00:00Z",
+                    "version": 1
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createAssetCategory(
+                AssetCategoryCreateRequest(
+                    name = "Broker",
+                    scopeType = "personal",
+                    currency = "RUB",
+                    manualAmount = "0",
+                    isInvestment = true,
+                    assetType = "brokerage",
+                    iconKey = "brokerage",
+                ),
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val request = capturedRequest.get()
+            val requestLine = request.lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/asset-categories"))
+            val json = JSONObject(request.substringAfter("\r\n\r\n"))
+            assertEquals("Broker", json.getString("name"))
+            assertEquals("personal", json.getString("scopeType"))
+            assertEquals("RUB", json.getString("currency"))
+            assertEquals("0", json.getString("manualAmount"))
+            assertEquals(true, json.getBoolean("isInvestment"))
+            assertEquals("brokerage", json.getString("assetType"))
+            assertFalse("Strict create schema rejects iconKey", json.has("iconKey"))
+            assertFalse("Personal create must not include householdId", json.has("householdId"))
+        }
     }
 
     @Test

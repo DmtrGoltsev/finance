@@ -306,6 +306,104 @@ class AppSectionTest {
     }
 
     @Test
+    fun legacyGroupSaveActionMigratesWhenInvestmentIsChecked() {
+        val action = legacyGroupSaveAction("  Брокер  ", isInvestmentChecked = true)
+
+        assertTrue(action is LegacyGroupSaveAction.MigrateToInvestment)
+        assertEquals("Брокер", (action as LegacyGroupSaveAction.MigrateToInvestment).name)
+    }
+
+    @Test
+    fun legacyGroupSaveActionRenamesWhenInvestmentIsNotChecked() {
+        val action = legacyGroupSaveAction("  Брокер  ", isInvestmentChecked = false)
+
+        assertTrue(action is LegacyGroupSaveAction.Rename)
+        assertEquals("Брокер", (action as LegacyGroupSaveAction.Rename).name)
+    }
+
+    @Test
+    fun legacyGroupSaveActionRejectsBlankNameBeforeRenameOrMigration() {
+        val action = legacyGroupSaveAction("   ", isInvestmentChecked = true)
+
+        assertTrue(action is LegacyGroupSaveAction.Invalid)
+    }
+
+    @Test
+    fun legacyInvestmentMigrationUsesAccountsWhenOverviewIsUnambiguous() {
+        val selection = selectLegacyAssetCategoryMigrationTarget(
+            selectedMode = FinanceMode.Overview,
+            accounts = listOf(
+                AccountSummary("Брокер", "brokerage", "personal", "usd", "2200.00", id = "acc-broker"),
+            ),
+            sessionHouseholdId = "household",
+            fallbackCurrency = "RUB",
+            groupName = "Брокер",
+        )
+
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Ready)
+        val target = (selection as LegacyAssetCategoryMigrationTargetSelection.Ready).target
+        assertEquals("personal", target.scopeType)
+        assertEquals(null, target.householdId)
+        assertEquals("USD", target.currency)
+    }
+
+    @Test
+    fun legacyInvestmentMigrationBlocksMixedScopeOverview() {
+        val selection = selectLegacyAssetCategoryMigrationTarget(
+            selectedMode = FinanceMode.Overview,
+            accounts = listOf(
+                AccountSummary("Личный брокер", "brokerage", "personal", "RUB", "100.00", id = "acc-personal"),
+                AccountSummary(
+                    "Общий брокер",
+                    "brokerage",
+                    "shared",
+                    "RUB",
+                    "200.00",
+                    id = "acc-shared",
+                    householdId = "household",
+                ),
+            ),
+            sessionHouseholdId = "household",
+            fallbackCurrency = "RUB",
+            groupName = "Брокер",
+        )
+
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Blocked)
+        assertTrue((selection as LegacyAssetCategoryMigrationTargetSelection.Blocked).message.contains("личные и общие"))
+    }
+
+    @Test
+    fun emptyPersonalLegacyInvestmentMigrationCreatesTargetFromModeAndFallbackCurrency() {
+        val selection = selectLegacyAssetCategoryMigrationTarget(
+            selectedMode = FinanceMode.Personal,
+            accounts = emptyList(),
+            sessionHouseholdId = null,
+            fallbackCurrency = "usd",
+            groupName = "Брокер",
+        )
+
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Ready)
+        val target = (selection as LegacyAssetCategoryMigrationTargetSelection.Ready).target
+        assertEquals("personal", target.scopeType)
+        assertEquals(null, target.householdId)
+        assertEquals("USD", target.currency)
+    }
+
+    @Test
+    fun emptyOverviewLegacyInvestmentMigrationRequiresExplicitScope() {
+        val selection = selectLegacyAssetCategoryMigrationTarget(
+            selectedMode = FinanceMode.Overview,
+            accounts = emptyList(),
+            sessionHouseholdId = "household",
+            fallbackCurrency = "RUB",
+            groupName = "Брокер",
+        )
+
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Blocked)
+        assertTrue((selection as LegacyAssetCategoryMigrationTargetSelection.Blocked).message.contains("Переключитесь"))
+    }
+
+    @Test
     fun quickAddIncomeDoesNotFallbackToExpenseCategory() {
         val categories = listOf(
             CategorySummary("Продукты", "expense", "personal", id = "cat-food", iconKey = "food", color = "#E35D4F"),

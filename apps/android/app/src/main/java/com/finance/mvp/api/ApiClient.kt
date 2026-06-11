@@ -1427,7 +1427,6 @@ private fun AssetCategoryCreateRequest.toJson(): JSONObject {
         .put("isInvestment", isInvestment)
         .put("assetType", assetType)
         .apply {
-            iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
             householdId?.takeIf { it.isNotBlank() && scopeType == "household" }?.let { put("householdId", it) }
         }
 }

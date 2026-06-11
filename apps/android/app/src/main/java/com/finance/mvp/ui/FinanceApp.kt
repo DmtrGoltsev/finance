@@ -819,46 +819,33 @@ fun FinanceApp(
                     onRenameGroup = { kind, newName ->
                         assetGroupNames = assetGroupNames + (kind.apiValue to newName)
                     },
-                    onMigrateLegacyGroupToInvestment = migrate@ { kind, newName, accounts ->
-                        if (selectedMode == FinanceMode.Overview) {
-                            uiState = uiState.copy(
-                                message = "Переключитесь на Личное или Общее, чтобы сделать legacy-группу инвестиционной категорией.",
-                            )
-                            return@migrate
+                    onMigrateLegacyGroupToInvestment = migrate@ { kind, newName, accounts, onComplete ->
+                        val fallbackCurrency = uiState.dashboard
+                            ?.viewFor(selectedMode)
+                            ?.primaryCurrency
+                            ?.takeIf { it.isNotBlank() }
+                        val targetSelection = selectLegacyAssetCategoryMigrationTarget(
+                            selectedMode = selectedMode,
+                            accounts = accounts,
+                            sessionHouseholdId = uiState.session?.householdId,
+                            fallbackCurrency = fallbackCurrency,
+                            groupName = newName,
+                        )
+                        val target = when (targetSelection) {
+                            is LegacyAssetCategoryMigrationTargetSelection.Ready -> targetSelection.target
+                            is LegacyAssetCategoryMigrationTargetSelection.Blocked -> {
+                                uiState = uiState.copy(message = targetSelection.message)
+                                onComplete(LegacyGroupMigrationResult.Failure(targetSelection.message))
+                                return@migrate
+                            }
                         }
-                        if (selectedMode == FinanceMode.Shared && uiState.session?.householdId.isNullOrBlank()) {
-                            uiState = uiState.copy(
-                                message = "Для общей инвестиционной категории нужна активная семья.",
-                            )
+                        if (target.scopeType == "household" && target.householdId.isNullOrBlank()) {
+                            val message = "Для общей инвестиционной категории нужна активная семья."
+                            uiState = uiState.copy(message = message)
+                            onComplete(LegacyGroupMigrationResult.Failure(message))
                             return@migrate
                         }
                         val activeAccounts = accounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
-                        if (activeAccounts.isEmpty()) {
-                            assetGroupNames = assetGroupNames + (kind.apiValue to newName)
-                            uiState = uiState.copy(
-                                message = "В legacy-группе «$newName» нет активных счетов для переноса. Название сохранено; добавьте счет перед созданием инвестиционной категории.",
-                            )
-                            return@migrate
-                        }
-                        val currencies = accounts
-                            .filter { it.status == "active" }
-                            .map { it.currency.trim().uppercase(Locale.US) }
-                            .filter { it.isNotBlank() }
-                            .distinct()
-                        if (currencies.size > 1) {
-                            uiState = uiState.copy(
-                                message = "В legacy-группе «$newName» счета в разных валютах. Сначала разделите или переместите счета по валютам.",
-                            )
-                            return@migrate
-                        }
-                        val currency = currencies.singleOrNull()
-                            ?: uiState.dashboard?.viewFor(selectedMode)?.primaryCurrency?.takeIf { it.isNotBlank() }
-                        if (currency.isNullOrBlank()) {
-                            uiState = uiState.copy(
-                                message = "Не удалось выбрать валюту для инвестиционной категории. Добавьте счет или создайте категорию вручную.",
-                            )
-                            return@migrate
-                        }
                         scope.launch {
                             uiState = uiState.copy(isLoading = true, message = "Создаём инвестиционную категорию активов")
                             val result: ApiResult<Unit> = withContext(Dispatchers.IO) {
@@ -866,9 +853,9 @@ fun FinanceApp(
                                     val createResult = apiClient.createAssetCategory(
                                         AssetCategoryCreateRequest(
                                             name = newName,
-                                            scopeType = if (selectedMode == FinanceMode.Shared) "household" else "personal",
-                                            householdId = if (selectedMode == FinanceMode.Shared) uiState.session?.householdId else null,
-                                            currency = currency,
+                                            scopeType = target.scopeType,
+                                            householdId = target.householdId,
+                                            currency = target.currency,
                                             manualAmount = "0",
                                             isInvestment = true,
                                             assetType = kind.apiValue,
@@ -915,9 +902,14 @@ fun FinanceApp(
                             when (result) {
                                 is ApiResult.Success -> {
                                     assetGroupNames = assetGroupNames - kind.apiValue
+                                    onComplete(LegacyGroupMigrationResult.Success)
                                     loadDashboard("Legacy-группа «$newName» стала инвестиционной категорией")
                                 }
-                                is ApiResult.Failure -> loadDashboard(result.userFacingMessage())
+                                is ApiResult.Failure -> {
+                                    val message = result.userFacingMessage()
+                                    uiState = uiState.copy(isLoading = false, message = message)
+                                    onComplete(LegacyGroupMigrationResult.Failure(message))
+                                }
                             }
                         }
                     },
@@ -1785,7 +1777,7 @@ private fun LazyListScope.assetsContent(
     onModeSelected: (FinanceMode) -> Unit,
     groupNames: Map<String, String>,
     onRenameGroup: (AssetKind, String) -> Unit,
-    onMigrateLegacyGroupToInvestment: (AssetKind, String, List<AccountSummary>) -> Unit,
+    onMigrateLegacyGroupToInvestment: (AssetKind, String, List<AccountSummary>, (LegacyGroupMigrationResult) -> Unit) -> Unit,
     onCreateAssetCategory: () -> Unit,
     onUpdateAssetCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
@@ -1836,13 +1828,12 @@ private fun LazyListScope.assetsContent(
             summary = summary,
             accounts = legacyAccounts.filter { it.assetKind() == summary.kind },
             displayName = groupNames[summary.kind.apiValue] ?: summary.kind.title,
-            onSaveGroup = { name, isInvestment ->
+            onRenameGroup = { name ->
+                onRenameGroup(summary.kind, name)
+            },
+            onMigrateGroupToInvestment = { name, onComplete ->
                 val groupAccounts = legacyAccounts.filter { it.assetKind() == summary.kind }
-                if (isInvestment) {
-                    onMigrateLegacyGroupToInvestment(summary.kind, name, groupAccounts)
-                } else {
-                    onRenameGroup(summary.kind, name)
-                }
+                onMigrateLegacyGroupToInvestment(summary.kind, name, groupAccounts, onComplete)
             },
             onUpdate = onUpdateAccount,
             onArchive = onArchiveAccount,
@@ -2448,7 +2439,8 @@ private fun AssetCategoryCard(
     summary: AssetSummary,
     accounts: List<AccountSummary>,
     displayName: String,
-    onSaveGroup: (String, Boolean) -> Unit,
+    onRenameGroup: (String) -> Unit,
+    onMigrateGroupToInvestment: (String, (LegacyGroupMigrationResult) -> Unit) -> Unit,
     onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
     onAdd: () -> Unit,
@@ -2457,6 +2449,8 @@ private fun AssetCategoryCard(
     var isEditingGroup by rememberSaveable { mutableStateOf(false) }
     var groupNameDraft by rememberSaveable(displayName) { mutableStateOf(displayName) }
     var groupInvestmentDraft by rememberSaveable(displayName) { mutableStateOf(false) }
+    var groupSaveInProgress by rememberSaveable { mutableStateOf(false) }
+    var groupSaveError by rememberSaveable { mutableStateOf<String?>(null) }
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -2492,6 +2486,8 @@ private fun AssetCategoryCard(
                     onClick = {
                         groupNameDraft = displayName
                         groupInvestmentDraft = false
+                        groupSaveInProgress = false
+                        groupSaveError = null
                         isEditingGroup = true
                     },
                     modifier = Modifier.size(32.dp),
@@ -2538,42 +2534,78 @@ private fun AssetCategoryCard(
 
     if (isEditingGroup) {
         AlertDialog(
-            onDismissRequest = { isEditingGroup = false },
+            onDismissRequest = {
+                if (!groupSaveInProgress) {
+                    isEditingGroup = false
+                }
+            },
             title = { Text("Название группы") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = groupNameDraft,
-                        onValueChange = { groupNameDraft = it },
+                        onValueChange = {
+                            groupNameDraft = it
+                            groupSaveError = null
+                        },
                         label = { Text("Название") },
                         singleLine = true,
+                        enabled = !groupSaveInProgress,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = groupInvestmentDraft,
-                            onCheckedChange = { groupInvestmentDraft = it },
+                            onCheckedChange = {
+                                groupInvestmentDraft = it
+                                groupSaveError = null
+                            },
+                            enabled = !groupSaveInProgress,
                         )
                         Text("Инвестиция")
+                    }
+                    groupSaveError?.let { message ->
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val cleanName = groupNameDraft.trim()
-                        if (cleanName.isNotBlank()) {
-                            onSaveGroup(cleanName, groupInvestmentDraft)
-                            isEditingGroup = false
+                        when (val action = legacyGroupSaveAction(groupNameDraft, groupInvestmentDraft)) {
+                            is LegacyGroupSaveAction.Invalid -> groupSaveError = action.message
+                            is LegacyGroupSaveAction.Rename -> {
+                                groupSaveError = null
+                                onRenameGroup(action.name)
+                                isEditingGroup = false
+                            }
+                            is LegacyGroupSaveAction.MigrateToInvestment -> {
+                                groupSaveInProgress = true
+                                groupSaveError = null
+                                onMigrateGroupToInvestment(action.name) { result ->
+                                    groupSaveInProgress = false
+                                    when (result) {
+                                        LegacyGroupMigrationResult.Success -> isEditingGroup = false
+                                        is LegacyGroupMigrationResult.Failure -> groupSaveError = result.message
+                                    }
+                                }
+                            }
                         }
                     },
-                    enabled = groupNameDraft.isNotBlank(),
+                    enabled = !groupSaveInProgress && groupNameDraft.isNotBlank(),
                 ) {
-                    Text("Сохранить")
+                    Text(if (groupSaveInProgress) "Сохраняем..." else "Сохранить")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { isEditingGroup = false }) {
+                TextButton(
+                    onClick = { isEditingGroup = false },
+                    enabled = !groupSaveInProgress,
+                ) {
                     Text("Отмена")
                 }
             },
@@ -4044,6 +4076,108 @@ private fun AccountSummary.matchesWritableMode(mode: FinanceMode): Boolean {
         FinanceMode.Shared -> ownershipType == "shared"
         FinanceMode.Overview -> false
     }
+}
+
+internal data class LegacyAssetCategoryMigrationTarget(
+    val scopeType: String,
+    val householdId: String?,
+    val currency: String,
+)
+
+internal sealed class LegacyAssetCategoryMigrationTargetSelection {
+    data class Ready(val target: LegacyAssetCategoryMigrationTarget) : LegacyAssetCategoryMigrationTargetSelection()
+    data class Blocked(val message: String) : LegacyAssetCategoryMigrationTargetSelection()
+}
+
+internal sealed class LegacyGroupMigrationResult {
+    data object Success : LegacyGroupMigrationResult()
+    data class Failure(val message: String) : LegacyGroupMigrationResult()
+}
+
+internal sealed class LegacyGroupSaveAction {
+    data class Rename(val name: String) : LegacyGroupSaveAction()
+    data class MigrateToInvestment(val name: String) : LegacyGroupSaveAction()
+    data class Invalid(val message: String) : LegacyGroupSaveAction()
+}
+
+internal fun legacyGroupSaveAction(
+    nameDraft: String,
+    isInvestmentChecked: Boolean,
+): LegacyGroupSaveAction {
+    val cleanName = nameDraft.trim()
+    if (cleanName.isBlank()) {
+        return LegacyGroupSaveAction.Invalid("Введите название группы")
+    }
+    return if (isInvestmentChecked) {
+        LegacyGroupSaveAction.MigrateToInvestment(cleanName)
+    } else {
+        LegacyGroupSaveAction.Rename(cleanName)
+    }
+}
+
+internal fun selectLegacyAssetCategoryMigrationTarget(
+    selectedMode: FinanceMode,
+    accounts: List<AccountSummary>,
+    sessionHouseholdId: String?,
+    fallbackCurrency: String?,
+    groupName: String,
+): LegacyAssetCategoryMigrationTargetSelection {
+    val activeLegacyAccounts = accounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
+    val currencies = activeLegacyAccounts
+        .map { it.currency.trim().uppercase(Locale.US) }
+        .filter { it.isNotBlank() }
+        .distinct()
+    if (currencies.size > 1) {
+        return LegacyAssetCategoryMigrationTargetSelection.Blocked(
+            "В legacy-группе «$groupName» счета в разных валютах. Сначала разделите или переместите счета по валютам.",
+        )
+    }
+
+    val accountScopes = activeLegacyAccounts
+        .map { if (it.ownershipType == "shared") "household" else "personal" }
+        .distinct()
+    if (accountScopes.size > 1) {
+        return LegacyAssetCategoryMigrationTargetSelection.Blocked(
+            "В legacy-группе «$groupName» есть личные и общие счета. Сначала разделите их по scope.",
+        )
+    }
+
+    val scopeType = accountScopes.singleOrNull() ?: when (selectedMode) {
+        FinanceMode.Personal -> "personal"
+        FinanceMode.Shared -> "household"
+        FinanceMode.Overview -> return LegacyAssetCategoryMigrationTargetSelection.Blocked(
+            "В «Мой обзор» нельзя определить scope для пустой legacy-группы «$groupName». Переключитесь на Личное или Общее.",
+        )
+    }
+
+    val householdIds = activeLegacyAccounts
+        .filter { it.ownershipType == "shared" }
+        .mapNotNull { it.householdId?.takeIf { id -> id.isNotBlank() } }
+        .distinct()
+    if (householdIds.size > 1) {
+        return LegacyAssetCategoryMigrationTargetSelection.Blocked(
+            "В legacy-группе «$groupName» счета из разных общих бюджетов. Сначала разделите их.",
+        )
+    }
+    val householdId = if (scopeType == "household") {
+        householdIds.singleOrNull() ?: sessionHouseholdId?.takeIf { it.isNotBlank() }
+            ?: return LegacyAssetCategoryMigrationTargetSelection.Blocked(
+                "Для общей инвестиционной категории нужна активная семья.",
+            )
+    } else {
+        null
+    }
+
+    val currency = currencies.singleOrNull()
+        ?: fallbackCurrency?.trim()?.uppercase(Locale.US)?.takeIf { it.isNotBlank() }
+        ?: "RUB"
+    return LegacyAssetCategoryMigrationTargetSelection.Ready(
+        LegacyAssetCategoryMigrationTarget(
+            scopeType = scopeType,
+            householdId = householdId,
+            currency = currency,
+        ),
+    )
 }
 
 private fun CategorySummary.matchesWritableMode(mode: FinanceMode): Boolean {
