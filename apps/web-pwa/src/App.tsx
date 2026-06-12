@@ -3310,11 +3310,12 @@ function PlanningAllocationsCard({
     comment: ""
   });
 
+  const usedTargetIds = new Set(plan.allocations.map((a) => a.targetId));
   const targetOptions = planningTargetOptions(
     draft.targetType,
     expenseCategories,
     investmentCategories
-  );
+  ).filter((opt) => !usedTargetIds.has(opt.id));
 
   const canCreate =
     !isLoading &&
@@ -3582,14 +3583,18 @@ function PlanningAllocationRow({
           <span>
             {localizedTargetType(allocation.targetType)} ·{" "}
             {localizedRecurrenceType(allocation.recurrenceType ?? "regular")} ·{" "}
-            {localizedAllocationMode(allocation.allocationMode)}: {allocation.allocationValue} ·
-            план {formatMoney(allocation.calculatedAmount)} · {statusText}
+            {allocation.allocationMode === "percent"
+              ? `${localizedAllocationMode(allocation.allocationMode)}: ${allocation.allocationValue} = ${formatMoney(allocation.calculatedAmount)}`
+              : formatMoney(allocation.calculatedAmount)}{" "}
+            · {statusText}
           </span>
-          {allocation.actualAmount && (
+          {allocation.actualAmount ? (
             <span>
               Факт: {formatMoney(allocation.actualAmount)}
               {allocation.progressPercent ? ` · ${allocation.progressPercent}%` : ""}
             </span>
+          ) : (
+            <span className="scopeCopy">Факт появится после операций в этой категории</span>
           )}
           {allocation.isSavingsGoal && (
             <span>
@@ -4970,7 +4975,7 @@ function recentTimeline(
   }));
 
   return [...operationItems, ...transferItems].sort(
-    (left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()
+    (left, right) => new Date(left.date).getTime() - new Date(right.date).getTime()
   );
 }
 
