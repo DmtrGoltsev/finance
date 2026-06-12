@@ -901,8 +901,10 @@ private fun AllocationsCard(
     var draft by remember(plan.id) { mutableStateOf(PlanningAllocationDraft()) }
     val categories = dashboard.planningCategories(planMode)
     val investments = dashboard.planningInvestmentAssetCategories(planMode)
-    val targetOptions = remember(draft.targetType, categories, investments) {
+    val usedTargetIds = plan.allocations.map { it.targetId }.toSet()
+    val targetOptions = remember(draft.targetType, categories, investments, usedTargetIds) {
         planningTargetOptions(draft.targetType, categories, investments)
+            .filter { it.id !in usedTargetIds }
     }
     LaunchedEffect(draft.targetType, targetOptions) {
         if (draft.targetId.isBlank() && targetOptions.isNotEmpty()) {
@@ -1173,12 +1175,24 @@ private fun AllocationRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${allocation.targetType.localizedTargetType()} • ${allocation.recurrenceType.orEmpty().ifBlank { RECURRENCE_REGULAR }.localizedRecurrenceType()} • ${allocation.allocationMode.localizedAllocationMode()}: ${allocation.allocationValue} • план ${allocation.calculatedAmount.planningMoney(currency)} • $statusText",
+                    buildString {
+                        append(allocation.targetType.localizedTargetType())
+                        append(" • ")
+                        append(allocation.recurrenceType.orEmpty().ifBlank { RECURRENCE_REGULAR }.localizedRecurrenceType())
+                        append(" • ")
+                        if (allocation.allocationMode == ALLOCATION_PERCENT) {
+                            append("${allocation.allocationMode.localizedAllocationMode()}: ${allocation.allocationValue} = ${allocation.calculatedAmount.planningMoney(currency)}")
+                        } else {
+                            append(allocation.calculatedAmount.planningMoney(currency))
+                        }
+                        append(" • ")
+                        append(statusText)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
                 allocation.actualAmount?.takeIf { it.isNotBlank() }?.let {
-                    Text("Факт allocation: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                } ?: Text("Факт по этому allocation появится после расчета", style = MaterialTheme.typography.bodySmall)
+                    Text("Факт: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("Факт появится после операций в этой категории", style = MaterialTheme.typography.bodySmall)
                 if (allocation.isSavingsGoal) {
                     val goalText = allocation.goalTargetAmount?.takeIf { it.isNotBlank() }?.planningMoney(currency) ?: "не задана"
                     val dueText = allocation.goalDueMonth?.localizedPlanningMonth() ?: "срок не задан"

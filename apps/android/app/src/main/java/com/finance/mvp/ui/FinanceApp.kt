@@ -1522,7 +1522,7 @@ private fun LazyListScope.operationsContent(
         }
     }
     item { Text("Операции • ${view.scopeTitle}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-    items(items.sortedByDescending { it.sortDateKey() }) { transaction ->
+    items(items.sortedBy { it.sortDateKey() }) { transaction ->
         TransactionRow(transaction, dashboard?.categories.orEmpty()) {
             onDeleteTransaction(transaction.id)
         }
@@ -3287,7 +3287,7 @@ private fun CategoryBreakdownCard(categories: List<CategorySpend>) {
             if (categories.isEmpty()) {
                 Text("Нет расходов для разбивки", style = MaterialTheme.typography.bodySmall)
             } else {
-                categories.take(5).forEach { category ->
+                categories.forEach { category ->
                     CategorySpendRow(category)
                 }
             }
