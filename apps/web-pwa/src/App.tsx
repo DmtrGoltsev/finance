@@ -286,6 +286,28 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     }
   };
 
+  const submitRegistration = async (input: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }) => {
+    setLoginError(null);
+    try {
+      const result = await client.registerUser(input);
+      if (result.status === "authenticated") {
+        await loadSnapshot();
+        return result;
+      }
+
+      setAuthStatus("unauthenticated");
+      return result;
+    } catch (caughtError) {
+      setAuthStatus("unauthenticated");
+      setLoginError("Не удалось создать вход. Проверьте данные и попробуйте еще раз.");
+      throw caughtError;
+    }
+  };
+
   const logout = async () => {
     try {
       await client.logout();
@@ -434,7 +456,13 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
   }
 
   if (authStatus === "unauthenticated") {
-    return <LoginScreen onSubmit={submitLogin} error={loginError} />;
+    return (
+      <LoginScreen
+        onLogin={submitLogin}
+        onRegister={submitRegistration}
+        error={loginError}
+      />
+    );
   }
 
   if (!snapshot || !activeReport) {
@@ -570,24 +598,82 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
 
 function LoginScreen({
   error,
-  onSubmit
+  onLogin,
+  onRegister
 }: {
   error: string | null;
-  onSubmit: (email: string, password: string) => Promise<void>;
+  onLogin: (email: string, password: string) => Promise<void>;
+  onRegister: (input: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }) => Promise<{ status: "authenticated" } | { status: "accepted" }>;
 }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [isSubmitting, setSubmitting] = useState(false);
+  const isRegistering = mode === "register";
+
+  const switchMode = (nextMode: "login" | "register") => {
+    setMode(nextMode);
+    setLocalError(null);
+    setNotice(null);
+    setPassword("");
+    setConfirmPassword("");
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!email.trim() || !password) {
+    const trimmedEmail = email.trim();
+    setLocalError(null);
+    setNotice(null);
+
+    if (!trimmedEmail) {
+      setLocalError("Укажите email.");
       return;
+    }
+    if (!isEmailLike(trimmedEmail)) {
+      setLocalError("Укажите корректный email.");
+      return;
+    }
+    if (!password) {
+      setLocalError("Укажите пароль.");
+      return;
+    }
+    if (isRegistering) {
+      if (password.length < 12) {
+        setLocalError("Пароль должен быть не короче 12 символов.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setLocalError("Пароли не совпадают.");
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
-      await onSubmit(email, password);
+      if (isRegistering) {
+        const result = await onRegister({
+          email: trimmedEmail,
+          password,
+          displayName
+        });
+        if (result.status === "accepted") {
+          setEmail(trimmedEmail);
+          switchMode("login");
+          setNotice(
+            "Запрос принят. Если аккаунт с этим email уже есть, войдите с ним."
+          );
+        }
+      } else {
+        await onLogin(trimmedEmail, password);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -595,13 +681,29 @@ function LoginScreen({
 
   return (
     <main className="loginShell">
-      <form className="loginPanel" aria-label="Вход в финансы" onSubmit={submit}>
+      <form className="loginPanel" aria-label="Вход в финансы" noValidate onSubmit={submit}>
         <div className="brandMark" aria-hidden="true">
           <WalletCards size={22} />
         </div>
         <div>
           <p>Семейные финансы</p>
-          <h1>Вход</h1>
+          <h1>{isRegistering ? "Регистрация" : "Вход"}</h1>
+        </div>
+        <div className="authModeSwitch" role="group" aria-label="Access mode">
+          <button
+            className={!isRegistering ? "selected" : ""}
+            type="button"
+            onClick={() => switchMode("login")}
+          >
+            Вход
+          </button>
+          <button
+            className={isRegistering ? "selected" : ""}
+            type="button"
+            onClick={() => switchMode("register")}
+          >
+            Регистрация
+          </button>
         </div>
         <label className="field">
           <span>Email</span>
@@ -613,27 +715,61 @@ function LoginScreen({
             onChange={(event) => setEmail(event.target.value)}
           />
         </label>
+        {isRegistering && (
+          <label className="field">
+            <span>Имя</span>
+            <input
+              autoComplete="name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </label>
+        )}
         <label className="field">
           <span>Пароль</span>
           <input
-            autoComplete="current-password"
+            autoComplete={isRegistering ? "new-password" : "current-password"}
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
+        {isRegistering && (
+          <label className="field">
+            <span>Подтвердите пароль</span>
+            <input
+              autoComplete="new-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+          </label>
+        )}
+        {notice && <p className="formHint">{notice}</p>}
+        {localError && <p className="formError">{localError}</p>}
         {error && <p className="formError">{error}</p>}
         <button
           className="submitButton"
+          aria-label={isRegistering ? "Create account" : undefined}
           type="submit"
-          disabled={isSubmitting || !email.trim() || !password}
+          disabled={isSubmitting}
         >
           <Check size={18} aria-hidden="true" />
-          {isSubmitting ? "Входим" : "Войти"}
+          {isSubmitting
+            ? isRegistering
+              ? "Создаем"
+              : "Входим"
+            : isRegistering
+              ? "Создать аккаунт"
+              : "Войти"}
         </button>
       </form>
     </main>
   );
+}
+
+function isEmailLike(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function NavButton({

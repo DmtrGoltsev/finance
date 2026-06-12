@@ -71,6 +71,34 @@ button {
   color: var(--muted);
 }
 
+.authModeSwitch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 3px;
+}
+
+.authModeSwitch button {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #253247;
+  overflow-wrap: anywhere;
+  padding: 0 8px;
+}
+
+.authModeSwitch button.selected {
+  border-color: #c8d7f4;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
 .appShell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);

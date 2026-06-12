@@ -183,6 +183,11 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     deleteCategory: vi.fn(async () => undefined),
     getDashboardSnapshot: vi.fn(async () => snapshot),
     loginWithPassword: vi.fn(async () => undefined),
+    registerUser: vi.fn(
+      async (): Promise<{ status: "authenticated" } | { status: "accepted" }> => ({
+        status: "authenticated"
+      })
+    ),
     listCaptureDrafts: vi.fn(async () => [] as CaptureDraftSummary[]),
     logout: vi.fn(async () => undefined),
     restoreAccount: vi.fn(async () => snapshot.accounts[0]),
@@ -290,6 +295,110 @@ describe("PWA finance experience", () => {
       });
     });
     expect(await screen.findByRole("heading", { name: "Деньги" })).toBeInTheDocument();
+  });
+
+  it("validates self-service registration before calling the API", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.getDashboardSnapshot = vi.fn().mockRejectedValue(
+      new ApiRequestError("auth required", 401, "GET", "/api/v1/sessions/current")
+    );
+
+    render(<App client={client} />);
+
+    const form = await screen.findByRole("form", { name: "Вход в финансы" });
+    await user.click(within(form).getByRole("button", { name: "Регистрация" }));
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByText("Укажите email.")).toBeInTheDocument();
+    expect(client.registerUser).not.toHaveBeenCalled();
+
+    await user.type(within(form).getByLabelText("Email"), "not-email");
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+    expect(await screen.findByText("Укажите корректный email.")).toBeInTheDocument();
+
+    const passwordInputs = within(form)
+      .getAllByDisplayValue("")
+      .filter((input) => input.getAttribute("type") === "password");
+    await user.clear(within(form).getByLabelText("Email"));
+    await user.type(within(form).getByLabelText("Email"), "new.owner@example.test");
+    await user.type(passwordInputs[0], "short");
+    await user.type(within(form).getByLabelText("Подтвердите пароль"), "short");
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByText("Пароль должен быть не короче 12 символов.")).toBeInTheDocument();
+    expect(client.registerUser).not.toHaveBeenCalled();
+
+    await user.clear(passwordInputs[0]);
+    await user.clear(within(form).getByLabelText("Подтвердите пароль"));
+    await user.type(passwordInputs[0], "dummy-password-12");
+    await user.type(within(form).getByLabelText("Подтвердите пароль"), "different-pass-12");
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByText("Пароли не совпадают.")).toBeInTheDocument();
+    expect(client.registerUser).not.toHaveBeenCalled();
+  });
+
+  it("registers a new PWA user and opens the finance dashboard", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.getDashboardSnapshot = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiRequestError("auth required", 401, "GET", "/api/v1/sessions/current"))
+      .mockResolvedValueOnce(financeSnapshot);
+
+    render(<App client={client} />);
+
+    const form = await screen.findByRole("form", { name: "Вход в финансы" });
+    await user.click(within(form).getByRole("button", { name: "Регистрация" }));
+    await user.type(within(form).getByLabelText("Email"), "new.owner@example.test");
+    await user.type(within(form).getByLabelText("Имя"), "New Owner");
+    const passwordInputs = within(form)
+      .getAllByDisplayValue("")
+      .filter((input) => input.getAttribute("type") === "password");
+    await user.type(passwordInputs[0], "dummy-password-12");
+    await user.type(within(form).getByLabelText("Подтвердите пароль"), "dummy-password-12");
+    expect(document.body).not.toHaveTextContent("dummy-password-12");
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => {
+      expect(client.registerUser).toHaveBeenCalledWith({
+        email: "new.owner@example.test",
+        password: "dummy-password-12",
+        displayName: "New Owner"
+      });
+    });
+    expect(await screen.findByRole("heading", { name: "Деньги" })).toBeInTheDocument();
+  });
+
+  it("handles accepted duplicate-style registration neutrally and offers sign in", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.getDashboardSnapshot = vi.fn().mockRejectedValue(
+      new ApiRequestError("auth required", 401, "GET", "/api/v1/sessions/current")
+    );
+    client.registerUser = vi.fn(async () => ({ status: "accepted" as const }));
+
+    render(<App client={client} />);
+
+    const form = await screen.findByRole("form", { name: "Вход в финансы" });
+    await user.click(within(form).getByRole("button", { name: "Регистрация" }));
+    await user.type(within(form).getByLabelText("Email"), "known@example.test");
+    const passwordInputs = within(form)
+      .getAllByDisplayValue("")
+      .filter((input) => input.getAttribute("type") === "password");
+    await user.type(passwordInputs[0], "dummy-password-12");
+    await user.type(within(form).getByLabelText("Подтвердите пароль"), "dummy-password-12");
+    await user.click(within(form).getByRole("button", { name: "Create account" }));
+
+    expect(
+      await screen.findByText(
+        "Запрос принят. Если аккаунт с этим email уже есть, войдите с ним."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "Вход в финансы" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Деньги" })).not.toBeInTheDocument();
+    expect(client.loginWithPassword).not.toHaveBeenCalled();
   });
 
   it("logs out from the UI and clears the rendered finance session", async () => {

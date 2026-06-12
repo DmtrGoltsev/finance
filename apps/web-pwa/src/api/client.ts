@@ -182,6 +182,21 @@ type LoginInput = {
   password: string;
 };
 
+type RegistrationInput = {
+  email: string;
+  password: string;
+  displayName?: string;
+  deviceName?: string;
+};
+
+export type RegistrationResult =
+  | {
+      status: "authenticated";
+    }
+  | {
+      status: "accepted";
+    };
+
 type CategoryCreateInput = {
   name: string;
   direction: CategoryDirection;
@@ -238,6 +253,7 @@ export class ApiRequestError extends Error {
 
 export interface FinanceApiClient {
   loginWithPassword(input: LoginInput): Promise<void>;
+  registerUser(input: RegistrationInput): Promise<RegistrationResult>;
   logout(): Promise<void>;
   getDashboardSnapshot(input?: ReportPeriodInput): Promise<DashboardSnapshot>;
   createDemoAccount(input?: AccountCreateInput): Promise<AccountSummary>;
@@ -326,6 +342,30 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     );
 
     this.csrfToken = loginResponse.csrfToken || readCookie(CSRF_COOKIE_NAME);
+  }
+
+  async registerUser(input: RegistrationInput): Promise<RegistrationResult> {
+    const registrationResponse = await this.request<Partial<LoginResponseDto>>(
+      "/api/v1/users",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          email: input.email.trim(),
+          password: input.password,
+          transport: "pwa_cookie",
+          ...(input.displayName?.trim() ? { displayName: input.displayName.trim() } : {}),
+          ...(input.deviceName?.trim() ? { deviceName: input.deviceName.trim() } : {})
+        })
+      },
+      { csrf: "omit", optionalJson: true }
+    );
+
+    if (registrationResponse?.csrfToken && registrationResponse.actor) {
+      this.csrfToken = registrationResponse.csrfToken || readCookie(CSRF_COOKIE_NAME);
+      return { status: "authenticated" };
+    }
+
+    return { status: "accepted" };
   }
 
   async logout(): Promise<void> {
@@ -819,7 +859,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   private async request<T>(
     path: string,
     init: RequestInit,
-    options: { csrf?: "auto" | "omit"; empty?: boolean } = {}
+    options: { csrf?: "auto" | "omit"; empty?: boolean; optionalJson?: boolean } = {}
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
@@ -854,6 +894,11 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
     if (options.empty || response.status === 204) {
       return undefined as T;
+    }
+
+    if (options.optionalJson) {
+      const text = await response.text();
+      return (text ? JSON.parse(text) : undefined) as T;
     }
 
     return (await response.json()) as T;

@@ -5,6 +5,7 @@ function jsonResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    text: async () => (body === undefined ? "" : JSON.stringify(body)),
     json: async () => body
   } as Response;
 }
@@ -166,6 +167,80 @@ describe("LiveFinanceApiClient", () => {
       )
     ).toBe(false);
     expect(JSON.stringify(snapshot)).not.toMatch(/\bDev\b/);
+  });
+
+  it("registers a PWA user with cookie transport and stores returned csrf state", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      expect(path).toBe("/api/v1/users");
+      expect(init?.method).toBe("POST");
+      expect(init?.credentials).toBe("include");
+      expect(headers.get("X-CSRF-Token")).toBeNull();
+      expect(headers.get("Authorization")).toBeNull();
+      expect(init?.body).toBe(
+        JSON.stringify({
+          email: "new.owner@example.test",
+          password: "dummy-password-12",
+          transport: "pwa_cookie",
+          displayName: "New Owner",
+          deviceName: "iPhone Safari"
+        })
+      );
+
+      return jsonResponse(
+        {
+          transport: "pwa_cookie",
+          csrfToken: "csrf-registration",
+          expiresAt: "2026-06-12T10:00:00Z",
+          actor: actor()
+        },
+        201
+      );
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const result = await client.registerUser({
+      email: " new.owner@example.test ",
+      password: "dummy-password-12",
+      displayName: " New Owner ",
+      deviceName: "iPhone Safari"
+    });
+
+    expect(result).toEqual({ status: "authenticated" });
+  });
+
+  it("treats duplicate-style registration acceptance as neutral without session state", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+
+      expect(path).toBe("/api/v1/users");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(
+        JSON.stringify({
+          email: "known@example.test",
+          password: "dummy-password-12",
+          transport: "pwa_cookie"
+        })
+      );
+
+      return jsonResponse(undefined, 202);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const result = await client.registerUser({
+      email: "known@example.test",
+      password: "dummy-password-12"
+    });
+
+    expect(result).toEqual({ status: "accepted" });
   });
 
   it("reuses an existing cookie session without falling back to login", async () => {
