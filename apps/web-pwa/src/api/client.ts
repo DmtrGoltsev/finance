@@ -1,6 +1,16 @@
 import type {
+  AccountBalancesReport,
   AccountKind,
   AccountSummary,
+  AllocationMode,
+  AllocationProgressStatus,
+  AllocationRecurrenceType,
+  AllocationTargetType,
+  AssetCategory,
+  AssetCategoryCreateInput,
+  AssetCategoryGroup,
+  AssetCategoryType,
+  AssetCategoryUpdateInput,
   CaptureDraftCreateInput,
   CaptureDraftSummary,
   CaptureDraftUpdateInput,
@@ -9,8 +19,18 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
+  InvestmentsByCurrency,
   MoneyAmount,
   OperationSummary,
+  PlanningAllocation,
+  PlanningAllocationCreateInput,
+  PlanningAllocationUpdateInput,
+  PlanningIncomeSource,
+  PlanningIncomeSourceCreateInput,
+  PlanningIncomeSourceUpdateInput,
+  PlanningPlan,
+  PlanningPlanCopyInput,
+  PlanningPlanCreateInput,
   ReportMode,
   ReportSummary,
   ScreenshotOcrResult,
@@ -58,6 +78,7 @@ type AccountDto = {
   currentBalance: string | number;
   status?: "active" | "archived" | "deleted";
   version?: number;
+  assetCategoryId?: string | null;
 };
 
 type CategoryDto = {
@@ -159,6 +180,105 @@ type ScreenshotOcrResponseDto = {
   }>;
 };
 
+type AssetCategoryDto = {
+  id: string;
+  name: string;
+  scopeType: "personal" | "household";
+  ownerUserId?: string | null;
+  householdId?: string | null;
+  currency: string;
+  assetType: string;
+  iconKey?: string | null;
+  manualAmount: string | number;
+  isInvestment: boolean;
+  recordStatus: "active" | "archived" | "deleted";
+  version?: number;
+};
+
+type PlanningIncomeSourceDto = {
+  id: string;
+  planId: string;
+  amount: string | number;
+  source: string;
+  description?: string | null;
+  dayOfMonth: number;
+  effectiveDate?: string;
+  confirmationState: "planned" | "confirmed";
+  version?: number;
+};
+
+type PlanningAllocationDto = {
+  id: string;
+  planId: string;
+  targetType: string;
+  targetId?: string | null;
+  targetSnapshot?: Record<string, unknown> | null;
+  requiresAttention: boolean;
+  attentionReason?: string | null;
+  comment?: string | null;
+  allocationMode: string;
+  allocationValue: string | number;
+  calculatedAmount: string | number;
+  recurrenceType?: string | null;
+  isSavingsGoal: boolean;
+  goalTargetAmount?: string | number | null;
+  goalDueMonth?: string | null;
+  goalMonthlyAmount?: string | number | null;
+  actualAmount?: string | number | null;
+  varianceAmount?: string | number | null;
+  progressPercent?: string | null;
+  progressStatus?: string | null;
+  status?: string | null;
+  version?: number;
+};
+
+type PlanningPlanDto = {
+  id: string;
+  scope: "personal" | "household";
+  ownerUserId?: string | null;
+  householdId?: string | null;
+  month: string;
+  currency: string;
+  incomeSources: PlanningIncomeSourceDto[];
+  allocations: PlanningAllocationDto[];
+  summary: {
+    totalPlannedIncome: string | number;
+    totalConfirmedIncome: string | number;
+    totalAllocatedAmount: string | number;
+    unallocatedAmount: string | number;
+    previousMonthSurplus: string | number;
+    underallocated: boolean;
+    overallocated: boolean;
+  };
+  version?: number;
+};
+
+type AssetCategoryBalanceGroupDto = {
+  assetCategoryId: string;
+  assetCategoryName: string;
+  assetType: string;
+  scopeType: "personal" | "household";
+  householdId?: string | null;
+  ownerUserId?: string | null;
+  currency: string;
+  manualAmount: string | number;
+  linkedAccountsTotal: string | number;
+  currentBalanceTotal: string | number;
+  accountCount: number;
+  isInvestment: boolean;
+};
+
+type InvestmentTotalDto = {
+  currency: string;
+  investmentsTotal: string | number;
+};
+
+type ReportAccountBalancesDto = {
+  assetCategoryGroups: AssetCategoryBalanceGroupDto[];
+  investmentsByCurrency: InvestmentTotalDto[];
+  totalsByCurrency?: Array<{ currency: string; netWorthTotal: string | number }>;
+};
+
 type PageEnvelope<T> = {
   items: T[];
 };
@@ -175,6 +295,7 @@ type AccountCreateInput = {
   initialBalance?: number;
   ownershipType?: "personal" | "shared";
   householdId?: string | null;
+  assetCategoryId?: string | null;
 };
 
 type LoginInput = {
@@ -259,6 +380,10 @@ export interface FinanceApiClient {
   createDemoAccount(input?: AccountCreateInput): Promise<AccountSummary>;
   updateAccount(input: {
     accountId: string;
+    name?: string;
+    balance?: number;
+    currency?: CurrencyCode;
+    assetCategoryId?: string | null;
     isPaymentAccount?: boolean;
     version?: number;
   }): Promise<AccountSummary>;
@@ -273,13 +398,21 @@ export interface FinanceApiClient {
   createDemoOperation(input: OperationCreateInput): Promise<OperationSummary>;
   updateOperation(input: {
     transactionId: string;
+    amount?: number;
+    description?: string | null;
+    categoryId?: string | null;
+    accountId?: string;
+    occurredDate?: string | null;
     version?: number;
   }): Promise<OperationSummary>;
+  deleteOperation(transactionId: string): Promise<void>;
   archiveOperation(transactionId: string): Promise<void>;
   restoreOperation(transactionId: string): Promise<OperationSummary>;
   createDemoTransfer(input: TransferCreateInput): Promise<TransferSummary>;
   updateTransfer(input: {
     transactionId: string;
+    amount?: number;
+    description?: string | null;
     version?: number;
   }): Promise<TransferSummary>;
   archiveTransfer(transactionId: string): Promise<void>;
@@ -302,6 +435,38 @@ export interface FinanceApiClient {
   updateCaptureDraft(input: CaptureDraftUpdateInput): Promise<CaptureDraftSummary>;
   confirmCaptureDraft(draftId: string): Promise<CaptureDraftSummary>;
   discardCaptureDraft(draftId: string): Promise<CaptureDraftSummary>;
+  listAssetCategories(input?: {
+    scopeType?: "personal" | "household";
+    isInvestment?: boolean;
+    limit?: number;
+  }): Promise<AssetCategory[]>;
+  createAssetCategory(input: AssetCategoryCreateInput): Promise<AssetCategory>;
+  updateAssetCategory(input: AssetCategoryUpdateInput): Promise<AssetCategory>;
+  archiveAssetCategory(categoryId: string): Promise<AssetCategory>;
+  restoreAssetCategory(categoryId: string): Promise<AssetCategory>;
+  listPlanningPlans(
+    scope: "personal" | "household",
+    month: string,
+    householdId?: string | null
+  ): Promise<PlanningPlan | null>;
+  listPlanningPlanHistory(
+    scope: "personal" | "household",
+    householdId?: string | null
+  ): Promise<PlanningPlan[]>;
+  createPlanningPlan(input: PlanningPlanCreateInput): Promise<PlanningPlan>;
+  getPlanningPlan(planId: string): Promise<PlanningPlan>;
+  createPlanningIncomeSource(input: PlanningIncomeSourceCreateInput): Promise<PlanningIncomeSource>;
+  updatePlanningIncomeSource(input: PlanningIncomeSourceUpdateInput): Promise<PlanningIncomeSource>;
+  confirmPlanningIncomeSource(incomeSourceId: string): Promise<PlanningIncomeSource>;
+  deletePlanningIncomeSource(incomeSourceId: string): Promise<void>;
+  createPlanningAllocation(input: PlanningAllocationCreateInput): Promise<PlanningAllocation>;
+  updatePlanningAllocation(input: PlanningAllocationUpdateInput): Promise<PlanningAllocation>;
+  deletePlanningAllocation(allocationId: string): Promise<void>;
+  copyPlanningPlan(input: PlanningPlanCopyInput): Promise<PlanningPlan>;
+  getAccountBalancesReport(input?: ReportPeriodInput & {
+    reportMode?: ReportMode;
+    currency?: CurrencyCode;
+  }): Promise<AccountBalancesReport>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -380,11 +545,14 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   async getDashboardSnapshot(input: ReportPeriodInput = {}): Promise<DashboardSnapshot> {
     const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
-    const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope] =
+    const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope, assetCategoriesEnvelope] =
       await Promise.all([
         this.get<PageEnvelope<AccountDto>>("/api/v1/accounts"),
         this.get<PageEnvelope<CategoryDto>>("/api/v1/categories"),
-        this.get<PageEnvelope<TransactionDto>>("/api/v1/transactions")
+        this.get<PageEnvelope<TransactionDto>>("/api/v1/transactions"),
+        this.get<PageEnvelope<AssetCategoryDto>>("/api/v1/asset-categories").catch(
+          () => ({ items: [] } as PageEnvelope<AssetCategoryDto>)
+        )
       ]);
 
     const accounts = accountsEnvelope.items.map(mapAccount);
@@ -397,6 +565,41 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       .map((transaction) => mapTransfer(transaction, accounts));
     const householdId = pickHouseholdId(session.actor);
     const currency = accounts[0]?.balance.currency ?? "RUB";
+    const assetCategories = (assetCategoriesEnvelope as PageEnvelope<AssetCategoryDto>).items.map(
+      mapAssetCategory
+    );
+
+    let accountBalancesData: ReportAccountBalancesDto | null = null;
+    try {
+      const params = new URLSearchParams({
+        reportMode: householdId ? "combined_viewer_overview" : "personal",
+        currency
+      });
+      if (householdId) {
+        params.set("householdId", householdId);
+      }
+      if (input.startDate) {
+        params.set("startDate", input.startDate);
+      }
+      if (input.endDate) {
+        params.set("endDate", input.endDate);
+      }
+      const envelope = await this.get<DataEnvelope<ReportAccountBalancesDto>>(
+        `/api/v1/reports/account-balances?${params.toString()}`
+      );
+      accountBalancesData = envelope.data;
+    } catch {}
+
+    const assetCategoryGroups = accountBalancesData?.assetCategoryGroups?.map(
+      mapAssetCategoryGroup
+    ) ?? [];
+    const investmentsByCurrency = accountBalancesData?.investmentsByCurrency?.map(
+      mapInvestmentTotal
+    ) ?? [];
+    const investmentsTotal = accountBalancesData?.totalsByCurrency?.[0]
+      ? money(accountBalancesData.totalsByCurrency[0].netWorthTotal, currency)
+      : null;
+
     const reports = await this.getReports(householdId, currency, input);
 
     return {
@@ -410,7 +613,11 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       categories,
       operations,
       transfers,
-      reports
+      reports,
+      assetCategories,
+      assetCategoryGroups,
+      investmentsByCurrency,
+      investmentsTotal
     };
   }
 
@@ -426,7 +633,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           ownershipType: input.ownershipType ?? "personal",
           householdId: input.ownershipType === "shared" ? input.householdId : null,
           currency: input.currency ?? "RUB",
-          initialBalance: String(input.initialBalance ?? 0)
+          initialBalance: String(input.initialBalance ?? 0),
+          ...(input.assetCategoryId ? { assetCategoryId: input.assetCategoryId } : {})
         })
       }
     );
@@ -436,19 +644,22 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   async updateAccount(input: {
     accountId: string;
+    name?: string;
+    balance?: number;
+    currency?: CurrencyCode;
+    assetCategoryId?: string | null;
     isPaymentAccount?: boolean;
     version?: number;
   }): Promise<AccountSummary> {
-    const body =
-      input.isPaymentAccount === undefined
-        ? {
-            name: `Updated account ${uniqueSuffix()}`,
-            ...(input.version ? { version: input.version } : {})
-          }
-        : {
-            isPaymentAccount: input.isPaymentAccount,
-            ...(input.version ? { version: input.version } : {})
-          };
+    const body: Record<string, unknown> = {};
+    if (input.name !== undefined) body.name = input.name.trim();
+    if (input.balance !== undefined) body.currentBalance = String(input.balance);
+    if (input.currency !== undefined) body.currency = input.currency;
+    if (input.assetCategoryId !== undefined) {
+      body.assetCategoryId = input.assetCategoryId ?? null;
+    }
+    if (input.isPaymentAccount !== undefined) body.isPaymentAccount = input.isPaymentAccount;
+    if (input.version !== undefined) body.version = input.version;
     const envelope = await this.request<DataEnvelope<AccountDto>>(
       `/api/v1/accounts/${input.accountId}`,
       {
@@ -575,21 +786,37 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   async updateOperation(input: {
     transactionId: string;
+    amount?: number;
+    description?: string | null;
+    categoryId?: string | null;
+    accountId?: string;
+    occurredDate?: string | null;
     version?: number;
   }): Promise<OperationSummary> {
+    const body: Record<string, unknown> = {};
+    if (input.amount !== undefined) body.amount = input.amount.toFixed(4);
+    if (input.description !== undefined) body.description = input.description;
+    if (input.categoryId !== undefined) body.categoryId = input.categoryId;
+    if (input.accountId !== undefined) body.accountId = input.accountId;
+    if (input.occurredDate !== undefined) body.transactionDate = input.occurredDate;
+    if (input.version !== undefined) body.version = input.version;
     const envelope = await this.request<DataEnvelope<TransactionDto>>(
       `/api/v1/transactions/${input.transactionId}`,
       {
         method: "PATCH",
-        body: JSON.stringify({
-          amount: "18.0000",
-          description: "Обновлено",
-          ...(input.version ? { version: input.version } : {})
-        })
+        body: JSON.stringify(body)
       }
     );
 
     return mapOperation(envelope.data, [], []);
+  }
+
+  async deleteOperation(transactionId: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/transactions/${transactionId}`,
+      { method: "DELETE" },
+      { empty: true }
+    );
   }
 
   async archiveOperation(transactionId: string): Promise<void> {
@@ -633,17 +860,19 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   async updateTransfer(input: {
     transactionId: string;
+    amount?: number;
+    description?: string | null;
     version?: number;
   }): Promise<TransferSummary> {
+    const body: Record<string, unknown> = {};
+    if (input.amount !== undefined) body.amount = input.amount.toFixed(4);
+    if (input.description !== undefined) body.description = input.description;
+    if (input.version !== undefined) body.version = input.version;
     const envelope = await this.request<DataEnvelope<TransactionDto>>(
       `/api/v1/transactions/${input.transactionId}`,
       {
         method: "PATCH",
-        body: JSON.stringify({
-          amount: "12.0000",
-          description: "Перевод обновлен",
-          ...(input.version ? { version: input.version } : {})
-        })
+        body: JSON.stringify(body)
       }
     );
 
@@ -816,6 +1045,311 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     return mapCaptureDraft(envelope.data);
   }
 
+  async listAssetCategories(input?: {
+    scopeType?: "personal" | "household";
+    isInvestment?: boolean;
+    limit?: number;
+  }): Promise<AssetCategory[]> {
+    const params = new URLSearchParams();
+    params.set("limit", String(input?.limit ?? 100));
+    if (input?.scopeType) {
+      params.set("scopeType", input.scopeType);
+    }
+    if (input?.isInvestment !== undefined) {
+      params.set("isInvestment", String(input.isInvestment));
+    }
+    const envelope = await this.get<PageEnvelope<AssetCategoryDto>>(
+      `/api/v1/asset-categories?${params.toString()}`
+    );
+
+    return envelope.items.map(mapAssetCategory);
+  }
+
+  async createAssetCategory(input: AssetCategoryCreateInput): Promise<AssetCategory> {
+    const envelope = await this.request<DataEnvelope<AssetCategoryDto>>(
+      "/api/v1/asset-categories",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: input.name.trim(),
+          scopeType: input.scopeType,
+          ...(input.householdId ? { householdId: input.householdId } : {}),
+          currency: input.currency,
+          ...(input.manualAmount !== undefined ? { manualAmount: input.manualAmount.toFixed(4) } : {}),
+          ...(input.isInvestment !== undefined ? { isInvestment: input.isInvestment } : {}),
+          ...(input.assetType ? { assetType: input.assetType } : {}),
+          ...(input.iconKey ? { iconKey: input.iconKey } : {})
+        })
+      },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapAssetCategory(envelope.data);
+  }
+
+  async updateAssetCategory(input: AssetCategoryUpdateInput): Promise<AssetCategory> {
+    const body: Record<string, unknown> = {};
+    if (input.name !== undefined) body.name = input.name.trim();
+    if (input.manualAmount !== undefined) body.manualAmount = input.manualAmount.toFixed(4);
+    if (input.assetType !== undefined) body.assetType = input.assetType;
+    if (input.iconKey !== undefined) body.iconKey = input.iconKey;
+    if (input.isInvestment !== undefined) body.isInvestment = input.isInvestment;
+    if (input.version !== undefined) body.version = input.version;
+    const envelope = await this.request<DataEnvelope<AssetCategoryDto>>(
+      `/api/v1/asset-categories/${input.assetCategoryId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      }
+    );
+
+    return mapAssetCategory(envelope.data);
+  }
+
+  async archiveAssetCategory(categoryId: string): Promise<AssetCategory> {
+    const envelope = await this.request<DataEnvelope<AssetCategoryDto>>(
+      `/api/v1/asset-categories/${categoryId}/archive`,
+      { method: "POST" }
+    );
+
+    return mapAssetCategory(envelope.data);
+  }
+
+  async restoreAssetCategory(categoryId: string): Promise<AssetCategory> {
+    const envelope = await this.request<DataEnvelope<AssetCategoryDto>>(
+      `/api/v1/asset-categories/${categoryId}/restore`,
+      { method: "POST" }
+    );
+
+    return mapAssetCategory(envelope.data);
+  }
+
+  async listPlanningPlans(
+    scope: "personal" | "household",
+    month: string,
+    householdId?: string | null
+  ): Promise<PlanningPlan | null> {
+    const params = new URLSearchParams({ scope, month });
+    if (householdId) {
+      params.set("householdId", householdId);
+    }
+    try {
+      const envelope = await this.get<DataEnvelope<PlanningPlanDto>>(
+        `/api/v1/planning/plans?${params.toString()}`
+      );
+      return mapPlanningPlan(envelope.data);
+    } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 404) {
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  async listPlanningPlanHistory(
+    scope: "personal" | "household",
+    householdId?: string | null
+  ): Promise<PlanningPlan[]> {
+    const params = new URLSearchParams({ scope });
+    if (householdId) {
+      params.set("householdId", householdId);
+    }
+    const envelope = await this.get<{ items: PlanningPlanDto[] }>(
+      `/api/v1/planning/plans/history?${params.toString()}`
+    );
+
+    return envelope.items.map(mapPlanningPlan);
+  }
+
+  async createPlanningPlan(input: PlanningPlanCreateInput): Promise<PlanningPlan> {
+    const envelope = await this.request<DataEnvelope<PlanningPlanDto>>(
+      "/api/v1/planning/plans",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          scope: input.scope,
+          month: input.month,
+          currency: input.currency,
+          ...(input.householdId ? { householdId: input.householdId } : {})
+        })
+      },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapPlanningPlan(envelope.data);
+  }
+
+  async getPlanningPlan(planId: string): Promise<PlanningPlan> {
+    const envelope = await this.get<DataEnvelope<PlanningPlanDto>>(
+      `/api/v1/planning/plans/${planId}`
+    );
+
+    return mapPlanningPlan(envelope.data);
+  }
+
+  async createPlanningIncomeSource(
+    input: PlanningIncomeSourceCreateInput
+  ): Promise<PlanningIncomeSource> {
+    const envelope = await this.request<DataEnvelope<PlanningIncomeSourceDto>>(
+      `/api/v1/planning/plans/${input.planId}/income-sources`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          amount: input.amount.toFixed(4),
+          source: input.source,
+          ...(input.description ? { description: input.description } : {}),
+          dayOfMonth: input.dayOfMonth
+        })
+      },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapPlanningIncomeSource(envelope.data);
+  }
+
+  async updatePlanningIncomeSource(
+    input: PlanningIncomeSourceUpdateInput
+  ): Promise<PlanningIncomeSource> {
+    const body: Record<string, unknown> = {};
+    if (input.amount !== undefined) body.amount = input.amount.toFixed(4);
+    if (input.source !== undefined) body.source = input.source;
+    if (input.description !== undefined) body.description = input.description;
+    if (input.dayOfMonth !== undefined) body.dayOfMonth = input.dayOfMonth;
+    if (input.effectiveDate !== undefined) body.effectiveDate = input.effectiveDate;
+    if (input.version !== undefined) body.version = input.version;
+    const envelope = await this.request<DataEnvelope<PlanningIncomeSourceDto>>(
+      `/api/v1/planning/income-sources/${input.incomeSourceId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      }
+    );
+
+    return mapPlanningIncomeSource(envelope.data);
+  }
+
+  async confirmPlanningIncomeSource(incomeSourceId: string): Promise<PlanningIncomeSource> {
+    const envelope = await this.request<DataEnvelope<PlanningIncomeSourceDto>>(
+      `/api/v1/planning/income-sources/${incomeSourceId}/confirm`,
+      { method: "POST" },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapPlanningIncomeSource(envelope.data);
+  }
+
+  async deletePlanningIncomeSource(incomeSourceId: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/planning/income-sources/${incomeSourceId}`,
+      { method: "DELETE" },
+      { empty: true }
+    );
+  }
+
+  async createPlanningAllocation(
+    input: PlanningAllocationCreateInput
+  ): Promise<PlanningAllocation> {
+    const envelope = await this.request<DataEnvelope<PlanningAllocationDto>>(
+      `/api/v1/planning/plans/${input.planId}/allocations`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          targetType: input.targetType,
+          targetId: input.targetId,
+          ...(input.comment ? { comment: input.comment } : {}),
+          allocationMode: input.allocationMode,
+          allocationValue: input.allocationValue.toFixed(4),
+          ...(input.recurrenceType ? { recurrenceType: input.recurrenceType } : {}),
+          ...(input.isSavingsGoal !== undefined ? { isSavingsGoal: input.isSavingsGoal } : {}),
+          ...(input.goalTargetAmount != null
+            ? { goalTargetAmount: input.goalTargetAmount.toFixed(4) }
+            : {}),
+          ...(input.goalDueMonth ? { goalDueMonth: input.goalDueMonth } : {})
+        })
+      },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapPlanningAllocation(envelope.data);
+  }
+
+  async updatePlanningAllocation(
+    input: PlanningAllocationUpdateInput
+  ): Promise<PlanningAllocation> {
+    const body: Record<string, unknown> = {};
+    if (input.targetType !== undefined) body.targetType = input.targetType;
+    if (input.targetId !== undefined) body.targetId = input.targetId;
+    if (input.comment !== undefined) body.comment = input.comment;
+    if (input.allocationMode !== undefined) body.allocationMode = input.allocationMode;
+    if (input.allocationValue !== undefined) body.allocationValue = input.allocationValue.toFixed(4);
+    if (input.recurrenceType !== undefined) body.recurrenceType = input.recurrenceType;
+    if (input.isSavingsGoal !== undefined) body.isSavingsGoal = input.isSavingsGoal;
+    if (input.goalTargetAmount != null) body.goalTargetAmount = input.goalTargetAmount.toFixed(4);
+    if (input.goalDueMonth !== undefined) body.goalDueMonth = input.goalDueMonth;
+    if (input.version !== undefined) body.version = input.version;
+    const envelope = await this.request<DataEnvelope<PlanningAllocationDto>>(
+      `/api/v1/planning/allocations/${input.allocationId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      }
+    );
+
+    return mapPlanningAllocation(envelope.data);
+  }
+
+  async deletePlanningAllocation(allocationId: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/planning/allocations/${allocationId}`,
+      { method: "DELETE" },
+      { empty: true }
+    );
+  }
+
+  async copyPlanningPlan(input: PlanningPlanCopyInput): Promise<PlanningPlan> {
+    const envelope = await this.request<DataEnvelope<PlanningPlanDto>>(
+      `/api/v1/planning/plans/${input.planId}/copy`,
+      {
+        method: "POST",
+        body: JSON.stringify({ targetMonth: input.targetMonth })
+      },
+      { expectedCodes: [200, 201] }
+    );
+
+    return mapPlanningPlan(envelope.data);
+  }
+
+  async getAccountBalancesReport(
+    input: ReportPeriodInput & { reportMode?: ReportMode; currency?: CurrencyCode } = {}
+  ): Promise<AccountBalancesReport> {
+    const params = new URLSearchParams({
+      reportMode: input.reportMode ?? "personal"
+    });
+    if (input.currency) {
+      params.set("currency", input.currency);
+    }
+    if (input.startDate) {
+      params.set("startDate", input.startDate);
+    }
+    if (input.endDate) {
+      params.set("endDate", input.endDate);
+    }
+    const envelope = await this.get<DataEnvelope<ReportAccountBalancesDto>>(
+      `/api/v1/reports/account-balances?${params.toString()}`
+    );
+
+    const data = envelope.data;
+    const currency = input.currency ?? "RUB";
+
+    return {
+      assetCategoryGroups: data.assetCategoryGroups?.map(mapAssetCategoryGroup) ?? [],
+      investmentsByCurrency: data.investmentsByCurrency?.map(mapInvestmentTotal) ?? [],
+      investmentsTotal: data.totalsByCurrency?.[0]
+        ? money(data.totalsByCurrency[0].netWorthTotal, currency)
+        : null
+    };
+  }
+
   private async getReports(
     householdId: string | null,
     currency: CurrencyCode,
@@ -859,7 +1393,12 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   private async request<T>(
     path: string,
     init: RequestInit,
-    options: { csrf?: "auto" | "omit"; empty?: boolean; optionalJson?: boolean } = {}
+    options: {
+      csrf?: "auto" | "omit";
+      empty?: boolean;
+      optionalJson?: boolean;
+      expectedCodes?: number[];
+    } = {}
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
@@ -883,7 +1422,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     if (response.status === 403 && options.csrf !== "omit" && isUnsafeMethod(method)) {
       this.csrfToken = null;
     }
-    if (!response.ok) {
+    const expectedCodes = options.expectedCodes ?? [200];
+    if (!response.ok && !expectedCodes.includes(response.status)) {
       throw new ApiRequestError(
         `API ${method} ${path} failed: ${response.status}`,
         response.status,
@@ -950,7 +1490,8 @@ function mapAccount(account: AccountDto): AccountSummary {
     householdId: account.householdId,
     status: account.status,
     version: account.version,
-    balance: money(account.currentBalance, account.currency)
+    balance: money(account.currentBalance, account.currency),
+    assetCategoryId: account.assetCategoryId ?? null
   };
 }
 
@@ -1076,6 +1617,113 @@ function mapCaptureDraft(draft: CaptureDraftDto): CaptureDraftSummary {
   };
 }
 
+function mapAssetCategory(dto: AssetCategoryDto): AssetCategory {
+  return {
+    id: dto.id,
+    name: userFacingSeedText(dto.name),
+    scopeType: dto.scopeType,
+    householdId: dto.householdId ?? null,
+    ownerUserId: dto.ownerUserId ?? null,
+    currency: normalizeCurrency(dto.currency, "RUB"),
+    manualAmount: money(dto.manualAmount, dto.currency),
+    isInvestment: dto.isInvestment,
+    assetType: mapAccountKind(dto.assetType) as AssetCategoryType,
+    iconKey: dto.iconKey ?? null,
+    recordStatus: dto.recordStatus,
+    version: dto.version
+  };
+}
+
+function mapAssetCategoryGroup(dto: AssetCategoryBalanceGroupDto): AssetCategoryGroup {
+  return {
+    assetCategoryId: dto.assetCategoryId,
+    name: userFacingSeedText(dto.assetCategoryName),
+    scopeType: dto.scopeType as "personal" | "household",
+    householdId: dto.householdId ?? null,
+    currency: normalizeCurrency(dto.currency, "RUB"),
+    manualAmount: money(dto.manualAmount, dto.currency),
+    accountsTotal: money(dto.linkedAccountsTotal, dto.currency),
+    totalAmount: money(dto.currentBalanceTotal, dto.currency),
+    isInvestment: dto.isInvestment,
+    assetType: mapAccountKind(dto.assetType) as AssetCategoryType,
+    accountCount: dto.accountCount
+  };
+}
+
+function mapInvestmentTotal(dto: InvestmentTotalDto): InvestmentsByCurrency {
+  return {
+    currency: normalizeCurrency(dto.currency, "RUB"),
+    investmentsTotal: money(dto.investmentsTotal, dto.currency)
+  };
+}
+
+function mapPlanningPlan(dto: PlanningPlanDto): PlanningPlan {
+  const currency = normalizeCurrency(dto.currency, "RUB");
+  return {
+    id: dto.id,
+    scope: dto.scope,
+    month: dto.month,
+    currency,
+    householdId: dto.householdId ?? null,
+    totalPlannedIncome: money(dto.summary.totalPlannedIncome, currency),
+    previousMonthSurplus: money(dto.summary.previousMonthSurplus, currency),
+    allocatedTotal: money(dto.summary.totalAllocatedAmount, currency),
+    remainingAmount: money(dto.summary.unallocatedAmount, currency),
+    overallocatedAmount: money(
+      Number(dto.summary.totalAllocatedAmount) - Number(dto.summary.totalPlannedIncome) > 0
+        ? Number(dto.summary.totalAllocatedAmount) - Number(dto.summary.totalPlannedIncome)
+        : 0,
+      currency
+    ),
+    isUnderallocated: dto.summary.underallocated,
+    isOverallocated: dto.summary.overallocated,
+    incomeSources: (dto.incomeSources ?? []).map(mapPlanningIncomeSource),
+    allocations: (dto.allocations ?? []).map(mapPlanningAllocation),
+    version: dto.version
+  };
+}
+
+function mapPlanningIncomeSource(dto: PlanningIncomeSourceDto): PlanningIncomeSource {
+  return {
+    id: dto.id,
+    planId: dto.planId,
+    amount: money(dto.amount, ""),
+    source: dto.source,
+    description: dto.description ?? null,
+    dayOfMonth: dto.dayOfMonth,
+    confirmed: dto.confirmationState === "confirmed",
+    effectiveDate: dto.effectiveDate ?? null,
+    version: dto.version
+  };
+}
+
+function mapPlanningAllocation(dto: PlanningAllocationDto): PlanningAllocation {
+  return {
+    id: dto.id,
+    planId: dto.planId,
+    targetType: dto.targetType as AllocationTargetType,
+    targetId: dto.targetId ?? null,
+    targetSnapshot: dto.targetSnapshot ?? null,
+    requiresAttention: dto.requiresAttention,
+    attentionReason: dto.attentionReason ?? null,
+    comment: dto.comment ?? null,
+    allocationMode: dto.allocationMode as AllocationMode,
+    allocationValue: Number(dto.allocationValue),
+    calculatedAmount: money(dto.calculatedAmount, ""),
+    recurrenceType: (dto.recurrenceType as AllocationRecurrenceType) ?? null,
+    isSavingsGoal: dto.isSavingsGoal,
+    goalTargetAmount: dto.goalTargetAmount != null ? money(dto.goalTargetAmount, "") : null,
+    goalDueMonth: dto.goalDueMonth ?? null,
+    goalMonthlyAmount: dto.goalMonthlyAmount != null ? money(dto.goalMonthlyAmount, "") : null,
+    actualAmount: dto.actualAmount != null ? money(dto.actualAmount, "") : null,
+    varianceAmount: dto.varianceAmount != null ? money(dto.varianceAmount, "") : null,
+    progressPercent: dto.progressPercent ?? null,
+    progressStatus: (dto.progressStatus as AllocationProgressStatus) ?? null,
+    status: dto.status ?? null,
+    version: dto.version
+  };
+}
+
 function mapReport(
   report: ReportSummaryDto,
   fallbackCurrency: CurrencyCode,
@@ -1166,7 +1814,7 @@ function normalizeCurrency(
   currency: string,
   fallback: CurrencyCode
 ): CurrencyCode {
-  if (currency === "RUB" || currency === "USD" || currency === "EUR") {
+  if (currency === "RUB" || currency === "USD" || currency === "EUR" || currency === "XAU") {
     return currency;
   }
 
@@ -1198,6 +1846,7 @@ function transactionTypeLabel(type: TransactionDto["transactionType"]): string {
 }
 
 const reportModeLabels: Record<ReportMode, string> = {
+  personal: "Личное",
   shared_family_report: "Общее",
   combined_viewer_overview: "Обзор"
 };

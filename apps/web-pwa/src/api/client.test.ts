@@ -953,6 +953,647 @@ describe("LiveFinanceApiClient", () => {
     );
     expect(document.cookie).not.toContain("finance_csrf=");
   });
+
+  it("updates an operation with provided fields instead of hardcoded values", async () => {
+    document.cookie = "finance_csrf=csrf-op; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/transactions/tx-1" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          amount: "99.5000",
+          description: "Updated lunch",
+          categoryId: "cat-2",
+          accountId: "acc-2",
+          transactionDate: "2026-06-10",
+          version: 3
+        });
+        return jsonResponse({
+          data: {
+            id: "tx-1",
+            transactionType: "expense",
+            accountId: "acc-2",
+            counterpartyAccountId: null,
+            categoryId: "cat-2",
+            amount: "99.5000",
+            currency: "RUB",
+            occurredAt: "2026-06-10T12:00:00Z",
+            transactionDate: "2026-06-10",
+            description: "Updated lunch",
+            sourceType: "manual",
+            version: 4
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+    const result = await client.updateOperation({
+      transactionId: "tx-1",
+      amount: 99.5,
+      description: "Updated lunch",
+      categoryId: "cat-2",
+      accountId: "acc-2",
+      occurredDate: "2026-06-10",
+      version: 3
+    });
+    expect(result).toMatchObject({
+      id: "tx-1",
+      amount: { value: -99.5, currency: "RUB" },
+      date: "2026-06-10"
+    });
+  });
+
+  it("deletes an operation via DELETE endpoint", async () => {
+    document.cookie = "finance_csrf=csrf-del; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/transactions/tx-del" && init?.method === "DELETE") {
+        return jsonResponse(null, 204);
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+    await client.deleteOperation("tx-del");
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://api.test/api/v1/transactions/tx-del",
+      expect.objectContaining({ method: "DELETE" })
+    );
+  });
+
+  it("updates a transfer with provided fields instead of hardcoded values", async () => {
+    document.cookie = "finance_csrf=csrf-tf; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/transactions/tx-tf" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          amount: "25.0000",
+          description: "Updated transfer",
+          version: 1
+        });
+        return jsonResponse({
+          data: {
+            id: "tx-tf",
+            transactionType: "transfer",
+            accountId: "acc-1",
+            counterpartyAccountId: "acc-2",
+            categoryId: null,
+            amount: "25.0000",
+            currency: "RUB",
+            occurredAt: "2026-06-10T12:00:00Z",
+            transactionDate: "2026-06-10",
+            description: "Updated transfer",
+            sourceType: "manual",
+            version: 2
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+    const result = await client.updateTransfer({
+      transactionId: "tx-tf",
+      amount: 25,
+      description: "Updated transfer",
+      version: 1
+    });
+    expect(result).toMatchObject({
+      id: "tx-tf",
+      amount: { value: 25, currency: "RUB" }
+    });
+  });
+
+  it("updates account with name, balance, currency, and assetCategoryId", async () => {
+    document.cookie = "finance_csrf=csrf-acc; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/accounts/acc-1" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          name: "Updated Wallet",
+          currentBalance: "500.75",
+          currency: "USD",
+          assetCategoryId: "ac-1",
+          version: 2
+        });
+        return jsonResponse({
+          data: {
+            id: "acc-1",
+            name: "Updated Wallet",
+            accountType: "cash",
+            ownershipType: "personal",
+            ownerUserId: "user-1",
+            householdId: null,
+            currency: "USD",
+            currentBalance: "500.75",
+            assetCategoryId: "ac-1",
+            status: "active",
+            version: 3
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+    const result = await client.updateAccount({
+      accountId: "acc-1",
+      name: "Updated Wallet",
+      balance: 500.75,
+      currency: "USD",
+      assetCategoryId: "ac-1",
+      version: 2
+    });
+    expect(result).toMatchObject({
+      id: "acc-1",
+      name: "Updated Wallet",
+      assetCategoryId: "ac-1"
+    });
+  });
+
+  it("lists, creates, updates, archives, and restores asset categories", async () => {
+    document.cookie = "finance_csrf=csrf-ac; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+
+      if (path.startsWith("/api/v1/asset-categories?") && init?.method === "GET") {
+        return jsonResponse({
+          items: [
+            {
+              id: "ac-1",
+              name: "Brokerage",
+              scopeType: "personal",
+              householdId: null,
+              currency: "USD",
+              assetType: "brokerage",
+              manualAmount: "5000.0000",
+              isInvestment: true,
+              recordStatus: "active",
+              version: 1
+            }
+          ]
+        });
+      }
+
+      if (path === "/api/v1/asset-categories" && init?.method === "POST") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-ac");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed.name).toBe("Gold");
+        expect(parsed.scopeType).toBe("personal");
+        expect(parsed.currency).toBe("XAU");
+        expect(parsed.isInvestment).toBe(true);
+        return jsonResponse(
+          {
+            data: {
+              id: "ac-new",
+              name: "Gold",
+              scopeType: "personal",
+              householdId: null,
+              currency: "XAU",
+              assetType: "metal",
+              manualAmount: "0.0000",
+              isInvestment: true,
+              recordStatus: "active",
+              version: 1
+            }
+          },
+          201
+        );
+      }
+
+      if (path === "/api/v1/asset-categories/ac-new" && init?.method === "PATCH") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-ac");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed.manualAmount).toBe("1000.0000");
+        expect(parsed.version).toBe(1);
+        return jsonResponse({
+          data: {
+            id: "ac-new",
+            name: "Gold",
+            scopeType: "personal",
+            householdId: null,
+            currency: "XAU",
+            assetType: "metal",
+            manualAmount: "1000.0000",
+            isInvestment: true,
+            recordStatus: "active",
+            version: 2
+          }
+        });
+      }
+
+      if (path === "/api/v1/asset-categories/ac-new/archive" && init?.method === "POST") {
+        return jsonResponse({
+          data: {
+            id: "ac-new",
+            name: "Gold",
+            scopeType: "personal",
+            currency: "XAU",
+            assetType: "metal",
+            manualAmount: "1000.0000",
+            isInvestment: true,
+            recordStatus: "archived",
+            version: 3
+          }
+        });
+      }
+
+      if (path === "/api/v1/asset-categories/ac-new/restore" && init?.method === "POST") {
+        return jsonResponse({
+          data: {
+            id: "ac-new",
+            name: "Gold",
+            scopeType: "personal",
+            currency: "XAU",
+            assetType: "metal",
+            manualAmount: "1000.0000",
+            isInvestment: true,
+            recordStatus: "active",
+            version: 4
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const listed = await client.listAssetCategories();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: "ac-1",
+      name: "Brokerage",
+      isInvestment: true,
+      manualAmount: { value: 5000, currency: "USD" }
+    });
+
+    const created = await client.createAssetCategory({
+      name: "Gold",
+      scopeType: "personal",
+      currency: "XAU",
+      isInvestment: true,
+      assetType: "metal"
+    });
+    expect(created).toMatchObject({
+      id: "ac-new",
+      manualAmount: { value: 0, currency: "XAU" }
+    });
+
+    const updated = await client.updateAssetCategory({
+      assetCategoryId: "ac-new",
+      manualAmount: 1000,
+      version: 1
+    });
+    expect(updated.manualAmount.value).toBe(1000);
+
+    const archived = await client.archiveAssetCategory("ac-new");
+    expect(archived.recordStatus).toBe("archived");
+
+    const restored = await client.restoreAssetCategory("ac-new");
+    expect(restored.recordStatus).toBe("active");
+  });
+
+  it("returns null when planning plan is not found for scope and month", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path.startsWith("/api/v1/planning/plans?")) {
+        return jsonResponse({ error: { code: "RESOURCE_NOT_FOUND" } }, 404);
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+    const result = await client.listPlanningPlans("personal", "2026-12");
+    expect(result).toBeNull();
+  });
+
+  it("manages planning plans including CRUD, income sources, allocations, and copy", async () => {
+    document.cookie = "finance_csrf=csrf-plan; path=/";
+    const planDtoData = (overrides: Record<string, unknown> = {}) => ({
+      id: "plan-1",
+      scope: "personal",
+      householdId: null,
+      month: "2026-07",
+      currency: "RUB",
+      incomeSources: [],
+      allocations: [],
+      summary: {
+        totalPlannedIncome: "100000.0000",
+        totalConfirmedIncome: "0.0000",
+        totalAllocatedAmount: "50000.0000",
+        unallocatedAmount: "50000.0000",
+        previousMonthSurplus: "0.0000",
+        underallocated: false,
+        overallocated: false
+      },
+      version: 1,
+      ...overrides
+    });
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+
+      if (path.startsWith("/api/v1/planning/plans?scope=personal") && init?.method === "GET") {
+        return jsonResponse({ data: planDtoData() });
+      }
+
+      if (path.startsWith("/api/v1/planning/plans/history") && init?.method === "GET") {
+        return jsonResponse({
+          items: [
+            { id: "plan-1", scope: "personal", month: "2026-07", currency: "RUB", summary: planDtoData().summary, version: 1 }
+          ]
+        });
+      }
+
+      if (path === "/api/v1/planning/plans" && init?.method === "POST") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-plan");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          scope: "personal",
+          month: "2026-07",
+          currency: "RUB"
+        });
+        return jsonResponse({ data: planDtoData() }, 201);
+      }
+
+      if (path === "/api/v1/planning/plans/plan-1" && init?.method === "GET") {
+        return jsonResponse({ data: planDtoData() });
+      }
+
+      if (path === "/api/v1/planning/plans/plan-1/income-sources" && init?.method === "POST") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-plan");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed.amount).toBe("50000.0000");
+        expect(parsed.source).toBe("Salary");
+        expect(parsed.dayOfMonth).toBe(5);
+        return jsonResponse(
+          {
+            data: {
+              id: "is-1",
+              planId: "plan-1",
+              amount: "50000.0000",
+              source: "Salary",
+              description: "Main salary",
+              dayOfMonth: 5,
+              effectiveDate: "2026-07-05",
+              confirmationState: "planned",
+              version: 1
+            }
+          },
+          201
+        );
+      }
+
+      if (path === "/api/v1/planning/income-sources/is-1" && init?.method === "PATCH") {
+        return jsonResponse({
+          data: {
+            id: "is-1",
+            planId: "plan-1",
+            amount: "55000.0000",
+            source: "Salary",
+            description: "Updated salary",
+            dayOfMonth: 5,
+            effectiveDate: "2026-07-05",
+            confirmationState: "planned",
+            version: 2
+          }
+        });
+      }
+
+      if (path === "/api/v1/planning/income-sources/is-1/confirm" && init?.method === "POST") {
+        return jsonResponse({
+          data: {
+            id: "is-1",
+            planId: "plan-1",
+            amount: "55000.0000",
+            source: "Salary",
+            dayOfMonth: 5,
+            confirmationState: "confirmed",
+            version: 3
+          }
+        });
+      }
+
+      if (path === "/api/v1/planning/income-sources/is-1" && init?.method === "DELETE") {
+        return jsonResponse(null, 204);
+      }
+
+      if (path === "/api/v1/planning/plans/plan-1/allocations" && init?.method === "POST") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-plan");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed.targetType).toBe("expense_category");
+        expect(parsed.targetId).toBe("cat-1");
+        expect(parsed.allocationMode).toBe("amount");
+        expect(parsed.allocationValue).toBe("30000.0000");
+        return jsonResponse(
+          {
+            data: {
+              id: "alloc-1",
+              planId: "plan-1",
+              targetType: "expense_category",
+              targetId: "cat-1",
+              targetSnapshot: { name: "Food" },
+              requiresAttention: false,
+              allocationMode: "amount",
+              allocationValue: "30000.0000",
+              calculatedAmount: "30000.0000",
+              recurrenceType: "regular",
+              isSavingsGoal: false,
+              actualAmount: "0.0000",
+              varianceAmount: "-30000.0000",
+              status: "no_actuals",
+              version: 1
+            }
+          },
+          201
+        );
+      }
+
+      if (path === "/api/v1/planning/allocations/alloc-1" && init?.method === "PATCH") {
+        return jsonResponse({
+          data: {
+            id: "alloc-1",
+            planId: "plan-1",
+            targetType: "expense_category",
+            targetId: "cat-1",
+            requiresAttention: false,
+            allocationMode: "amount",
+            allocationValue: "35000.0000",
+            calculatedAmount: "35000.0000",
+            recurrenceType: "regular",
+            isSavingsGoal: false,
+            actualAmount: "0.0000",
+            varianceAmount: "-35000.0000",
+            status: "no_actuals",
+            version: 2
+          }
+        });
+      }
+
+      if (path === "/api/v1/planning/allocations/alloc-1" && init?.method === "DELETE") {
+        return jsonResponse(null, 204);
+      }
+
+      if (path === "/api/v1/planning/plans/plan-1/copy" && init?.method === "POST") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-plan");
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed.targetMonth).toBe("2026-08");
+        return jsonResponse({ data: planDtoData({ id: "plan-2", month: "2026-08" }) }, 201);
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const plans = await client.listPlanningPlans("personal", "2026-07");
+    expect(plans).not.toBeNull();
+    expect(plans!.month).toBe("2026-07");
+
+    const history = await client.listPlanningPlanHistory("personal");
+    expect(history).toHaveLength(1);
+
+    const created = await client.createPlanningPlan({
+      scope: "personal",
+      month: "2026-07",
+      currency: "RUB"
+    });
+    expect(created.id).toBe("plan-1");
+
+    const retrieved = await client.getPlanningPlan("plan-1");
+    expect(retrieved.id).toBe("plan-1");
+
+    const income = await client.createPlanningIncomeSource({
+      planId: "plan-1",
+      amount: 50000,
+      source: "Salary",
+      description: "Main salary",
+      dayOfMonth: 5
+    });
+    expect(income.amount.value).toBe(50000);
+
+    const updatedIncome = await client.updatePlanningIncomeSource({
+      incomeSourceId: "is-1",
+      amount: 55000,
+      description: "Updated salary"
+    });
+    expect(updatedIncome.amount.value).toBe(55000);
+
+    const confirmed = await client.confirmPlanningIncomeSource("is-1");
+    expect(confirmed.confirmed).toBe(true);
+
+    await client.deletePlanningIncomeSource("is-1");
+
+    const allocation = await client.createPlanningAllocation({
+      planId: "plan-1",
+      targetType: "expense_category",
+      targetId: "cat-1",
+      allocationMode: "amount",
+      allocationValue: 30000
+    });
+    expect(allocation.allocationValue).toBe(30000);
+
+    const updatedAlloc = await client.updatePlanningAllocation({
+      allocationId: "alloc-1",
+      allocationValue: 35000
+    });
+    expect(updatedAlloc.allocationValue).toBe(35000);
+
+    await client.deletePlanningAllocation("alloc-1");
+
+    const copied = await client.copyPlanningPlan({
+      planId: "plan-1",
+      targetMonth: "2026-08"
+    });
+    expect(copied.month).toBe("2026-08");
+  });
+
+  it("retrieves account balances report with asset category groups and investments", async () => {
+    document.cookie = "finance_csrf=csrf-report; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path.startsWith("/api/v1/reports/account-balances?") && init?.method === "GET") {
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("currency")).toBe("USD");
+        return jsonResponse({
+          data: {
+            assetCategoryGroups: [
+              {
+                assetCategoryId: "ac-1",
+                assetCategoryName: "Brokerage",
+                assetType: "brokerage",
+                scopeType: "personal",
+                householdId: null,
+                currency: "USD",
+                manualAmount: "5000.0000",
+                linkedAccountsTotal: "45000.0000",
+                currentBalanceTotal: "50000.0000",
+                accountCount: 2,
+                isInvestment: true
+              }
+            ],
+            investmentsByCurrency: [
+              { currency: "USD", investmentsTotal: "50000.0000" }
+            ],
+            totalsByCurrency: [
+              { currency: "USD", netWorthTotal: "150000.0000" }
+            ]
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const report = await client.getAccountBalancesReport({
+      reportMode: "personal",
+      currency: "USD"
+    });
+
+    expect(report.assetCategoryGroups).toHaveLength(1);
+    expect(report.assetCategoryGroups[0]).toMatchObject({
+      assetCategoryId: "ac-1",
+      name: "Brokerage",
+      isInvestment: true,
+      totalAmount: { value: 50000, currency: "USD" }
+    });
+    expect(report.investmentsByCurrency[0]).toMatchObject({
+      currency: "USD",
+      investmentsTotal: { value: 50000, currency: "USD" }
+    });
+    expect(report.investmentsTotal).toMatchObject({
+      value: 150000,
+      currency: "USD"
+    });
+  });
 });
 
 function actor() {

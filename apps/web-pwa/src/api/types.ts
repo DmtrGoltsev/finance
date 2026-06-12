@@ -1,4 +1,4 @@
-export type CurrencyCode = "RUB" | "USD" | "EUR";
+export type CurrencyCode = "RUB" | "USD" | "EUR" | "XAU";
 
 export type MoneyAmount = {
   value: number;
@@ -25,6 +25,7 @@ export type AccountSummary = {
   status?: "active" | "archived" | "deleted";
   version?: number;
   balance: MoneyAmount;
+  assetCategoryId?: string | null;
 };
 
 export type CategoryDirection = "income" | "expense";
@@ -140,6 +141,7 @@ export type TransferSummary = {
 };
 
 export type ReportMode =
+  | "personal"
   | "shared_family_report"
   | "combined_viewer_overview";
 
@@ -159,6 +161,210 @@ export type SessionSnapshot = {
   householdId: string | null;
 };
 
+export type RecordStatus = "active" | "archived" | "deleted";
+
+export type AssetCategoryScope = "personal" | "household";
+export type AssetCategoryType = AccountKind;
+
+export type AssetCategory = {
+  id: string;
+  name: string;
+  scopeType: AssetCategoryScope;
+  householdId?: string | null;
+  ownerUserId?: string | null;
+  currency: CurrencyCode;
+  manualAmount: MoneyAmount;
+  isInvestment: boolean;
+  assetType: AssetCategoryType;
+  iconKey?: string | null;
+  recordStatus: RecordStatus;
+  version?: number;
+};
+
+export type AssetCategoryGroup = {
+  assetCategoryId: string;
+  name: string;
+  scopeType: AssetCategoryScope;
+  householdId?: string | null;
+  currency: CurrencyCode;
+  manualAmount: MoneyAmount;
+  accountsTotal: MoneyAmount;
+  totalAmount: MoneyAmount;
+  isInvestment: boolean;
+  assetType: AssetCategoryType;
+  iconKey?: string | null;
+  accountCount?: number | null;
+};
+
+export type AssetCategoryCreateInput = {
+  name: string;
+  scopeType: AssetCategoryScope;
+  householdId?: string | null;
+  currency: CurrencyCode;
+  manualAmount?: number;
+  isInvestment?: boolean;
+  assetType?: AssetCategoryType;
+  iconKey?: string | null;
+};
+
+export type AssetCategoryUpdateInput = {
+  assetCategoryId: string;
+  name?: string;
+  manualAmount?: number;
+  assetType?: AssetCategoryType;
+  iconKey?: string | null;
+  isInvestment?: boolean;
+  version?: number;
+};
+
+export type PlanningScope = "personal" | "household";
+
+export type IncomeConfirmationState = "planned" | "confirmed";
+
+export type AllocationTargetType =
+  | "expense_category"
+  | "account"
+  | "asset"
+  | "investment_asset_category";
+
+export type AllocationMode = "amount" | "percent";
+export type AllocationRecurrenceType = "regular" | "one_off";
+
+export type AllocationProgressStatus =
+  | "on_track"
+  | "needs_attention"
+  | "no_actuals"
+  | "target_attention"
+  | "not_applicable";
+
+export type PlanningPlan = {
+  id: string;
+  scope: PlanningScope;
+  month: string;
+  currency: CurrencyCode;
+  householdId?: string | null;
+  totalPlannedIncome: MoneyAmount;
+  previousMonthSurplus: MoneyAmount;
+  allocatedTotal: MoneyAmount;
+  remainingAmount: MoneyAmount;
+  overallocatedAmount: MoneyAmount;
+  isUnderallocated: boolean;
+  isOverallocated: boolean;
+  status?: string | null;
+  progressStatus?: string | null;
+  progressPercent?: string | null;
+  incomeSources: PlanningIncomeSource[];
+  allocations: PlanningAllocation[];
+  version?: number;
+};
+
+export type PlanningIncomeSource = {
+  id: string;
+  planId: string;
+  amount: MoneyAmount;
+  source: string;
+  description?: string | null;
+  dayOfMonth: number;
+  confirmed: boolean;
+  effectiveDate?: string | null;
+  version?: number;
+};
+
+export type PlanningAllocation = {
+  id: string;
+  planId: string;
+  targetType: AllocationTargetType;
+  targetId?: string | null;
+  targetSnapshot?: Record<string, unknown> | null;
+  requiresAttention: boolean;
+  attentionReason?: string | null;
+  comment?: string | null;
+  allocationMode: AllocationMode;
+  allocationValue: number;
+  calculatedAmount: MoneyAmount;
+  recurrenceType?: AllocationRecurrenceType | null;
+  isSavingsGoal: boolean;
+  goalTargetAmount?: MoneyAmount | null;
+  goalDueMonth?: string | null;
+  goalMonthlyAmount?: MoneyAmount | null;
+  actualAmount?: MoneyAmount | null;
+  varianceAmount?: MoneyAmount | null;
+  progressPercent?: string | null;
+  progressStatus?: AllocationProgressStatus | null;
+  status?: string | null;
+  version?: number;
+};
+
+export type PlanningPlanCreateInput = {
+  scope: PlanningScope;
+  month: string;
+  currency: CurrencyCode;
+  householdId?: string | null;
+};
+
+export type PlanningPlanCopyInput = {
+  planId: string;
+  targetMonth: string;
+};
+
+export type PlanningIncomeSourceCreateInput = {
+  planId: string;
+  amount: number;
+  source: string;
+  description?: string | null;
+  dayOfMonth: number;
+  effectiveDate?: string | null;
+};
+
+export type PlanningIncomeSourceUpdateInput = {
+  incomeSourceId: string;
+  amount?: number;
+  source?: string;
+  description?: string | null;
+  dayOfMonth?: number;
+  confirmed?: boolean;
+  effectiveDate?: string | null;
+  version?: number;
+};
+
+export type PlanningAllocationCreateInput = {
+  planId: string;
+  targetType: AllocationTargetType;
+  targetId: string;
+  comment?: string | null;
+  allocationMode: AllocationMode;
+  allocationValue: number;
+  recurrenceType?: AllocationRecurrenceType | null;
+  isSavingsGoal?: boolean;
+  goalTargetAmount?: number | null;
+  goalDueMonth?: string | null;
+};
+
+export type PlanningAllocationUpdateInput = {
+  allocationId: string;
+  targetType?: AllocationTargetType;
+  targetId?: string;
+  comment?: string | null;
+  allocationMode?: AllocationMode;
+  allocationValue?: number;
+  recurrenceType?: AllocationRecurrenceType | null;
+  isSavingsGoal?: boolean;
+  goalTargetAmount?: number | null;
+  goalDueMonth?: string | null;
+  version?: number;
+};
+
+export type InvestmentsByCurrency = {
+  currency: CurrencyCode;
+  investmentsTotal: MoneyAmount;
+};
+
+export type AccountBalancesReport = {
+  assetCategoryGroups: AssetCategoryGroup[];
+  investmentsByCurrency: InvestmentsByCurrency[];
+  investmentsTotal?: MoneyAmount | null;
+};
+
 export type DashboardSnapshot = {
   session: SessionSnapshot;
   accounts: AccountSummary[];
@@ -166,4 +372,8 @@ export type DashboardSnapshot = {
   operations: OperationSummary[];
   transfers: TransferSummary[];
   reports: ReportSummary[];
+  assetCategories: AssetCategory[];
+  assetCategoryGroups: AssetCategoryGroup[];
+  investmentsByCurrency: InvestmentsByCurrency[];
+  investmentsTotal?: MoneyAmount | null;
 };

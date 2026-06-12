@@ -152,7 +152,11 @@ const financeSnapshot: DashboardSnapshot = {
       expense: { value: 99.75, currency: "USD" },
       balanceDelta: { value: 150.25, currency: "USD" }
     }
-  ]
+  ],
+  assetCategories: [],
+  assetCategoryGroups: [],
+  investmentsByCurrency: [],
+  investmentsTotal: null
 };
 
 function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
@@ -180,8 +184,31 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       confidence: 0.9
     })),
     deleteAccount: vi.fn(async () => undefined),
+    deleteOperation: vi.fn(async () => undefined),
     deleteCategory: vi.fn(async () => undefined),
     getDashboardSnapshot: vi.fn(async () => snapshot),
+    listAssetCategories: vi.fn(async () => []),
+    createAssetCategory: vi.fn(async () => ({} as any)),
+    updateAssetCategory: vi.fn(async () => ({} as any)),
+    archiveAssetCategory: vi.fn(async () => ({} as any)),
+    restoreAssetCategory: vi.fn(async () => ({} as any)),
+    listPlanningPlans: vi.fn(async () => null),
+    listPlanningPlanHistory: vi.fn(async () => []),
+    createPlanningPlan: vi.fn(async () => ({} as any)),
+    getPlanningPlan: vi.fn(async () => ({} as any)),
+    createPlanningIncomeSource: vi.fn(async () => ({} as any)),
+    updatePlanningIncomeSource: vi.fn(async () => ({} as any)),
+    confirmPlanningIncomeSource: vi.fn(async () => ({} as any)),
+    deletePlanningIncomeSource: vi.fn(async () => undefined),
+    createPlanningAllocation: vi.fn(async () => ({} as any)),
+    updatePlanningAllocation: vi.fn(async () => ({} as any)),
+    deletePlanningAllocation: vi.fn(async () => undefined),
+    copyPlanningPlan: vi.fn(async () => ({} as any)),
+    getAccountBalancesReport: vi.fn(async () => ({
+      assetCategoryGroups: [],
+      investmentsByCurrency: [],
+      investmentsTotal: null
+    })),
     loginWithPassword: vi.fn(async () => undefined),
     registerUser: vi.fn(
       async (): Promise<{ status: "authenticated" } | { status: "accepted" }> => ({
