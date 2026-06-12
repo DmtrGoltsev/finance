@@ -10,12 +10,25 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 ## Production
 
-- Commit: `808f7278a7cc29aaf6f179adb22b61ffdc6fa06a` / short `808f727`.
+- Backend commit: `26b487d61b7d2d6de704f0a632bcb08ff7f240f7` / short `26b487d` (deployed 2026-06-12).
+- PWA commit: `41daee8` / short `41daee8` (deployed 2026-06-12, includes self-service registration).
+- PWA release: `20260612T174000Z-41daee8`.
+- PWA assets: `index-Ceh7Xw-o.js`, `index-CcmCwWmn.css`.
 - Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`.
 - Tag alignment: open; aligning `v0.1.0-mvp` to production deployed commit evidence requires explicit owner approval before any retag/push/tag mutation.
-- Frontend: `http://<production-host>/finance/`.
-- Backend API: `http://<production-host>/finance-api`.
+- Frontend: `http://45.10.110.42/finance/`.
+- Backend API: `http://45.10.110.42/finance-api`.
 - Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
+
+## Self-service registration (2026-06-12)
+
+- Commit: `41daee8` (`feat(web-pwa): add self-service registration UI`).
+- PWA теперь поддерживает самостоятельную регистрацию через `POST /api/v1/users` с `transport: pwa_cookie`.
+- UI: переключатель Вход/Регистрация на login screen; валидация email, password >= 12, confirm match.
+- Duplicate/accepted: нейтральное сообщение с предложением войти, без раскрытия существования аккаунта.
+- Backend изменений не потребовалось.
+- Тесты: 48/48 PASS, production build PASS, deploy smoke PASS (HTTP 200, новые assets подтверждены).
+- Риск: пароли регистрации идут по plain HTTP; HTTPS/domain остается открытым security gate.
 
 ## Финальные доказательства
 
