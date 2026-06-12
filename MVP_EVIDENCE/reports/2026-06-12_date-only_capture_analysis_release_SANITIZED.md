@@ -7,13 +7,13 @@ Scope: backend date-only/report flow, PWA deploy, Android asset editing stabiliz
 
 ## Executive status
 
-Release status: PASS with one explicit residual BLOCKED item.
+Release status: PASS.
 
 - Backend production deploy: PASS.
 - PWA production deploy: PASS.
 - Android payment filter/date-only/analysis regression coverage: PASS by sanitized QA evidence.
 - Android asset edit regression: PASS after Metal manual amount fix.
-- Capture confirmation live Android confirmation: BLOCKED, not converted to PASS.
+- Capture confirmation live Android confirmation: PASS by later sanitized escalation evidence.
 - Secret handling: no secrets, tokens, cookies, passwords, raw auth payloads, raw OCR payloads, screenshots, or UI XML are stored in this curated report.
 
 ## Backend production deploy
@@ -69,19 +69,25 @@ Historical regression note:
 
 ## Capture confirmation status
 
-Status: BLOCKED.
+Status: PASS.
 
-No newer `MVP_EVIDENCE/date-only-capture-confirmation-escalation-*` sanitized report was present during release integration. The current source of truth is:
+Later escalation evidence closed the previously blocked live Android confirmation path. The current source of truth is:
 
-- `MVP_EVIDENCE/date-only-capture-confirmation-qa-20260612-100149/QA_REPORT_SANITIZED.md`.
+- `MVP_EVIDENCE/date-only-capture-confirmation-escalation-20260612-141033/QA_REPORT_SANITIZED.md`.
+- `MVP_EVIDENCE/date-only-capture-confirmation-escalation-20260612-141033/secret_scan_summary.json`.
 
-Exact unblock options from the sanitized report:
+Sanitized result:
 
-- Provide a parseable synthetic image fixture known to produce at least one candidate through the live backend OCR engine.
-- Provide an approved test-only seed endpoint/helper that creates a pending screenshot capture draft for the logged-in Android QA account without raw OCR/image input.
-- Restore access to `/etc/finance/qa-owner.env` with key `FINANCE_QA_PASSWORD`, or reset the remote registration rate limit, so one synthetic account can be driven through Android UI safely.
+- Emulator: `emulator-5554`.
+- APK SHA256: `6AEE934A8817055B1738B32E1468D2A4C5415502C224115F9C7953F63EC3D893`.
+- Flow: synthetic OCR candidate reached a pending capture confirmation row; amount edited to `45.67`; operation date edited to `2026-06-11`; after `Подтвердить`, the pending row disappeared and Operations showed the edited amount/date from the refreshed backend-backed dashboard.
+- Backend focused tests: `26 passed, 1 warning`.
+- Android focused JVM tests: `BUILD SUCCESSFUL`.
+- Escalation secret scan: PASS, finding_count `0`; no tokens, cookies, passwords, Authorization headers, raw auth bodies, screenshots, UI XML, or raw OCR payloads are stored in the curated report.
 
-Backend and Android unit/JVM coverage for update + confirm is reported PASS in the blocker report, but live Android confirmation did not complete and is not claimed as PASS.
+Historical blocker context:
+
+- `MVP_EVIDENCE/date-only-capture-confirmation-qa-20260612-100149/QA_REPORT_SANITIZED.md` remains historical pre-escalation `BLOCKED_CAPTURE_FIXTURE` evidence only.
 
 ## Safe QA account metadata
 
@@ -92,6 +98,6 @@ Backend and Android unit/JVM coverage for update + confirm is reported PASS in t
 
 ## Residual risks
 
-- Capture confirmation live Android confirmation remains BLOCKED until one unblock path above is available.
+- Capture confirmation PASS is scoped to the escalation run on `emulator-5554` with an existing authenticated Android app session. It did not prove fresh login from credentials; a deterministic test-only seed/deep link or documented parseable OCR fixture remains useful future hardening.
 - APK is debug-signed, not release-signed.
 - Raw evidence directories remain intentionally local/ignored; only curated sanitized Markdown/JSON summaries are candidates for Git.
