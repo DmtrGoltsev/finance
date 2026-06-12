@@ -19,6 +19,7 @@ from app.authz import Actor, Membership, MembershipStatus
 from app.db.base import Base
 from app.db.models import (
     Account,
+    AccountBalanceSnapshot,
     AssetCategory,
     CaptureCategoryMapping,
     CaptureDraft,
@@ -46,6 +47,7 @@ TABLES = [
     DbMembership.__table__,
     AssetCategory.__table__,
     Account.__table__,
+    AccountBalanceSnapshot.__table__,
     Category.__table__,
     Transaction.__table__,
     CaptureDraft.__table__,
@@ -172,19 +174,27 @@ def _seed_fixture_graph(engine: Any, graph: dict[str, Any]) -> dict[str, Any]:
                 )
             )
         for label, account in accounts.items():
-            owner = actors[account["ownerActor"]]["canonicalId"] if account["ownerActor"] else None
-            household = households[account["household"]]["canonicalId"] if account["household"] else None
+            owner = (
+                actors[account["ownerActor"]]["canonicalId"] if account["ownerActor"] else None
+            )
+            household = (
+                households[account["household"]]["canonicalId"]
+                if account["household"]
+                else None
+            )
+            account_id = UUID(account["canonicalId"])
+            balance = Decimal("100.0000")
             session.add(
                 Account(
-                    id=UUID(account["canonicalId"]),
+                    id=account_id,
                     name=label,
                     account_type="cash",
                     ownership_type="personal" if account["scope"] == "personal" else "shared",
                     owner_user_id=UUID(owner) if owner else None,
                     household_id=UUID(household) if household else None,
                     currency=account["currency"],
-                    initial_balance_amount=Decimal("100.0000"),
-                    current_balance_amount=Decimal("100.0000"),
+                    initial_balance_amount=balance,
+                    current_balance_amount=balance,
                     record_status="active",
                     created_by_user_id=UUID(owner or actors["owner_a"]["canonicalId"]),
                     created_at=BASE_TIME,
@@ -192,9 +202,27 @@ def _seed_fixture_graph(engine: Any, graph: dict[str, Any]) -> dict[str, Any]:
                     version=1,
                 )
             )
+            session.add(
+                AccountBalanceSnapshot(
+                    id=uuid4(),
+                    account_id=account_id,
+                    snapshot_date=BASE_TIME.date(),
+                    balance_amount=balance,
+                    currency=account["currency"],
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                )
+            )
         for label, category in categories.items():
-            owner = actors[category["ownerActor"]]["canonicalId"] if category["ownerActor"] else None
-            household = households[category["household"]]["canonicalId"] if category["household"] else None
+            owner = (
+                actors[category["ownerActor"]]["canonicalId"] if category["ownerActor"] else None
+            )
+            household = (
+                households[category["household"]]["canonicalId"]
+                if category["household"]
+                else None
+            )
             session.add(
                 Category(
                     id=UUID(category["canonicalId"]),
@@ -226,6 +254,7 @@ def _seed_fixture_graph(engine: Any, graph: dict[str, Any]) -> dict[str, Any]:
                     amount=Decimal("10.0000") + Decimal(offset),
                     currency=account["currency"],
                     occurred_at=BASE_TIME + timedelta(minutes=offset),
+                    transaction_date=(BASE_TIME + timedelta(minutes=offset)).date(),
                     description=f"{label} fixture",
                     source_type="manual",
                     transfer_scope=None,
@@ -347,6 +376,46 @@ def test_db_backed_transaction_create_update_delete_restore(
     assert restored.status_code == 200
     assert after_restore.status_code == 200
     assert after_restore.json()["data"]["description"] == "manual db lifecycle updated"
+
+
+def test_db_backed_transaction_create_accepts_date_only_contract(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    account_id = transaction_graph["accounts"]["acc_a_cash"]
+    category_id = transaction_graph["categories"]["cat_a_food"]
+
+    with _client_for_actor(owner) as client:
+        created = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "8.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-05-18",
+                "occurredAt": "2026-05-17T23:30:00-03:00",
+                "description": "date-only wins",
+                "sourceType": "manual",
+            },
+        )
+        assert created.status_code == 201, created.text
+        transaction_id = created.json()["data"]["id"]
+        listed = client.get(
+            "/api/v1/transactions",
+            params={"startDate": "2026-05-18", "endDate": "2026-05-18"},
+        )
+        previous_day = client.get(
+            "/api/v1/transactions",
+            params={"startDate": "2026-05-17", "endDate": "2026-05-17"},
+        )
+
+    data = created.json()["data"]
+    assert data["transactionDate"] == "2026-05-18"
+    assert data["occurredAt"].startswith("2026-05-18T12:00:00")
+    assert transaction_id in {item["id"] for item in listed.json()["items"]}
+    assert transaction_id not in {item["id"] for item in previous_day.json()["items"]}
 
 
 def test_transaction_referenced_ids_and_shared_membership_are_enforced(

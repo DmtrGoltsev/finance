@@ -282,22 +282,22 @@ async def get_report_account_balances(
                 timezone=context.query.timezone,
                 items=[
                     AccountBalanceDto(
-                        account_id=account.id,
-                        account_name=account.name,
-                        account_type=account.account_type,
-                        ownership_type=account.ownership_type.value,
-                        household_id=account.household_id,
+                        account_id=row.account.id,
+                        account_name=row.account.name,
+                        account_type=row.account.account_type,
+                        ownership_type=row.account.ownership_type.value,
+                        household_id=row.account.household_id,
                         owner_user_id=(
-                            account.owner_user_id
-                            if account.owner_user_id == actor.user_id
+                            row.account.owner_user_id
+                            if row.account.owner_user_id == actor.user_id
                             else None
                         ),
-                        asset_category_id=account.asset_category_id,
-                        currency=account.currency,
-                        current_balance=account.current_balance,
-                        balance_as_of=context.generated_at,
+                        asset_category_id=row.account.asset_category_id,
+                        currency=row.account.currency,
+                        current_balance=row.account.current_balance,
+                        balance_as_of=row.balance_as_of,
                     )
-                    for account in svc.account_balances(context)
+                    for row in svc.account_balance_rows(context)
                 ],
                 balance_groups=[
                     _account_balance_group(group) for group in svc.balance_groups(context)

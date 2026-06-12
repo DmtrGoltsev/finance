@@ -303,6 +303,33 @@ def test_new_financial_account_types_are_accepted_without_weakening_personal_sco
         assert data["householdId"] is None
 
 
+def test_payment_account_flag_defaults_to_true_and_is_mutable(client_for_actor) -> None:
+    client = client_for_actor(ACTOR_A)
+
+    listed = client.get("/api/v1/accounts")
+    assert listed.status_code == 200
+    assert {item["isPaymentAccount"] for item in listed.json()["items"]} == {True}
+
+    created = client.post(
+        "/api/v1/accounts",
+        json={
+            "name": "Investment Display Only",
+            "accountType": "brokerage",
+            "ownershipType": "personal",
+            "currency": "RUB",
+            "initialBalance": "1.00",
+            "isPaymentAccount": False,
+        },
+    )
+    assert created.status_code == 201, created.text
+    data = created.json()["data"]
+    assert data["isPaymentAccount"] is False
+
+    updated = client.patch(f"/api/v1/accounts/{data['id']}", json={"isPaymentAccount": True})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["isPaymentAccount"] is True
+
+
 def test_update_blocks_ownership_fields_and_foreign_personal_mutation(client_for_actor) -> None:
     owner_client = client_for_actor(ACTOR_A)
     updated = owner_client.patch("/api/v1/accounts/acct-personal-a", json={"name": "Renamed"})

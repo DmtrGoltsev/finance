@@ -1893,7 +1893,7 @@ components:
     AccountDto:
       type: object
       additionalProperties: false
-      required: [id, name, accountType, ownershipType, currency, initialBalance, currentBalance, status, createdByUserId, createdAt, updatedAt, version]
+      required: [id, name, accountType, ownershipType, currency, initialBalance, currentBalance, isPaymentAccount, status, createdByUserId, createdAt, updatedAt, version]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -1925,6 +1925,9 @@ components:
           $ref: '#/components/schemas/DecimalString'
         currentBalance:
           $ref: '#/components/schemas/DecimalString'
+        isPaymentAccount:
+          type: boolean
+          description: True when the account can be selected as an expense payment source, including capture-confirmed expenses. Income transactions are not blocked by this flag.
         status:
           $ref: '#/components/schemas/RecordStatus'
         createdByUserId:
@@ -1967,6 +1970,10 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         initialBalance:
           $ref: '#/components/schemas/DecimalString'
+        isPaymentAccount:
+          type: boolean
+          default: true
+          description: Defaults to true; set false for investment/display accounts that clients should omit from expense payment-source pickers. Income transactions are not blocked by this flag.
     AccountUpdateRequest:
       type: object
       additionalProperties: false
@@ -1988,6 +1995,9 @@ components:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
           description: Set or clear the optional asset category link.
+        isPaymentAccount:
+          type: boolean
+          description: When false, clients should omit this account from expense payment-source pickers. Income transactions are not blocked by this flag.
         status:
           $ref: '#/components/schemas/RecordStatus'
         version:
@@ -1997,7 +2007,7 @@ components:
     AccountAutocompleteDto:
       type: object
       additionalProperties: false
-      required: [id, name, accountType, ownershipType, currency]
+      required: [id, name, accountType, ownershipType, isPaymentAccount, currency]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -2011,6 +2021,9 @@ components:
           anyOf:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
+        isPaymentAccount:
+          type: boolean
+          description: True when the account can be offered as an expense payment source; income selection is not restricted by this flag.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
     AssetCategoryDto:
@@ -2448,7 +2461,7 @@ components:
     TransactionDto:
       type: object
       additionalProperties: false
-      required: [id, transactionType, accountId, amount, currency, occurredAt, sourceType, createdByUserId, createdAt, updatedAt, version]
+      required: [id, transactionType, accountId, amount, currency, occurredAt, transactionDate, sourceType, createdByUserId, createdAt, updatedAt, version]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -2470,6 +2483,10 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. When transactionDate is supplied by the client, the server stores this as stable UTC noon for that date.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Date-only operation date used for reporting and month boundaries.
         description:
           type: [string, 'null']
           maxLength: 500
@@ -2504,7 +2521,7 @@ components:
     TransactionCreateRequest:
       type: object
       additionalProperties: false
-      required: [transactionType, accountId, amount, currency, occurredAt, sourceType]
+      required: [transactionType, accountId, amount, currency, sourceType]
       properties:
         transactionType:
           $ref: '#/components/schemas/TransactionType'
@@ -2522,11 +2539,16 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Required only when transactionDate is omitted.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Preferred date-only operation date. When both fields are supplied, transactionDate wins for reporting and occurredAt is normalized to UTC noon.
         description:
           type: string
           maxLength: 500
         sourceType:
           $ref: '#/components/schemas/SourceType'
+      description: transactionDate is preferred; legacy clients may omit it only when occurredAt is supplied.
     TransactionUpdateRequest:
       type: object
       additionalProperties: false
@@ -2545,6 +2567,9 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Ignored for reporting date when transactionDate is also supplied.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
         description:
           type: string
           maxLength: 500
@@ -2557,7 +2582,7 @@ components:
     TransactionAutocompleteDto:
       type: object
       additionalProperties: false
-      required: [id, transactionType, accountId, occurredAt, sourceType]
+      required: [id, transactionType, accountId, occurredAt, transactionDate, sourceType]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -2571,6 +2596,8 @@ components:
             - type: 'null'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
         sourceType:
           $ref: '#/components/schemas/SourceType'
     CaptureDraftDto:
@@ -2592,6 +2619,12 @@ components:
           anyOf:
             - $ref: '#/components/schemas/DateTime'
             - type: 'null'
+          description: Legacy compatible timestamp for the draft candidate.
+        occurredDate:
+          anyOf:
+            - $ref: '#/components/schemas/DateOnly'
+            - type: 'null'
+          description: Date-only operation date carried into confirmed transactionDate.
         amount:
           $ref: '#/components/schemas/DecimalString'
         currency:
@@ -2644,6 +2677,10 @@ components:
           $ref: '#/components/schemas/DateTime'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Ignored for confirmation date when occurredDate is also supplied.
+        occurredDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Preferred date-only operation date for draft review and confirmation.
         amount:
           $ref: '#/components/schemas/DecimalString'
         currency:
@@ -2680,6 +2717,12 @@ components:
           anyOf:
             - $ref: '#/components/schemas/DateTime'
             - type: 'null'
+          description: Legacy compatible timestamp. Ignored for confirmation date when occurredDate is also supplied.
+        occurredDate:
+          anyOf:
+            - $ref: '#/components/schemas/DateOnly'
+            - type: 'null'
+          description: Date-only operation date for edited draft confirmation.
         amount:
           $ref: '#/components/schemas/DecimalString'
         currency:
@@ -3087,7 +3130,8 @@ components:
         currentBalance:
           $ref: '#/components/schemas/DecimalString'
         balanceAsOf:
-          $ref: '#/components/schemas/DateTime'
+          $ref: '#/components/schemas/DateOnly'
+          description: Date of the durable balance snapshot used for this value, or the current account balance date when no asOfDate filter is supplied.
     AccountBalanceGroupDto:
       type: object
       additionalProperties: false

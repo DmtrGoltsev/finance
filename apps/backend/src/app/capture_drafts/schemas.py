@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -35,6 +35,7 @@ class CaptureDraftDto(ApiModel):
     capture_source: CaptureSource
     captured_at: datetime
     occurred_at: datetime | None = None
+    occurred_date: date | None = None
     amount: DecimalString
     currency: CurrencyCode
     description: OptionalShortText
@@ -58,6 +59,7 @@ class CaptureDraftCreateRequest(ApiModel):
     currency: CurrencyCode
     description: ShortText
     occurred_at: datetime | None = None
+    occurred_date: date | None = None
     merchant_name: SourceAppText | None = None
     account_id: ResourceId | None = None
     category_id: ResourceId | None = None
@@ -69,6 +71,7 @@ class CaptureDraftCreateRequest(ApiModel):
 
 class CaptureDraftUpdateRequest(ApiModel):
     occurred_at: datetime | None = None
+    occurred_date: date | None = None
     amount: DecimalString | None = None
     currency: CurrencyCode | None = None
     description: ShortText | None = None

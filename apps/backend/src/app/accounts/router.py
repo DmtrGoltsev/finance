@@ -61,6 +61,7 @@ def _account_dto(record: AccountRecord) -> AccountDto:
         owner_user_id=record.owner_user_id,
         household_id=record.household_id,
         asset_category_id=record.asset_category_id,
+        is_payment_account=record.is_payment_account,
         currency=record.currency,
         initial_balance=record.initial_balance,
         current_balance=record.current_balance,
@@ -81,6 +82,7 @@ def _autocomplete_dto(record: AccountRecord) -> AccountAutocompleteDto:
         account_type=record.account_type,
         ownership_type=record.ownership_type.value,
         household_id=record.household_id,
+        is_payment_account=record.is_payment_account,
         currency=record.currency,
     )
 

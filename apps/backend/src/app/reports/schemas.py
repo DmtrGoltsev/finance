@@ -108,7 +108,7 @@ class AccountBalanceDto(ApiModel):
     asset_category_id: ResourceId | None = None
     currency: CurrencyCode
     current_balance: MoneyAmount
-    balance_as_of: datetime
+    balance_as_of: date
 
 
 class AccountBalanceGroupDto(ApiModel):

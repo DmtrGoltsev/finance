@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 from app.accounts.repository import AccountRecord, AccountRepository, account_repository
@@ -106,8 +106,8 @@ class TransactionService:
         household_id: str | None,
         ownership_type: str | None,
         status: str | None,
-        start: datetime | None,
-        end: datetime | None,
+        start_date: date | None,
+        end_date: date | None,
         q: str | None,
         sort: str | None,
     ) -> tuple[list[TransactionRecord], str | None, bool]:
@@ -135,8 +135,8 @@ class TransactionService:
             category_id=category_id,
             transaction_type=transaction_type,
             status=effective_status,
-            start=start,
-            end=end,
+            start_date=start_date,
+            end_date=end_date,
             q=q,
             sort=sort,
         )
@@ -168,8 +168,8 @@ class TransactionService:
             household_id=None,
             ownership_type=None,
             status="active",
-            start=None,
-            end=None,
+            start_date=None,
+            end_date=None,
             q=q,
             sort="-occurredAt",
         )
@@ -200,6 +200,7 @@ class TransactionService:
             category_id=request.category_id,
         )
         self._validate_currency(account, request.currency)
+        transaction_date, occurred_at = _date_fields_for_create(request)
 
         decision = canCreateTransaction(
             actor,
@@ -220,7 +221,8 @@ class TransactionService:
             category_id=category.id if category is not None else None,
             amount=Decimal(request.amount),
             currency=request.currency,
-            occurred_at=_utc(request.occurred_at),
+            occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=request.description,
             source_type=str(request.source_type),
             transfer_scope=None,
@@ -320,6 +322,7 @@ class TransactionService:
         )
         if not decision.allowed:
             raise _service_error_for_decision(decision.reason)
+        transaction_date, occurred_at = _date_fields_for_update(record, request)
 
         updated = replace(
             record,
@@ -329,11 +332,8 @@ class TransactionService:
             category_id=category.id if category is not None else None,
             amount=Decimal(request.amount) if request.amount is not None else record.amount,
             currency=currency,
-            occurred_at=(
-                _utc(request.occurred_at)
-                if request.occurred_at is not None
-                else record.occurred_at
-            ),
+            occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=(
                 request.description if request.description is not None else record.description
             ),
@@ -464,6 +464,7 @@ class TransactionService:
             raise TransactionValidationError(DenialReason.TRANSFER_SCOPE_NOT_SUPPORTED)
 
         amount = Decimal(request.amount)
+        transaction_date, occurred_at = _date_fields_for_create(request)
         record = self._transactions.create(
             transaction_type="transfer",
             account_id=source.id,
@@ -471,7 +472,8 @@ class TransactionService:
             category_id=None,
             amount=amount,
             currency=request.currency,
-            occurred_at=_utc(request.occurred_at),
+            occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=request.description,
             source_type=str(request.source_type),
             transfer_scope=decision.transfer_scope.value,
@@ -527,6 +529,7 @@ class TransactionService:
 
         old_source, old_counterparty = self._require_transfer_accounts_for_existing(actor, record)
         amount = Decimal(request.amount) if request.amount is not None else record.amount
+        transaction_date, occurred_at = _date_fields_for_update(record, request)
         updated = replace(
             record,
             account_id=source.id,
@@ -534,11 +537,8 @@ class TransactionService:
             category_id=None,
             amount=amount,
             currency=currency,
-            occurred_at=(
-                _utc(request.occurred_at)
-                if request.occurred_at is not None
-                else record.occurred_at
-            ),
+            occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=(
                 request.description if request.description is not None else record.description
             ),
@@ -807,6 +807,36 @@ def _decode_cursor(cursor: str | None) -> int:
     if value < 0:
         raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
     return value
+
+
+def _date_fields_for_create(request: TransactionCreateRequest) -> tuple[date, datetime]:
+    if request.transaction_date is not None:
+        return request.transaction_date, _stable_utc_noon(request.transaction_date)
+    if request.occurred_at is None:
+        raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+    occurred_at = _utc(request.occurred_at)
+    return occurred_at.date(), occurred_at
+
+
+def _date_fields_for_update(
+    record: TransactionRecord,
+    request: TransactionUpdateRequest,
+) -> tuple[date, datetime]:
+    if "transaction_date" in request.model_fields_set:
+        if request.transaction_date is None:
+            raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+        return request.transaction_date, _stable_utc_noon(request.transaction_date)
+    if request.occurred_at is not None:
+        occurred_at = _utc(request.occurred_at)
+        return occurred_at.date(), occurred_at
+    if record.transaction_date is not None:
+        return record.transaction_date, record.occurred_at
+    occurred_at = _utc(record.occurred_at)
+    return occurred_at.date(), occurred_at
+
+
+def _stable_utc_noon(value: date) -> datetime:
+    return datetime.combine(value, time(hour=12), tzinfo=UTC)
 
 
 def _utc(value: datetime) -> datetime:

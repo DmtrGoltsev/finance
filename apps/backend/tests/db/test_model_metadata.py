@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "memberships",
     "invites",
     "accounts",
+    "account_balance_snapshots",
     "asset_categories",
     "categories",
     "transactions",
@@ -51,6 +52,7 @@ class ModelMetadataTests(unittest.TestCase):
         for table_name, column_name in (
             ("accounts", "initial_balance_amount"),
             ("accounts", "current_balance_amount"),
+            ("account_balance_snapshots", "balance_amount"),
             ("asset_categories", "manual_amount"),
             ("transactions", "amount"),
             ("capture_drafts", "amount"),
@@ -139,6 +141,11 @@ class ModelMetadataTests(unittest.TestCase):
         for table_name, index_name in (
             ("memberships", "ix_memberships_active_user_household"),
             ("accounts", "ix_accounts_owner_user_status"),
+            ("accounts", "ix_accounts_payment_status"),
+            (
+                "account_balance_snapshots",
+                "ix_account_balance_snapshots_account_date_created",
+            ),
             ("accounts", "ix_accounts_asset_category_id"),
             ("asset_categories", "ix_asset_categories_owner_status"),
             ("accounts", "ix_accounts_household_status"),

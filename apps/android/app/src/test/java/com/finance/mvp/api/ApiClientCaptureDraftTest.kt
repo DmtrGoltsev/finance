@@ -25,7 +25,7 @@ class ApiClientCaptureDraftTest {
                     "description": "Test Market",
                     "merchantName": "Test Market",
                     "capturedAt": "2026-05-23T10:00:00Z",
-                    "occurredAt": "2026-05-23T10:00:00Z",
+                    "occurredDate": "2026-05-23",
                     "captureSource": "screenshot",
                     "confidence": "0.9000",
                     "sourceAppPackage": "",
@@ -48,7 +48,7 @@ class ApiClientCaptureDraftTest {
                     description = "Test Market",
                     merchantName = "Test Market",
                     capturedAt = "2026-05-23T10:00:00Z",
-                    occurredAt = "2026-05-23T10:00:00Z",
+                    occurredDate = "2026-05-23",
                     captureSource = "screenshot",
                     idempotencyKey = "capture-v1:test",
                     confidence = 0.9,
@@ -67,6 +67,8 @@ class ApiClientCaptureDraftTest {
             val json = JSONObject(request.substringAfter("\r\n\r\n"))
             assertEquals("12.34", json.getString("amount"))
             assertEquals("screenshot", json.getString("captureSource"))
+            assertEquals("2026-05-23", json.getString("occurredDate"))
+            assertFalse(json.has("occurredAt"))
             assertEquals("0.9000", json.getString("confidence"))
             assertEquals("cat-food", json.getString("categoryId"))
             listOf(
@@ -85,11 +87,16 @@ class ApiClientCaptureDraftTest {
     @Test
     fun updateCaptureDraftPayloadIncludesAccountCategoryAndDecimalConfidence() {
         val json = CaptureDraftUpdateRequest(
+            amount = "12.34",
+            occurredDate = "2026-05-24",
             confidence = 0.87654,
             accountId = "acc-card",
             categoryId = "cat-food",
         ).toJsonForApi()
 
+        assertEquals("12.34", json.getString("amount"))
+        assertEquals("2026-05-24", json.getString("occurredDate"))
+        assertFalse(json.has("occurredAt"))
         assertEquals("0.8765", json.getString("confidence"))
         assertEquals("acc-card", json.getString("accountId"))
         assertEquals("cat-food", json.getString("categoryId"))
@@ -124,6 +131,82 @@ class ApiClientCaptureDraftTest {
         }
     }
 
+    @Test
+    fun createManualTransactionPostsTransactionDate() = runBlocking {
+        withJsonCaptureServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "id": "txn-1",
+                    "transactionType": "expense",
+                    "amount": "19.50",
+                    "currency": "USD",
+                    "transactionDate": "2026-06-05",
+                    "description": "Food",
+                    "accountId": "acc-card",
+                    "categoryId": "cat-food",
+                    "sourceType": "manual",
+                    "version": 1
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createDemoTransaction(
+                account = AccountSummary("Card", "card", "personal", "USD", "10.00", id = "acc-card"),
+                category = CategorySummary("Food", "expense", "personal", id = "cat-food"),
+                transactionType = "expense",
+                amount = "19.50",
+                transactionDate = "2026-06-05",
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val json = JSONObject(capturedRequest.get().substringAfter("\r\n\r\n"))
+            assertEquals("2026-06-05", json.getString("transactionDate"))
+            assertFalse(json.has("occurredAt"))
+        }
+    }
+
+    @Test
+    fun createAccountPostsPaymentAccountFlag() = runBlocking {
+        withJsonCaptureServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "id": "acc-save",
+                    "name": "Savings",
+                    "accountType": "deposit",
+                    "ownershipType": "personal",
+                    "currency": "USD",
+                    "currentBalance": "100.00",
+                    "isPaymentAccount": false,
+                    "version": 1
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createAccount(
+                name = "Savings",
+                currency = "USD",
+                initialBalance = "100.00",
+                accountType = "deposit",
+                householdId = null,
+                isPaymentAccount = false,
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val account = (result as ApiResult.Success).value
+            assertFalse(account.isPaymentAccount)
+            val json = JSONObject(capturedRequest.get().substringAfter("\r\n\r\n"))
+            assertEquals(false, json.getBoolean("isPaymentAccount"))
+        }
+    }
+
     private fun captureDraftEnvelope(status: String): String {
         return """
             {
@@ -135,7 +218,7 @@ class ApiClientCaptureDraftTest {
                 "description": "Test Market",
                 "merchantName": "Test Market",
                 "capturedAt": "2026-05-23T10:00:00Z",
-                "occurredAt": "2026-05-23T10:00:00Z",
+                "occurredDate": "2026-05-23",
                 "captureSource": "screenshot",
                 "confidence": "0.9000",
                 "sourceAppPackage": "",

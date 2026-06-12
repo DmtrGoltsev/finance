@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from threading import RLock
 
@@ -80,7 +80,14 @@ class CaptureDraftService:
             idempotency_key=request.idempotency_key,
             capture_source=str(request.capture_source),
             captured_at=_utc(request.captured_at),
-            occurred_at=_utc(request.occurred_at) if request.occurred_at else None,
+            occurred_at=_occurred_at_from_date_fields(
+                occurred_date=request.occurred_date,
+                occurred_at=request.occurred_at,
+            ),
+            occurred_date=_occurred_date_from_date_fields(
+                occurred_date=request.occurred_date,
+                occurred_at=request.occurred_at,
+            ),
             amount=Decimal(request.amount),
             currency=request.currency,
             description=request.description,
@@ -119,10 +126,22 @@ class CaptureDraftService:
 
         updated = record
         fields_set = request.model_fields_set
-        if "occurred_at" in fields_set:
+        if "occurred_date" in fields_set:
             updated = replace(
                 updated,
-                occurred_at=_utc(request.occurred_at) if request.occurred_at else None,
+                occurred_date=request.occurred_date,
+                occurred_at=(
+                    _stable_utc_noon(request.occurred_date)
+                    if request.occurred_date is not None
+                    else None
+                ),
+            )
+        elif "occurred_at" in fields_set:
+            occurred_at = _utc(request.occurred_at) if request.occurred_at else None
+            updated = replace(
+                updated,
+                occurred_at=occurred_at,
+                occurred_date=occurred_at.date() if occurred_at is not None else None,
             )
         if request.amount is not None:
             updated = replace(updated, amount=Decimal(request.amount))
@@ -190,6 +209,7 @@ class CaptureDraftService:
             amount=record.amount,
             currency=record.currency,
             occurred_at=record.occurred_at or record.captured_at,
+            transaction_date=_transaction_date_for_confirm(record),
             description=record.description,
             source_type=SourceType.MANUAL,
         )
@@ -263,6 +283,42 @@ def _require_user_id(actor: Actor) -> str:
 def _require_pending(record: CaptureDraftRecord) -> None:
     if record.status != "pending":
         raise CaptureDraftConflictError()
+
+
+def _occurred_date_from_date_fields(
+    *,
+    occurred_date: date | None,
+    occurred_at: datetime | None,
+) -> date | None:
+    if occurred_date is not None:
+        return occurred_date
+    if occurred_at is None:
+        return None
+    return _utc(occurred_at).date()
+
+
+def _occurred_at_from_date_fields(
+    *,
+    occurred_date: date | None,
+    occurred_at: datetime | None,
+) -> datetime | None:
+    if occurred_date is not None:
+        return _stable_utc_noon(occurred_date)
+    if occurred_at is None:
+        return None
+    return _utc(occurred_at)
+
+
+def _transaction_date_for_confirm(record: CaptureDraftRecord) -> date:
+    if record.occurred_date is not None:
+        return record.occurred_date
+    if record.occurred_at is not None:
+        return _utc(record.occurred_at).date()
+    return _utc(record.captured_at).date()
+
+
+def _stable_utc_noon(value: date) -> datetime:
+    return datetime.combine(value, time(hour=12), tzinfo=UTC)
 
 
 def _utc(value: datetime) -> datetime:

@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+/rules.md
 *.local
 *.secret
 *.key
@@ -127,3 +128,13 @@ MVP_EVIDENCE/**/*password*
 MVP_EVIDENCE/**/*secret*
 MVP_EVIDENCE/**/*session*
 MVP_EVIDENCE/**/*token*
+
+# Local project rules and raw MVP evidence. Keep curated sanitized reports trackable.
+/MVP_EVIDENCE/**
+!/MVP_EVIDENCE/**/
+!/MVP_EVIDENCE/README.md
+!/MVP_EVIDENCE/MVP_RELEASE_REPORT.md
+!/MVP_EVIDENCE/release-checklist.md
+!/MVP_EVIDENCE/reports-index.md
+!/MVP_EVIDENCE/reports/**
+!/MVP_EVIDENCE/**/*SANITIZED.md

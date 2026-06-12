@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 ResourceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
@@ -70,6 +70,7 @@ class TransactionDto(ApiModel):
     amount: DecimalString
     currency: CurrencyCode
     occurred_at: datetime
+    transaction_date: date
     description: Annotated[str, StringConstraints(max_length=500)] | None = None
     source_type: SourceType
     transfer_scope: str | None = None
@@ -89,9 +90,16 @@ class TransactionCreateRequest(ApiModel):
     category_id: ResourceId | None = None
     amount: DecimalString
     currency: CurrencyCode
-    occurred_at: datetime
+    occurred_at: datetime | None = None
+    transaction_date: date | None = None
     description: Annotated[str, StringConstraints(max_length=500)] | None = None
     source_type: SourceType
+
+    @model_validator(mode="after")
+    def require_transaction_date_or_occurred_at(self) -> TransactionCreateRequest:
+        if self.transaction_date is None and self.occurred_at is None:
+            raise ValueError("transactionDate or occurredAt is required")
+        return self
 
 
 class TransactionUpdateRequest(ApiModel):
@@ -102,6 +110,7 @@ class TransactionUpdateRequest(ApiModel):
     amount: DecimalString | None = None
     currency: CurrencyCode | None = None
     occurred_at: datetime | None = None
+    transaction_date: date | None = None
     description: Annotated[str, StringConstraints(max_length=500)] | None = None
     source_type: SourceType | None = None
     version: Annotated[int, Field(ge=1)] | None = None
@@ -113,6 +122,7 @@ class TransactionAutocompleteDto(ApiModel):
     account_id: ResourceId
     category_id: ResourceId | None = None
     occurred_at: datetime
+    transaction_date: date
     source_type: SourceType
 
 

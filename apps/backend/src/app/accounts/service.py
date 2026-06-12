@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
-from app.authz import (
-    Account as AuthzAccount,
-)
 from app.asset_categories.repository import AssetCategoryRepository
 from app.asset_categories.repository import repository as asset_category_repository
 from app.asset_categories.service import (
     asset_category_in_account_scope,
     can_read_asset_category,
+)
+from app.authz import (
+    Account as AuthzAccount,
 )
 from app.authz import (
     AccountOwnershipType,
@@ -179,6 +179,7 @@ class AccountService:
             owner_user_id=owner_user_id,
             household_id=household_id,
             asset_category_id=asset_category_id,
+            is_payment_account=request.is_payment_account,
         )
 
     def get_account(self, *, actor: Actor, account_id: str) -> AccountRecord:
@@ -215,6 +216,8 @@ class AccountService:
             next_record = replace(next_record, currency=request.currency)
         if request.account_type is not None:
             next_record = replace(next_record, account_type=str(request.account_type))
+        if request.is_payment_account is not None:
+            next_record = replace(next_record, is_payment_account=request.is_payment_account)
         if "asset_category_id" in request.model_fields_set:
             asset_category_id = self._validated_asset_category_id(
                 actor=actor,

@@ -4,6 +4,9 @@ import {
   ArrowUpRight,
   BarChart3,
   Building2,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Check,
   CircleDollarSign,
   CreditCard,
@@ -68,6 +71,7 @@ type QuickAddInput = {
   toAccountId: string;
   categoryId: string;
   assetKind: AccountKind;
+  isPaymentAccount: boolean;
   date: string;
   comment: string;
   visibility: VisibilityMode;
@@ -152,6 +156,14 @@ function formatMoney(amount: MoneyAmount): string {
 }
 
 function formatDate(value: string): string {
+  const dateOnly = parseDateOnly(value);
+  if (dateOnly) {
+    return new Intl.DateTimeFormat("ru-RU", {
+      day: "2-digit",
+      month: "short"
+    }).format(new Date(dateOnly.year, dateOnly.month - 1, dateOnly.day));
+  }
+
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "short"
@@ -159,7 +171,68 @@ function formatDate(value: string): string {
 }
 
 function todayInputValue(): string {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  return formatDateOnly(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+function currentMonthValue(): string {
+  const date = new Date();
+  return formatMonthValue(date.getFullYear(), date.getMonth() + 1);
+}
+
+function formatDateOnly(year: number, month: number, day: number): string {
+  return [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0")
+  ].join("-");
+}
+
+function formatMonthValue(year: number, month: number): string {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function parseDateOnly(value: string): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3])
+  };
+}
+
+function monthRange(monthValue: string): { startDate: string; endDate: string } {
+  const [yearPart, monthPart] = monthValue.split("-");
+  const year = Number(yearPart);
+  const month = Number(monthPart);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return monthRange(currentMonthValue());
+  }
+
+  const lastDay = new Date(year, month, 0).getDate();
+  return {
+    startDate: formatDateOnly(year, month, 1),
+    endDate: formatDateOnly(year, month, lastDay)
+  };
+}
+
+function shiftMonth(monthValue: string, offset: number): string {
+  const [yearPart, monthPart] = monthValue.split("-");
+  const date = new Date(Number(yearPart), Number(monthPart) - 1 + offset, 1);
+  return formatMonthValue(date.getFullYear(), date.getMonth() + 1);
+}
+
+function monthLabel(monthValue: string): string {
+  const [yearPart, monthPart] = monthValue.split("-");
+  const date = new Date(Number(yearPart), Number(monthPart) - 1, 1);
+  return new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric"
+  }).format(date);
 }
 
 export function App({ client = financeApiClient }: { client?: FinanceApiClient }) {
@@ -173,13 +246,14 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
   const [viewMode, setViewMode] = useState<ViewMode>("personal");
   const [isQuickAddOpen, setQuickAddOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string>("");
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
 
   const loadSnapshot = useCallback(async () => {
-    const nextSnapshot = await client.getDashboardSnapshot();
+    const nextSnapshot = await client.getDashboardSnapshot(monthRange(selectedMonth));
     setSnapshot(nextSnapshot);
     setAuthStatus("authenticated");
     return nextSnapshot;
-  }, [client]);
+  }, [client, selectedMonth]);
 
   useEffect(() => {
     let isMounted = true;
@@ -225,13 +299,14 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     }
   };
 
+  const selectedMonthRange = useMemo(() => monthRange(selectedMonth), [selectedMonth]);
   const activeReport = useMemo(() => {
     if (!snapshot) {
       return null;
     }
 
-    return reportForView(snapshot, viewMode);
-  }, [snapshot, viewMode]);
+    return reportForView(snapshot, viewMode, selectedMonthRange);
+  }, [snapshot, selectedMonthRange, viewMode]);
 
   const saveQuickAdd = async (input: QuickAddInput) => {
     if (!snapshot) {
@@ -243,7 +318,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       (account) => account.id === input.toAccountId
     );
     const currency = sourceAccount?.balance.currency ?? "RUB";
-    const occurredAt = new Date(`${input.date || todayInputValue()}T12:00:00`).toISOString();
+    const transactionDate = input.date || todayInputValue();
     const sharedHouseholdId = input.visibility === "shared" ? snapshot.session.householdId : null;
     const expectedOwnership = input.visibility === "shared" ? "shared" : "personal";
 
@@ -291,6 +366,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       await client.createDemoAccount({
         name: input.comment.trim() || accountKindLabels[input.assetKind],
         kind: input.assetKind,
+        isPaymentAccount: input.isPaymentAccount,
         currency,
         initialBalance: input.amount,
         ownershipType: input.visibility === "shared" ? "shared" : "personal",
@@ -302,7 +378,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         toAccountId: input.toAccountId,
         currency,
         amount: input.amount,
-        occurredAt,
+        occurredAt: new Date(`${transactionDate}T12:00:00`).toISOString(),
         description: input.comment || "Перевод"
       });
     } else {
@@ -312,7 +388,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         currency,
         transactionType: input.kind,
         amount: input.amount,
-        occurredAt,
+        transactionDate,
         description: input.comment || null
       });
     }
@@ -427,7 +503,12 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           />
         )}
         {activeSection === "assets" && (
-          <AssetsPage snapshot={snapshot} viewMode={viewMode} />
+          <AssetsPage
+            client={client}
+            onChanged={loadSnapshot}
+            snapshot={snapshot}
+            viewMode={viewMode}
+          />
         )}
         {activeSection === "categories" && (
           <CategoriesPage
@@ -438,6 +519,8 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         )}
         {activeSection === "analytics" && (
           <AnalyticsPage
+            monthValue={selectedMonth}
+            onMonthChange={setSelectedMonth}
             snapshot={snapshot}
             report={activeReport}
             viewMode={viewMode}
@@ -730,6 +813,7 @@ function OperationsPage({
   const transfers = visibleTransfers(snapshot.transfers, accounts);
   const timeline = recentTimeline(operations, transfers, accounts);
   const categories = visibleCategories(snapshot.categories, viewMode);
+  const paymentAccounts = accounts.filter(isPaymentAccount);
   const expenseCategories = categories.filter(
     (category) => category.direction === "expense"
   );
@@ -749,7 +833,7 @@ function OperationsPage({
       </div>
       <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       <ScreenshotOcrCapture
-        accounts={accounts}
+        accounts={paymentAccounts}
         canUseHousehold={Boolean(snapshot.session.householdId)}
         categories={expenseCategories}
         client={client}
@@ -757,7 +841,7 @@ function OperationsPage({
         onSaved={refreshAfterDraftChange}
       />
       <PendingCaptureDraftsPanel
-        accounts={accounts}
+        accounts={paymentAccounts}
         categories={expenseCategories}
         client={client}
         onChanged={refreshAfterDraftChange}
@@ -855,7 +939,7 @@ function PendingCaptureDraftsPanel({
       amount,
       currency: draft.amount.currency,
       description: form.description,
-      occurredAt: draftOccurredAtFromInput(form.date),
+      occurredDate: draftOccurredDateFromInput(form.date),
       accountId: form.accountId || null,
       categoryId: form.categoryId || null,
       confidence: draft.confidence
@@ -937,7 +1021,7 @@ function PendingCaptureDraftsPanel({
               <div className="pendingDraftMeta">
                 <strong>{formatMoney(draft.amount)}</strong>
                 <span>{draft.amount.currency}</span>
-                <span>{formatDate(draft.occurredAt ?? draft.capturedAt)}</span>
+                <span>{formatDate(draft.occurredDate ?? draft.occurredAt ?? draft.capturedAt)}</span>
                 <span>
                   {draft.confidence === null
                     ? "Уверенность не задана"
@@ -1061,7 +1145,7 @@ function draftFormFromDraft(draft: CaptureDraftSummary): PendingDraftFormState {
     description: draft.description,
     accountId: draft.accountId ?? "",
     categoryId: draft.categoryId ?? "",
-    date: dateInputValue(draft.occurredAt ?? draft.capturedAt)
+    date: dateInputValue(draft.occurredDate ?? draft.occurredAt ?? draft.capturedAt)
   };
 }
 
@@ -1079,6 +1163,9 @@ function dateInputValue(value: string): string {
   if (!value) {
     return todayInputValue();
   }
+  if (parseDateOnly(value)) {
+    return value;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return todayInputValue();
@@ -1087,12 +1174,12 @@ function dateInputValue(value: string): string {
   return date.toISOString().slice(0, 10);
 }
 
-function draftOccurredAtFromInput(value: string): string | null {
+function draftOccurredDateFromInput(value: string): string | null {
   if (!value) {
     return null;
   }
 
-  return new Date(`${value}T12:00:00`).toISOString();
+  return value;
 }
 
 function ScreenshotOcrCapture({
@@ -1214,6 +1301,7 @@ function ScreenshotOcrCapture({
           amount: Math.abs(row.candidate.amount.value),
           currency: row.candidate.amount.currency,
           description: captureDraftDescriptionForAggregate(row.candidate),
+          occurredDate: dateInputValue(capturedAt),
           accountId,
           categoryId: row.categoryId,
           confidence: row.candidate.confidence,
@@ -1332,13 +1420,37 @@ function ScreenshotOcrCapture({
 }
 
 function AssetsPage({
+  client,
+  onChanged,
   snapshot,
   viewMode
 }: {
+  client: FinanceApiClient;
+  onChanged: () => Promise<DashboardSnapshot>;
   snapshot: DashboardSnapshot;
   viewMode: ViewMode;
 }) {
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
+  const [updatingAccountId, setUpdatingAccountId] = useState<string | null>(null);
+  const [status, setStatus] = useState("");
+
+  const updatePaymentAccount = async (account: AccountSummary, isPaymentAccount: boolean) => {
+    setUpdatingAccountId(account.id);
+    setStatus("");
+    try {
+      await client.updateAccount({
+        accountId: account.id,
+        isPaymentAccount,
+        version: account.version
+      });
+      await onChanged();
+      setStatus(isPaymentAccount ? "Счет доступен для расходов" : "Счет скрыт из оплаты расходов");
+    } catch {
+      setStatus("Не удалось обновить счет для оплаты");
+    } finally {
+      setUpdatingAccountId(null);
+    }
+  };
 
   return (
     <section className="screenStack" aria-labelledby="assets-title">
@@ -1347,9 +1459,15 @@ function AssetsPage({
         <span>{accounts.length} активов</span>
       </div>
       <p className="scopeCopy">{scopeDescription(viewMode)}</p>
+      {status && <p className={status.startsWith("Не") ? "formError" : "formHint"}>{status}</p>}
       <div className="assetGrid">
         {accounts.map((account) => (
-          <AssetTile key={account.id} account={account} />
+          <AssetTile
+            key={account.id}
+            account={account}
+            isUpdating={updatingAccountId === account.id}
+            onPaymentAccountChange={updatePaymentAccount}
+          />
         ))}
         {accounts.length === 0 && (
           <EmptyState text={scopeEmptyText(viewMode, "активов", "добавьте актив через Quick Add или переключите режим")} />
@@ -1535,17 +1653,27 @@ function CategoryForm({
 }
 
 function AnalyticsPage({
+  monthValue,
+  onMonthChange,
   snapshot,
   report,
   viewMode
 }: {
+  monthValue: string;
+  onMonthChange: (value: string) => void;
   snapshot: DashboardSnapshot;
   report: ReportSummary;
   viewMode: ViewMode;
 }) {
+  const range = monthRange(monthValue);
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
-  const operations = visibleOperations(snapshot.operations, accounts);
+  const operations = filterOperationsByDateRange(
+    visibleOperations(snapshot.operations, accounts),
+    range
+  );
   const currency = accounts[0]?.balance.currency ?? report.income.currency;
+  const analyticsReport =
+    viewMode === "personal" ? reportFromOperations("personal", operations, currency, range) : report;
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const groups = groupAssets(accounts, currency);
 
@@ -1553,13 +1681,14 @@ function AnalyticsPage({
     <section className="screenStack" aria-labelledby="analytics-title">
       <div className="sectionHead">
         <h3 id="analytics-title">Аналитика</h3>
-        <span>{report.periodLabel}</span>
+        <MonthSwitcher value={monthValue} onChange={onMonthChange} />
       </div>
       <p className="scopeCopy">{scopeDescription(viewMode)}</p>
+      <p className="scopeCopy">{analyticsReport.periodLabel}</p>
       <div className="metricGrid three">
-        <Metric label="Доходы" value={formatMoney(report.income)} tone="success" />
-        <Metric label="Расходы" value={formatMoney(report.expense)} tone="danger" />
-        <Metric label="Итог" value={formatMoney(report.balanceDelta)} />
+        <Metric label="Доходы" value={formatMoney(analyticsReport.income)} tone="success" />
+        <Metric label="Расходы" value={formatMoney(analyticsReport.expense)} tone="danger" />
+        <Metric label="Итог" value={formatMoney(analyticsReport.balanceDelta)} />
       </div>
       <div className="dashboardGrid">
         <section className="plainSection" aria-labelledby="analytics-categories-title">
@@ -1593,6 +1722,47 @@ function AnalyticsPage({
         <EmptyState text="В PWA планирование пока не является рабочим путем. Для этой итерации планирование Android-first; PWA-путь будет добавлен отдельно." />
       </section>
     </section>
+  );
+}
+
+function MonthSwitcher({
+  value,
+  onChange
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const currentMonth = currentMonthValue();
+
+  return (
+    <div className="monthSwitcher" role="group" aria-label="Месяц аналитики">
+      <button
+        aria-label="Предыдущий месяц"
+        type="button"
+        onClick={() => onChange(shiftMonth(value, -1))}
+      >
+        <ChevronLeft size={17} aria-hidden="true" />
+      </button>
+      <span>
+        <CalendarDays size={16} aria-hidden="true" />
+        {monthLabel(value)}
+      </span>
+      <button
+        aria-label="Следующий месяц"
+        type="button"
+        onClick={() => onChange(shiftMonth(value, 1))}
+      >
+        <ChevronRight size={17} aria-hidden="true" />
+      </button>
+      <button
+        className="currentMonthButton"
+        disabled={value === currentMonth}
+        type="button"
+        onClick={() => onChange(currentMonth)}
+      >
+        Текущий
+      </button>
+    </div>
   );
 }
 
@@ -1651,6 +1821,7 @@ function QuickAdd({
   const [toAccountId, setToAccountId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [assetKind, setAssetKind] = useState<AccountKind>("card");
+  const [isPaymentAccountChecked, setPaymentAccountChecked] = useState(true);
   const [date, setDate] = useState(todayInputValue());
   const [comment, setComment] = useState("");
   const [visibility, setVisibility] = useState<DraftVisibilityMode>(defaultVisibility);
@@ -1663,6 +1834,7 @@ function QuickAdd({
       account.status !== "archived" &&
       accountOwnership(account) === visibility
   );
+  const operationAccounts = kind === "expense" ? writableAccounts.filter(isPaymentAccount) : writableAccounts;
   const sourceAccount = writableAccounts.find((account) => account.id === accountId);
   const transferTargets = writableAccounts.filter(
     (account) =>
@@ -1670,6 +1842,7 @@ function QuickAdd({
       Boolean(sourceAccount) &&
       account.balance.currency === sourceAccount?.balance.currency
   );
+  const accountOptions = kind === "transfer" ? writableAccounts : operationAccounts;
   const selectedTransferTarget = transferTargets.find((account) => account.id === toAccountId);
 
   const filteredCategories = categories.filter((category) => {
@@ -1695,6 +1868,17 @@ function QuickAdd({
     }
   }, [categoryId, selectedCategory]);
 
+  useEffect(() => {
+    if (
+      kind !== "asset" &&
+      accountId &&
+      !operationAccounts.some((account) => account.id === accountId)
+    ) {
+      setAccountId("");
+      setToAccountId("");
+    }
+  }, [accountId, kind, operationAccounts]);
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const parsedAmount = Number(amount);
@@ -1717,6 +1901,7 @@ function QuickAdd({
         toAccountId,
         categoryId: selectedCategory?.id ?? "",
         assetKind,
+        isPaymentAccount: isPaymentAccountChecked,
         date,
         comment,
         visibility
@@ -1824,6 +2009,7 @@ function QuickAdd({
         )}
 
         {kind === "asset" ? (
+          <div className="assetCreateFields">
           <label className="field">
             <span>Тип</span>
             <select
@@ -1836,13 +2022,22 @@ function QuickAdd({
                 </option>
               ))}
             </select>
-          </label>
+            </label>
+            <label className="paymentToggle prominent">
+              <input
+                checked={isPaymentAccountChecked}
+                type="checkbox"
+                onChange={(event) => setPaymentAccountChecked(event.target.checked)}
+              />
+              <span>Счёт для оплаты</span>
+            </label>
+          </div>
         ) : (
           <label className="field">
             <span>{kind === "transfer" ? "Откуда" : "Счет"}</span>
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
               <option value="">Выберите счет</option>
-              {writableAccounts.map((account) => (
+              {accountOptions.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -1850,7 +2045,7 @@ function QuickAdd({
             </select>
           </label>
         )}
-        {hasVisibility && kind !== "asset" && writableAccounts.length === 0 && (
+        {hasVisibility && kind !== "asset" && accountOptions.length === 0 && (
           <EmptyState text="В выбранном scope нет счета для записи. Сначала добавьте актив или выберите другой scope." />
         )}
 
@@ -1935,7 +2130,15 @@ function ChoiceButton({
   );
 }
 
-function AssetTile({ account }: { account: AccountSummary }) {
+function AssetTile({
+  account,
+  isUpdating,
+  onPaymentAccountChange
+}: {
+  account: AccountSummary;
+  isUpdating: boolean;
+  onPaymentAccountChange: (account: AccountSummary, isPaymentAccount: boolean) => Promise<void>;
+}) {
   const Icon = accountKindIcons[account.kind];
 
   return (
@@ -1949,6 +2152,17 @@ function AssetTile({ account }: { account: AccountSummary }) {
           {accountKindLabels[account.kind]} · {account.ownerName}
         </span>
         <ScopeBadge mode={accountOwnership(account)} />
+        <label className="paymentToggle">
+          <input
+            checked={account.isPaymentAccount !== false}
+            disabled={isUpdating}
+            type="checkbox"
+            onChange={(event) => {
+              void onPaymentAccountChange(account, event.target.checked);
+            }}
+          />
+          <span>Счёт для оплаты</span>
+        </label>
       </div>
       <b>{formatMoney(account.balance)}</b>
     </article>
@@ -2104,6 +2318,14 @@ function categoryScopeVisibility(category: CategorySummary): VisibilityMode {
   return category.scope === "household" ? "shared" : "personal";
 }
 
+function isPaymentAccount(account: AccountSummary): boolean {
+  return (
+    account.status !== "deleted" &&
+    account.status !== "archived" &&
+    account.isPaymentAccount !== false
+  );
+}
+
 function scopeLabelForAccount(account: AccountSummary | undefined): string {
   if (!account) {
     return "Личное";
@@ -2146,6 +2368,16 @@ function visibleOperations(
 ): OperationSummary[] {
   const accountIds = new Set(accounts.map((account) => account.id));
   return operations.filter((operation) => accountIds.has(operation.accountId));
+}
+
+function filterOperationsByDateRange(
+  operations: OperationSummary[],
+  range: { startDate: string; endDate: string }
+): OperationSummary[] {
+  return operations.filter((operation) => {
+    const date = dateInputValue(operation.date);
+    return date >= range.startDate && date <= range.endDate;
+  });
 }
 
 function visibleTransfers(
@@ -2276,13 +2508,20 @@ function shortCategoryName(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
-function reportForView(snapshot: DashboardSnapshot, mode: ViewMode): ReportSummary {
+function reportForView(
+  snapshot: DashboardSnapshot,
+  mode: ViewMode,
+  range?: { startDate: string; endDate: string }
+): ReportSummary {
   const currency = snapshot.accounts[0]?.balance.currency ?? "RUB";
 
   if (mode === "personal") {
     const accounts = visibleAccounts(snapshot.accounts, "personal");
-    const operations = visibleOperations(snapshot.operations, accounts);
-    return reportFromOperations("personal", operations, currency);
+    const visiblePersonalOperations = visibleOperations(snapshot.operations, accounts);
+    const operations = range
+      ? filterOperationsByDateRange(visiblePersonalOperations, range)
+      : visiblePersonalOperations;
+    return reportFromOperations("personal", operations, currency, range);
   }
 
   const reportMode = reportModeByView[mode];
@@ -2292,7 +2531,8 @@ function reportForView(snapshot: DashboardSnapshot, mode: ViewMode): ReportSumma
 function reportFromOperations(
   mode: ViewMode,
   operations: OperationSummary[],
-  currency: CurrencyCode
+  currency: CurrencyCode,
+  range?: { startDate: string; endDate: string }
 ): ReportSummary {
   const totals = operations.reduce(
     (current, operation) => {
@@ -2310,6 +2550,7 @@ function reportFromOperations(
 
   return {
     ...emptyReport(mode, currency),
+    periodLabel: range ? `${range.startDate} - ${range.endDate}` : emptyReport(mode, currency).periodLabel,
     income: { value: totals.income, currency },
     expense: { value: totals.expense, currency },
     balanceDelta: { value: totals.delta, currency }

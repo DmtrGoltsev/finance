@@ -248,6 +248,7 @@ describe("LiveFinanceApiClient", () => {
         JSON.stringify({
           name: "Family Wallet",
           accountType: "bank",
+          isPaymentAccount: true,
           ownershipType: "shared",
           householdId: "household-1",
           currency: "RUB",
@@ -280,11 +281,69 @@ describe("LiveFinanceApiClient", () => {
       kind: "bank",
       currency: "RUB",
       initialBalance: 100,
+      isPaymentAccount: true,
       ownershipType: "shared",
       householdId: "household-1"
     });
 
     expect(account.householdId).toBe("household-1");
+  });
+
+  it("creates manual income and expense with transactionDate instead of local-noon occurredAt", async () => {
+    document.cookie = "finance_csrf=csrf-transaction; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      expect(path).toBe("/api/v1/transactions");
+      expect(init?.method).toBe("POST");
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-transaction");
+      expect(init?.body).toBe(
+        JSON.stringify({
+          transactionType: "expense",
+          accountId: "account-1",
+          categoryId: "category-1",
+          amount: "42.0000",
+          currency: "RUB",
+          transactionDate: "2026-06-05",
+          description: "Lunch",
+          sourceType: "manual"
+        })
+      );
+
+      return jsonResponse({
+        data: {
+          id: "transaction-1",
+          transactionType: "expense",
+          accountId: "account-1",
+          counterpartyAccountId: null,
+          categoryId: "category-1",
+          amount: "42.0000",
+          currency: "RUB",
+          occurredAt: "2026-06-05T12:00:00Z",
+          transactionDate: "2026-06-05",
+          description: "Lunch",
+          sourceType: "manual",
+          version: 1
+        }
+      });
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const operation = await client.createDemoOperation({
+      accountId: "account-1",
+      categoryId: "category-1",
+      currency: "RUB",
+      transactionType: "expense",
+      amount: 42,
+      transactionDate: "2026-06-05",
+      description: "Lunch"
+    });
+
+    expect(operation.date).toBe("2026-06-05");
   });
 
   it("creates and updates category payload fields supported by the API", async () => {
@@ -440,6 +499,66 @@ describe("LiveFinanceApiClient", () => {
       mode: "combined_viewer_overview",
       title: "Обзор"
     });
+  });
+
+  it("passes selected date boundaries to live report summary requests", async () => {
+    const reportUrls: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      expect(init?.credentials).toBe("include");
+
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({ actor: actor() });
+      }
+      if (path === "/api/v1/accounts") {
+        return jsonResponse({
+          items: [
+            {
+              id: "account-1",
+              name: "Dev Personal Cash",
+              accountType: "cash",
+              isPaymentAccount: true,
+              ownershipType: "personal",
+              ownerUserId: "user-1",
+              householdId: null,
+              currency: "USD",
+              currentBalance: "925.50"
+            }
+          ]
+        });
+      }
+      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/reports/summary?")) {
+        reportUrls.push(path);
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("startDate")).toBe("2026-06-01");
+        expect(params.get("endDate")).toBe("2026-06-30");
+        return jsonResponse({
+          data: {
+            reportMode: params.get("reportMode"),
+            currency: "USD",
+            incomeTotal: 0,
+            expenseTotal: 0,
+            netTotal: 0
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    await client.getDashboardSnapshot({
+      startDate: "2026-06-01",
+      endDate: "2026-06-30"
+    });
+
+    expect(reportUrls).toHaveLength(2);
   });
 
   it("adds the CSRF header to unsafe cookie-authenticated requests", async () => {
@@ -633,6 +752,7 @@ describe("LiveFinanceApiClient", () => {
               idempotencyKey: "ocr-1",
               captureSource: "screenshot",
               capturedAt: "2026-05-31T10:00:00.000Z",
+              occurredDate: "2026-05-31",
               occurredAt: "2026-05-31T12:00:00.000Z",
               amount: "123.4500",
               currency: "RUB",
@@ -653,7 +773,7 @@ describe("LiveFinanceApiClient", () => {
           amount: "140.0000",
           currency: "RUB",
           description: "Products reviewed",
-          occurredAt: "2026-06-01T12:00:00.000Z",
+          occurredDate: "2026-06-01",
           accountId: "account-1",
           categoryId: "category-1",
           confidence: "0.8000"
@@ -666,6 +786,7 @@ describe("LiveFinanceApiClient", () => {
             id: "draft-1",
             status: "pending",
             amount: "140.0000",
+            occurredDate: "2026-06-01",
             occurredAt: "2026-06-01T12:00:00.000Z",
             description: "Products reviewed",
             accountId: "account-1"
@@ -679,6 +800,7 @@ describe("LiveFinanceApiClient", () => {
             id: "draft-1",
             status: "confirmed",
             amount: "140.0000",
+            occurredDate: "2026-06-01",
             occurredAt: "2026-06-01T12:00:00.000Z",
             description: "Products reviewed",
             accountId: "account-1"
@@ -692,6 +814,7 @@ describe("LiveFinanceApiClient", () => {
             id: "draft-2",
             status: "discarded",
             amount: "25.0000",
+            occurredDate: null,
             occurredAt: null,
             description: "Duplicate",
             accountId: null
@@ -712,7 +835,7 @@ describe("LiveFinanceApiClient", () => {
       amount: 140,
       currency: "RUB",
       description: "Products reviewed",
-      occurredAt: "2026-06-01T12:00:00.000Z",
+      occurredDate: "2026-06-01",
       accountId: "account-1",
       categoryId: "category-1",
       confidence: 0.8
@@ -722,6 +845,7 @@ describe("LiveFinanceApiClient", () => {
 
     expect(drafts[0]).toMatchObject({
       id: "draft-1",
+      occurredDate: "2026-05-31",
       occurredAt: "2026-05-31T12:00:00.000Z",
       amount: { value: 123.45, currency: "RUB" }
     });
@@ -792,6 +916,7 @@ function captureDraftDto(input: {
   id: string;
   status: "pending" | "confirmed" | "discarded";
   amount: string;
+  occurredDate?: string | null;
   occurredAt: string | null;
   description: string;
   accountId: string | null;
@@ -802,6 +927,7 @@ function captureDraftDto(input: {
     idempotencyKey: `ocr-${input.id}`,
     captureSource: "screenshot",
     capturedAt: "2026-05-31T10:00:00.000Z",
+    occurredDate: input.occurredDate ?? null,
     occurredAt: input.occurredAt,
     amount: input.amount,
     currency: "RUB",

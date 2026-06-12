@@ -24,6 +24,7 @@ const financeSnapshot: DashboardSnapshot = {
       name: "Карта Мир",
       ownerName: "Личное",
       kind: "card",
+      isPaymentAccount: true,
       ownershipType: "personal",
       householdId: null,
       status: "active",
@@ -35,6 +36,7 @@ const financeSnapshot: DashboardSnapshot = {
       name: "Вклад",
       ownerName: "Личное",
       kind: "deposit",
+      isPaymentAccount: true,
       ownershipType: "personal",
       householdId: null,
       status: "active",
@@ -46,6 +48,7 @@ const financeSnapshot: DashboardSnapshot = {
       name: "Семейный счет",
       ownerName: "Общее",
       kind: "bank",
+      isPaymentAccount: true,
       ownershipType: "shared",
       householdId: "household-1",
       status: "active",
@@ -97,7 +100,7 @@ const financeSnapshot: DashboardSnapshot = {
   operations: [
     {
       id: "operation-1",
-      date: "2026-05-17T12:30:00Z",
+      date: "2026-06-17",
       title: "Покупка продуктов",
       accountId: "account-1",
       categoryId: "category-1",
@@ -108,7 +111,7 @@ const financeSnapshot: DashboardSnapshot = {
     },
     {
       id: "operation-2",
-      date: "2026-05-16T12:30:00Z",
+      date: "2026-06-16",
       title: "Домашняя покупка",
       accountId: "account-3",
       categoryId: "category-3",
@@ -121,7 +124,7 @@ const financeSnapshot: DashboardSnapshot = {
   transfers: [
     {
       id: "transfer-1",
-      date: "2026-05-17T12:45:00Z",
+      date: "2026-06-17",
       accountId: "account-1",
       counterpartyAccountId: "account-2",
       version: 1,
@@ -160,7 +163,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     archiveTransfer: vi.fn(async () => undefined),
     createDemoAccount: vi.fn(async () => snapshot.accounts[0]),
     createDemoCategory: vi.fn(async () => snapshot.categories[0]),
-    createDemoOperation: vi.fn(async () => snapshot.operations[0]),
+    createDemoOperation: vi.fn(async (_input: unknown) => snapshot.operations[0]),
     createDemoTransfer: vi.fn(async () => snapshot.transfers[0]),
     createCaptureDraft: vi.fn(async (_input: CaptureDraftCreateInput) => ({
       id: "draft-1",
@@ -168,6 +171,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       idempotencyKey: "ocr-1",
       captureSource: "screenshot" as const,
       capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredDate: null,
       occurredAt: null,
       amount: { value: 123.45, currency: "USD" as const },
       description: "РџСЂРѕРґСѓРєС‚С‹ В· 3 РѕРїРµСЂР°С†РёРё",
@@ -192,6 +196,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       idempotencyKey: "ocr-1",
       captureSource: "screenshot" as const,
       capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredDate: input.occurredDate ?? null,
       occurredAt: input.occurredAt ?? null,
       amount: { value: input.amount ?? 123.45, currency: "USD" as const },
       description: input.description ?? "Продукты · 3 операции",
@@ -205,6 +210,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       idempotencyKey: "ocr-1",
       captureSource: "screenshot" as const,
       capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredDate: "2026-05-31",
       occurredAt: "2026-05-31T12:00:00.000Z",
       amount: { value: 123.45, currency: "USD" as const },
       description: "Продукты · 3 операции",
@@ -218,6 +224,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       idempotencyKey: "ocr-1",
       captureSource: "screenshot" as const,
       capturedAt: "2026-05-31T10:00:00.000Z",
+      occurredDate: null,
       occurredAt: null,
       amount: { value: 123.45, currency: "USD" as const },
       description: "Продукты · 3 операции",
@@ -246,6 +253,7 @@ function pendingDraft(input: Partial<CaptureDraftSummary> & { id: string }): Cap
     idempotencyKey: `ocr-${input.id}`,
     captureSource: "screenshot",
     capturedAt: input.capturedAt ?? "2026-05-31T10:00:00.000Z",
+    occurredDate: input.occurredDate ?? null,
     occurredAt: input.occurredAt ?? null,
     amount: input.amount ?? { value: 123.45, currency: "USD" },
     description: input.description ?? "Market OCR",
@@ -339,6 +347,10 @@ describe("PWA finance experience", () => {
     await user.type(within(sheet).getByLabelText("Сумма"), "345");
     await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
     await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
+    await user.click(within(sheet).getByText("Еще"));
+    fireEvent.change(within(sheet).getByLabelText("Дата"), {
+      target: { value: "2026-06-05" }
+    });
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -347,11 +359,37 @@ describe("PWA finance experience", () => {
           accountId: "account-1",
           amount: 345,
           categoryId: "category-1",
+          transactionDate: "2026-06-05",
           transactionType: "expense"
         })
       );
     });
+    expect(client.createDemoOperation.mock.calls[0][0]).not.toHaveProperty("occurredAt");
     expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("limits expense account choices to active payment accounts without blocking income", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      ...financeSnapshot,
+      accounts: financeSnapshot.accounts.map((account) =>
+        account.id === "account-1"
+          ? { ...account, isPaymentAccount: false }
+          : { ...account, isPaymentAccount: true }
+      )
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    const expenseAccountSelect = within(sheet).getByLabelText("Счет");
+    expect(within(expenseAccountSelect).queryByRole("option", { name: "Карта Мир" })).not.toBeInTheDocument();
+    expect(within(expenseAccountSelect).getByRole("option", { name: "Вклад" })).toBeInTheDocument();
+
+    await user.click(within(sheet).getByRole("button", { name: /Доход/i }));
+    expect(within(sheet).getByRole("option", { name: "Карта Мир" })).toBeInTheDocument();
   });
 
   it("clears stale quick add category after switching expense to income", async () => {
@@ -605,6 +643,34 @@ describe("PWA finance experience", () => {
     expect(screen.queryByRole("heading", { name: "Импорт отчета" })).not.toBeInTheDocument();
   });
 
+  it("switches analytics month and reloads reports with selected date boundaries", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
+
+    expect(screen.getByRole("group", { name: "Месяц аналитики" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Предыдущий месяц" }));
+
+    await waitFor(() => {
+      expect(client.getDashboardSnapshot).toHaveBeenLastCalledWith({
+        startDate: "2026-05-01",
+        endDate: "2026-05-31"
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "Текущий" }));
+    await waitFor(() => {
+      expect(client.getDashboardSnapshot).toHaveBeenLastCalledWith({
+        startDate: "2026-06-01",
+        endDate: "2026-06-30"
+      });
+    });
+  });
+
   it("opens operations, assets and categories from the mobile bottom navigation", async () => {
     const user = userEvent.setup();
     render(<App client={makeClient()} />);
@@ -674,6 +740,7 @@ describe("PWA finance experience", () => {
           amount: 123.45,
           currency: "USD",
           description: "Скрин: агрегированные расходы, 3 операций",
+          occurredDate: "2026-06-12",
           accountId: "account-1",
           categoryId: "category-1",
           confidence: 0.9,
@@ -719,6 +786,7 @@ describe("PWA finance experience", () => {
           currency: input.currency ?? current?.amount.currency ?? "USD"
         },
         description: input.description ?? current?.description ?? "",
+        occurredDate: input.occurredDate ?? current?.occurredDate ?? null,
         occurredAt: input.occurredAt ?? current?.occurredAt ?? null,
         accountId: input.accountId ?? current?.accountId ?? null,
         categoryId: input.categoryId ?? current?.categoryId ?? null,
@@ -771,6 +839,7 @@ describe("PWA finance experience", () => {
           amount: 140,
           currency: "USD",
           description: "Market reviewed",
+          occurredDate: "2026-06-01",
           accountId: "account-1",
           categoryId: "category-1",
           confidence: 0.88
@@ -778,7 +847,8 @@ describe("PWA finance experience", () => {
       );
       expect(client.confirmCaptureDraft).toHaveBeenCalledWith("draft-1");
     });
-    expect(client.updateCaptureDraft.mock.calls[0][0].occurredAt).toContain("2026-06-01T");
+    expect(client.updateCaptureDraft.mock.calls[0][0].occurredDate).toBe("2026-06-01");
+    expect(client.updateCaptureDraft.mock.calls[0][0].occurredAt).toBeUndefined();
 
     await waitFor(() => {
       expect(screen.queryByTestId("pending-draft-draft-1")).not.toBeInTheDocument();

@@ -224,7 +224,7 @@ private class FakeFinanceApiClient(
         return sessionResult
     }
 
-    override suspend fun dashboard(): ApiResult<FinanceDashboard> {
+    override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> {
         dashboardCalls += 1
         return dashboardResult
     }
@@ -235,6 +235,7 @@ private class FakeFinanceApiClient(
         initialBalance: String,
         accountType: String,
         ownershipType: String,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> {
         return ApiResult.Failure("unused")
     }
@@ -246,6 +247,7 @@ private class FakeFinanceApiClient(
         accountType: String,
         householdId: String?,
         assetCategoryId: String?,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> {
         return ApiResult.Failure("unused")
     }
@@ -294,6 +296,7 @@ private class FakeFinanceApiClient(
         category: CategorySummary?,
         transactionType: String,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
         return ApiResult.Failure("unused")
     }

@@ -107,6 +107,7 @@ def test_transaction_api_vocabulary_persists_through_sqlalchemy_constraints() ->
                     amount=Decimal("1.0000"),
                     currency="RUB",
                     occurred_at=BASE_TIME + timedelta(minutes=offset),
+                    transaction_date=(BASE_TIME + timedelta(minutes=offset)).date(),
                     description=f"{transaction_type} vocabulary proof",
                     source_type="manual",
                     transfer_scope="personal_same_owner" if is_transfer else None,

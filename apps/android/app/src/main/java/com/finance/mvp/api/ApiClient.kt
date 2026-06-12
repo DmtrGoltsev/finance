@@ -30,13 +30,14 @@ interface FinanceApiClient {
     suspend fun register(email: String, password: String, displayName: String? = null): ApiResult<RegistrationResult> =
         ApiResult.Failure("Регистрация не поддерживается этим клиентом")
     suspend fun sessionStatus(): ApiResult<SessionStatus>
-    suspend fun dashboard(): ApiResult<FinanceDashboard>
+    suspend fun dashboard(startDate: String? = null, endDate: String? = null): ApiResult<FinanceDashboard>
     suspend fun createDemoAccount(
         householdId: String?,
         currency: String,
         initialBalance: String = "12.34",
         accountType: String = "cash",
         ownershipType: String = if (householdId.isNullOrBlank()) "personal" else "shared",
+        isPaymentAccount: Boolean = true,
     ): ApiResult<AccountSummary>
     suspend fun createAccount(
         name: String,
@@ -45,6 +46,7 @@ interface FinanceApiClient {
         accountType: String,
         householdId: String?,
         assetCategoryId: String? = null,
+        isPaymentAccount: Boolean = true,
     ): ApiResult<AccountSummary>
     suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary>
     suspend fun archiveAccount(accountId: String): ApiResult<AccountSummary>
@@ -72,6 +74,7 @@ interface FinanceApiClient {
         category: CategorySummary?,
         transactionType: String = "expense",
         amount: String = "17.00",
+        transactionDate: String = todayDate(),
     ): ApiResult<TransactionSummary>
     suspend fun updateTransaction(transaction: TransactionSummary): ApiResult<TransactionSummary>
     suspend fun deleteTransaction(transactionId: String): ApiResult<Unit>
@@ -172,6 +175,7 @@ data class AccountSummary(
     val status: String = "active",
     val assetCategoryId: String? = null,
     val version: Int? = null,
+    val isPaymentAccount: Boolean = true,
 )
 
 data class AssetCategory(
@@ -246,6 +250,7 @@ data class TransactionSummary(
     val categoryId: String? = null,
     val sourceType: String = "manual",
     val version: Int? = null,
+    val transactionDate: String = occurredAt.take(10),
 )
 
 data class MoneyTotal(
@@ -261,7 +266,7 @@ data class CaptureDraftCreateRequest(
     val description: String?,
     val merchantName: String?,
     val capturedAt: String,
-    val occurredAt: String,
+    val occurredDate: String,
     val captureSource: String,
     val idempotencyKey: String,
     val confidence: Double,
@@ -276,7 +281,7 @@ data class CaptureDraftUpdateRequest(
     val currency: String? = null,
     val description: String? = null,
     val merchantName: String? = null,
-    val occurredAt: String? = null,
+    val occurredDate: String? = null,
     val confidence: Double? = null,
     val accountId: String? = null,
     val categoryId: String? = null,
@@ -307,6 +312,7 @@ data class CaptureDraft(
     val merchantName: String?,
     val capturedAt: String?,
     val occurredAt: String,
+    val occurredDate: String,
     val captureSource: String,
     val confidence: Double,
     val sourceAppPackage: String?,
@@ -499,14 +505,19 @@ class LiveFinanceApiClient(
         parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
     }
 
-    override suspend fun dashboard(): ApiResult<FinanceDashboard> = safeCall {
+    override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> = safeCall {
         val session = parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
         val accounts = request(path = "/api/v1/accounts", method = "GET").items().map(::parseAccount)
         val categories = request(path = "/api/v1/categories", method = "GET").items().map(::parseCategory)
         val assetCategories = runCatching {
             request(path = "/api/v1/asset-categories", method = "GET").items().map(::parseAssetCategory)
         }.getOrDefault(emptyList())
-        val transactions = request(path = "/api/v1/transactions", method = "GET").items().map(::parseTransaction)
+        val dateQuery = reportDateQuery(startDate, endDate)
+        val transactions = request(
+            path = "/api/v1/transactions",
+            method = "GET",
+            query = dateQuery,
+        ).items().map(::parseTransaction)
         val reportData = runCatching {
             val householdId = session.householdId
             request(
@@ -518,7 +529,7 @@ class LiveFinanceApiClient(
                     } else {
                         mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
                     }
-                    ),
+                    ) + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val totals = reportData
@@ -537,7 +548,7 @@ class LiveFinanceApiClient(
                     } else {
                         mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
                     }
-                    ),
+                    ) + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val assetCategoryGroups = accountBalancesData
@@ -563,7 +574,7 @@ class LiveFinanceApiClient(
                     "householdId" to householdId,
                     "currency" to (accounts.firstOrNull()?.currency ?: "USD"),
                     "transactionTypes" to "transfer",
-                ),
+                ) + dateQuery,
             ).optJSONObject("data")
                 ?.optJSONArray("items")
                 ?.length()
@@ -590,6 +601,7 @@ class LiveFinanceApiClient(
         initialBalance: String,
         accountType: String,
         ownershipType: String,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> = safeCall {
         val stamp = System.currentTimeMillis().toString().takeLast(6)
         request(
@@ -604,6 +616,7 @@ class LiveFinanceApiClient(
                 }
                 .put("currency", currency)
                 .put("initialBalance", initialBalance)
+                .put("isPaymentAccount", isPaymentAccount)
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         ).dataObject().let(::parseAccount)
@@ -616,6 +629,7 @@ class LiveFinanceApiClient(
         accountType: String,
         householdId: String?,
         assetCategoryId: String?,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> = safeCall {
         val ownershipType = if (householdId.isNullOrBlank()) "personal" else "shared"
         request(
@@ -629,6 +643,7 @@ class LiveFinanceApiClient(
                 .apply { assetCategoryId?.takeIf { it.isNotBlank() }?.let { put("assetCategoryId", it) } }
                 .put("currency", currency)
                 .put("initialBalance", initialBalance)
+                .put("isPaymentAccount", isPaymentAccount)
                 .toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         ).dataObject().let(::parseAccount)
@@ -640,6 +655,7 @@ class LiveFinanceApiClient(
             .put("currentBalance", account.currentBalance)
             .put("currency", account.currency)
             .put("assetCategoryId", account.assetCategoryId?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+            .put("isPaymentAccount", account.isPaymentAccount)
         account.version?.let { body.put("version", it) }
         request(
             path = "/api/v1/accounts/${account.id.urlEncodePath()}",
@@ -753,6 +769,7 @@ class LiveFinanceApiClient(
         category: CategorySummary?,
         transactionType: String,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> = safeCall {
         request(
             path = "/api/v1/transactions",
@@ -763,7 +780,7 @@ class LiveFinanceApiClient(
                 .apply { category?.id?.takeIf { it.isNotBlank() }?.let { put("categoryId", it) } }
                 .put("amount", amount)
                 .put("currency", account.currency)
-                .put("occurredAt", nowIso())
+                .put("transactionDate", transactionDate)
                 .put("description", category?.name ?: if (transactionType == "income") "Доход" else "Расход")
                 .put("sourceType", "manual")
                 .toString(),
@@ -1150,6 +1167,7 @@ private fun parseAccount(json: JSONObject): AccountSummary {
         status = json.optString("status", "active"),
         assetCategoryId = json.optString("assetCategoryId").takeIf { it.isNotBlank() && it != "null" },
         version = json.optIntOrNull("version"),
+        isPaymentAccount = json.optBoolean("isPaymentAccount", true),
     )
 }
 
@@ -1238,11 +1256,14 @@ private fun parseCategory(json: JSONObject): CategorySummary {
 }
 
 private fun parseTransaction(json: JSONObject): TransactionSummary {
+    val occurredAt = json.optString("occurredAt").ifBlank {
+        json.optString("transactionDate").takeIf { it.isNotBlank() }?.let { "${it}T00:00:00Z" }.orEmpty()
+    }
     return TransactionSummary(
         type = json.optString("transactionType"),
         amount = json.optString("amount"),
         currency = json.optString("currency"),
-        occurredAt = json.optString("occurredAt"),
+        occurredAt = occurredAt,
         description = userFacingSeedText(json.optString("description"))
             .takeIf { it.isNotBlank() && it != "null" },
         transferScope = json.optString("transferScope").takeIf { it.isNotBlank() && it != "null" },
@@ -1253,6 +1274,7 @@ private fun parseTransaction(json: JSONObject): TransactionSummary {
         categoryId = json.optString("categoryId").takeIf { it.isNotBlank() && it != "null" },
         sourceType = json.optString("sourceType", "manual"),
         version = json.optIntOrNull("version"),
+        transactionDate = json.optString("transactionDate").ifBlank { occurredAt.take(10) },
     )
 }
 
@@ -1266,6 +1288,12 @@ private fun parseMoneyTotal(json: JSONObject): MoneyTotal {
 }
 
 private fun parseCaptureDraft(json: JSONObject): CaptureDraft {
+    val occurredDate = json.optString("occurredDate").ifBlank {
+        json.optString("occurredAt").take(10)
+    }
+    val occurredAt = json.optString("occurredAt").ifBlank {
+        occurredDate.takeIf { it.isNotBlank() }?.let { "${it}T00:00:00Z" }.orEmpty()
+    }
     return CaptureDraft(
         id = json.optString("id").ifBlank { json.optString("draftId") },
         status = json.optString("status", "pending"),
@@ -1274,7 +1302,8 @@ private fun parseCaptureDraft(json: JSONObject): CaptureDraft {
         description = json.optString("description").takeIf { it.isNotBlank() && it != "null" },
         merchantName = json.optString("merchantName").takeIf { it.isNotBlank() && it != "null" },
         capturedAt = json.optString("capturedAt").takeIf { it.isNotBlank() && it != "null" },
-        occurredAt = json.optString("occurredAt"),
+        occurredAt = occurredAt,
+        occurredDate = occurredDate,
         captureSource = json.optString("captureSource"),
         confidence = json.optDouble("confidence", 0.0),
         sourceAppPackage = json.optString("sourceAppPackage").takeIf { it.isNotBlank() && it != "null" },
@@ -1395,7 +1424,7 @@ private fun CaptureDraftCreateRequest.toJson(): JSONObject {
         .put("description", description)
         .put("merchantName", merchantName)
         .put("capturedAt", capturedAt)
-        .put("occurredAt", occurredAt)
+        .put("occurredDate", occurredDate)
         .put("captureSource", captureSource)
         .put("idempotencyKey", idempotencyKey)
         .put("confidence", confidence.toConfidenceString())
@@ -1513,7 +1542,7 @@ internal fun CaptureDraftUpdateRequest.toJsonForApi(): JSONObject {
         currency?.let { put("currency", it) }
         description?.let { put("description", it) }
         merchantName?.let { put("merchantName", it) }
-        occurredAt?.let { put("occurredAt", it) }
+        occurredDate?.let { put("occurredDate", it) }
         confidence?.let { put("confidence", it.toConfidenceString()) }
         accountId?.let { put("accountId", it) }
         categoryId?.let { put("categoryId", it) }
@@ -1684,6 +1713,13 @@ private fun planningScopeQuery(scope: String, householdId: String?): Map<String,
         )
 }
 
+private fun reportDateQuery(startDate: String?, endDate: String?): Map<String, String> {
+    return listOfNotNull(
+        startDate?.takeIf { it.isNotBlank() }?.let { "startDate" to it },
+        endDate?.takeIf { it.isNotBlank() }?.let { "endDate" to it },
+    ).toMap()
+}
+
 private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse {
     val data = json.optJSONObject("data") ?: json
     val itemsArray = data.optJSONArray("items") ?: return ScreenshotOcrResponse(emptyList())
@@ -1706,3 +1742,5 @@ private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse 
 }
 
 private fun nowIso(): String = java.time.Instant.now().toString()
+
+private fun todayDate(): String = java.time.LocalDate.now().toString()

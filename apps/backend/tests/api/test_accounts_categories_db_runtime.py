@@ -18,7 +18,7 @@ from app.categories.repository import SqlAlchemyCategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType
 from app.config import get_settings
 from app.db.base import Base
-from app.db.models import Account, Category, Household, Transaction, User
+from app.db.models import Account, AccountBalanceSnapshot, Category, Household, Transaction, User
 from app.db.models import Membership as DbMembership
 from app.db.session import sync_engine_for_url
 from app.main import create_app
@@ -29,6 +29,7 @@ SLICE_TABLES = [
     Household.__table__,
     DbMembership.__table__,
     Account.__table__,
+    AccountBalanceSnapshot.__table__,
     Category.__table__,
     Transaction.__table__,
 ]
@@ -417,6 +418,7 @@ def test_db_backed_account_snapshot_update_persists_and_blocks_currency_after_tr
                 amount=Decimal("1.0000"),
                 currency="USD",
                 occurred_at=BASE_TIME,
+                transaction_date=BASE_TIME.date(),
                 description="currency lock proof",
                 source_type="manual",
                 transfer_scope=None,

@@ -286,6 +286,34 @@ def test_openapi_asset_category_contract_uses_record_status() -> None:
     assert "name: recordStatus" in contract
 
 
+def test_openapi_date_only_and_payment_account_contract_fields() -> None:
+    account = "\n".join(_schema_block("AccountDto"))
+    account_create = "\n".join(_schema_block("AccountCreateRequest"))
+    account_update = "\n".join(_schema_block("AccountUpdateRequest"))
+    account_autocomplete = "\n".join(_schema_block("AccountAutocompleteDto"))
+    account_balance = "\n".join(_schema_block("AccountBalanceDto"))
+    transaction = "\n".join(_schema_block("TransactionDto"))
+    transaction_create = "\n".join(_schema_block("TransactionCreateRequest"))
+    capture_draft = "\n".join(_schema_block("CaptureDraftDto"))
+    capture_update = "\n".join(_schema_block("CaptureDraftUpdateRequest"))
+    contract = _contract_text()
+
+    assert "isPaymentAccount" in account
+    assert "isPaymentAccount" in account_create
+    assert "isPaymentAccount" in account_update
+    assert "isPaymentAccount" in account_autocomplete
+    assert "expense payment source" in account
+    assert "Income transactions are not blocked by this flag" in account
+    assert "payment source for income/expense operations" not in contract
+    assert "transactionDate" in transaction
+    assert "transactionDate" in transaction_create
+    assert "occurredDate" in capture_draft
+    assert "occurredDate" in capture_update
+    assert "DateOnly" in transaction + transaction_create + capture_draft
+    assert "$ref: '#/components/schemas/DateOnly'" in account_balance
+    assert "$ref: '#/components/schemas/DateTime'" not in account_balance
+
+
 def test_openapi_canonical_error_envelope_shape() -> None:
     error_envelope = "\n".join(_schema_block("ErrorEnvelope"))
     error_dto = "\n".join(_schema_block("ErrorDto"))

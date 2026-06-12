@@ -46,6 +46,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -61,6 +63,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -117,6 +120,10 @@ import com.finance.mvp.ui.theme.FinanceTheme
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.ZoneOffset
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -161,6 +168,7 @@ fun FinanceApp(
     var selectedAnalyticsSubsection by rememberSaveable {
         mutableStateOf(if (initialOpenPlanning) AnalyticsSubsection.Planning else AnalyticsSubsection.Summary)
     }
+    var selectedReportMonth by rememberSaveable { mutableStateOf(currentReportMonth()) }
     var showQuickAdd by rememberSaveable { mutableStateOf(false) }
     var quickAddOpenKey by rememberSaveable { mutableStateOf(0) }
     var quickAddError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -376,7 +384,13 @@ fun FinanceApp(
     fun loadDashboard(successMessage: String = "Данные обновлены") {
         scope.launch {
             uiState = uiState.copy(isLoading = true, message = "Обновляем данные")
-            uiState = when (val result = withContext(Dispatchers.IO) { apiClient.dashboard() }) {
+            val monthBoundary = selectedReportMonth.reportMonthBoundary()
+            uiState = when (val result = withContext(Dispatchers.IO) {
+                apiClient.dashboard(
+                    startDate = monthBoundary.startDate,
+                    endDate = monthBoundary.endDate,
+                )
+            }) {
                 is ApiResult.Success -> FinanceUiState(
                     session = result.value.session,
                     dashboard = result.value,
@@ -396,21 +410,38 @@ fun FinanceApp(
         }
     }
 
-    fun confirmCaptureDraft(draft: CaptureDraft, accountId: String, categoryId: String) {
+    fun confirmCaptureDraft(
+        draft: CaptureDraft,
+        accountId: String,
+        categoryId: String,
+        amountInput: String,
+        occurredDate: String,
+    ) {
         val selectedAccountId = accountId.takeIf { it.isNotBlank() }
         val selectedCategoryId = categoryId.takeIf { it.isNotBlank() }
         if (selectedAccountId == null || selectedCategoryId == null) {
             captureMessage = "Выберите счёт и категорию перед подтверждением"
             return
         }
+        val normalizedAmount = amountInput.normalizedAmount()
+        if (normalizedAmount == null || !occurredDate.isDateOnly()) {
+            captureMessage = "Проверьте сумму и дату операции"
+            return
+        }
         scope.launch {
             captureIsLoading = true
             val result = withContext(Dispatchers.IO) {
-                val draftToConfirm = if (draft.accountId != selectedAccountId || draft.categoryId != selectedCategoryId) {
+                val shouldUpdateDraft = draft.accountId != selectedAccountId ||
+                    draft.categoryId != selectedCategoryId ||
+                    draft.amount.normalizedAmount() != normalizedAmount ||
+                    draft.occurredDate != occurredDate
+                val draftToConfirm = if (shouldUpdateDraft) {
                     when (
                         val updateResult = apiClient.updateCaptureDraft(
                             draft.id,
                             CaptureDraftUpdateRequest(
+                                amount = normalizedAmount,
+                                occurredDate = occurredDate,
                                 accountId = selectedAccountId,
                                 categoryId = selectedCategoryId,
                             ),
@@ -546,7 +577,9 @@ fun FinanceApp(
                     QuickEntryType.Income,
                     -> {
                         val account = dashboard.accounts
+                            .filter { it.status == "active" && it.id.isNotBlank() }
                             .filter { it.matchesWritableMode(draft.visibility) }
+                            .filter { draft.type != QuickEntryType.Expense || it.isPaymentAccount }
                             .firstByIdOrFirst(draft.accountId)
                             ?: return@withContext ApiResult.Failure(
                                 "В режиме ${draft.visibility.title} нет активного счёта. Создайте счёт в «Активы» и повторите сохранение.",
@@ -565,10 +598,13 @@ fun FinanceApp(
                             category = category,
                             transactionType = draft.type.apiValue,
                             amount = amount,
+                            transactionDate = draft.transactionDate,
                         )
                     }
                     QuickEntryType.Transfer -> {
-                        val scopedAccounts = dashboard.accounts.filter { it.matchesWritableMode(draft.visibility) }
+                        val scopedAccounts = dashboard.accounts
+                            .filter { it.status == "active" && it.id.isNotBlank() }
+                            .filter { it.matchesWritableMode(draft.visibility) }
                         val source = scopedAccounts.firstByIdOrFirst(draft.accountId)
                         val destination = dashboard.accounts
                             .filter { it.matchesWritableMode(draft.visibility) && it.id != source?.id }
@@ -1038,8 +1074,13 @@ fun FinanceApp(
                     dashboard = dashboard,
                     selectedMode = selectedMode,
                     selectedSubsection = selectedAnalyticsSubsection,
+                    selectedReportMonth = selectedReportMonth,
                     onModeSelected = { selectedMode = it },
                     onSubsectionSelected = { selectedAnalyticsSubsection = it },
+                    onReportMonthSelected = { month ->
+                        selectedReportMonth = month
+                        loadDashboard("Данные обновлены", )
+                    },
                     onCreatePlanningCategory = { name, mode ->
                         val result = withContext(Dispatchers.IO) {
                             apiClient.createCategory(
@@ -1100,7 +1141,7 @@ fun FinanceApp(
             initialMode = state.mode,
             hasHousehold = !uiState.session?.householdId.isNullOrBlank(),
             onDismiss = { addAccountState = null },
-            onSubmit = { name, balance, currency, mode ->
+            onSubmit = { name, balance, currency, mode, isPaymentAccount ->
                 scope.launch {
                     uiState = uiState.copy(isLoading = true, message = "Добавляем актив")
                     val result = withContext(Dispatchers.IO) {
@@ -1111,6 +1152,7 @@ fun FinanceApp(
                             accountType = kind.apiValue,
                             householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
                             assetCategoryId = state.assetCategoryId,
+                            isPaymentAccount = isPaymentAccount,
                         )
                     }
                     when (result) {
@@ -1386,7 +1428,7 @@ private fun LazyListScope.operationsContent(
     onAggregateCreateCategory: (String, String) -> Unit,
     onConfirmAggregateDrafts: () -> Unit,
     onClearAggregateDrafts: () -> Unit,
-    onConfirmCaptureDraft: (CaptureDraft, String, String) -> Unit,
+    onConfirmCaptureDraft: (CaptureDraft, String, String, String, String) -> Unit,
     onDiscardCaptureDraft: (CaptureDraft) -> Unit,
     onDeleteTransaction: (String) -> Unit,
 ) {
@@ -1433,7 +1475,7 @@ private fun LazyListScope.operationsContent(
         }
     }
     item { Text("Операции • ${view.scopeTitle}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-    items(items.sortedByDescending { it.occurredAt }) { transaction ->
+    items(items.sortedByDescending { it.sortDateKey() }) { transaction ->
         TransactionRow(transaction, dashboard?.categories.orEmpty()) {
             onDeleteTransaction(transaction.id)
         }
@@ -1457,7 +1499,7 @@ private fun CaptureDraftReviewCard(
     onAggregateCreateCategory: (String, String) -> Unit,
     onConfirmAggregateDrafts: () -> Unit,
     onClearAggregateDrafts: () -> Unit,
-    onConfirm: (CaptureDraft, String, String) -> Unit,
+    onConfirm: (CaptureDraft, String, String, String, String) -> Unit,
     onDiscard: (CaptureDraft) -> Unit,
 ) {
     ElevatedCard(
@@ -1667,13 +1709,17 @@ private fun CaptureDraftRow(
     accounts: List<AccountSummary>,
     categories: List<CategorySummary>,
     isLoading: Boolean,
-    onConfirm: (CaptureDraft, String, String) -> Unit,
+    onConfirm: (CaptureDraft, String, String, String, String) -> Unit,
     onDiscard: (CaptureDraft) -> Unit,
 ) {
     var selectedAccountId by rememberSaveable(draft.id, draft.accountId) { mutableStateOf(draft.accountId.orEmpty()) }
     var selectedCategoryId by rememberSaveable(draft.id, draft.categoryId) { mutableStateOf(draft.categoryId.orEmpty()) }
+    var amount by rememberSaveable(draft.id, draft.amount) { mutableStateOf(draft.amount) }
+    var occurredDate by rememberSaveable(draft.id, draft.occurredDate, draft.capturedAt) {
+        mutableStateOf(draft.occurredDate.ifBlank { draft.capturedAt?.take(10).orEmpty() }.ifBlank { currentDateString() })
+    }
     val activeAccounts = accounts
-        .filter { it.status == "active" && it.id.isNotBlank() }
+        .filter { it.status == "active" && it.id.isNotBlank() && it.isPaymentAccount }
         .sortedBy { it.displayName() }
     val expenseCategories = categories
         .filter { it.status == "active" && it.type == "expense" && it.id.isNotBlank() }
@@ -1697,12 +1743,12 @@ private fun CaptureDraftRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${draft.captureSource.localizedCaptureSource()} ${draft.occurredAt.take(10)}",
+                    text = "${draft.captureSource.localizedCaptureSource()} $occurredDate",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
             Text(
-                text = "-${draft.amount} ${draft.currency}",
+                text = "-${amount.ifBlank { draft.amount }} ${draft.currency}",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFFE35D4F),
@@ -1711,6 +1757,19 @@ private fun CaptureDraftRow(
         Text(
             text = "Точность ${(draft.confidence * 100).toInt()}% | След ${draft.evidenceHash.take(12)}",
             style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { amount = it.filter { char -> char.isDigit() || char == '.' || char == ',' } },
+            label = { Text("Сумма") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DatePickerField(
+            label = "Дата операции",
+            date = occurredDate,
+            onDateSelected = { occurredDate = it },
         )
         Text("Счёт", style = MaterialTheme.typography.labelLarge)
         if (activeAccounts.isEmpty()) {
@@ -1761,8 +1820,13 @@ private fun CaptureDraftRow(
                 Text("Отклонить")
             }
             Button(
-                onClick = { onConfirm(draft, selectedAccountId, selectedCategoryId) },
-                enabled = !isLoading && draft.id.isNotBlank() && selectedAccountId.isNotBlank() && selectedCategoryId.isNotBlank(),
+                onClick = { onConfirm(draft, selectedAccountId, selectedCategoryId, amount, occurredDate) },
+                enabled = !isLoading &&
+                    draft.id.isNotBlank() &&
+                    selectedAccountId.isNotBlank() &&
+                    selectedCategoryId.isNotBlank() &&
+                    amount.normalizedAmount() != null &&
+                    occurredDate.isDateOnly(),
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Подтвердить")
@@ -1865,8 +1929,10 @@ private fun LazyListScope.analyticsContent(
     dashboard: FinanceDashboard?,
     selectedMode: FinanceMode,
     selectedSubsection: AnalyticsSubsection,
+    selectedReportMonth: String,
     onModeSelected: (FinanceMode) -> Unit,
     onSubsectionSelected: (AnalyticsSubsection) -> Unit,
+    onReportMonthSelected: (String) -> Unit,
     onCreatePlanningCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
     onCreatePlanningAccount: suspend (String, String, String, FinanceMode) -> ApiResult<AccountSummary>,
     onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
@@ -1886,6 +1952,12 @@ private fun LazyListScope.analyticsContent(
     }
     when (selectedSubsection) {
         AnalyticsSubsection.Summary -> {
+            item {
+                ReportMonthSwitcher(
+                    selectedMonth = selectedReportMonth,
+                    onSelected = onReportMonthSelected,
+                )
+            }
             item { AnalyticsSummaryCard(view) }
             item { InvestmentsCard(dashboard?.investmentsTotal, dashboard?.investmentsByCurrency.orEmpty(), view.primaryCurrency) }
             item { CategoryBreakdownCard(view.topCategories) }
@@ -2101,7 +2173,7 @@ private fun TransactionRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${transaction.occurredAt.take(10)} • ${transaction.displayDescription()}",
+                    text = "${transaction.displayDate()} • ${transaction.displayDescription()}",
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2143,7 +2215,7 @@ private fun CompactTransactionRow(transaction: TransactionSummary) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(transaction.occurredAt.take(10), style = MaterialTheme.typography.labelSmall)
+            Text(transaction.displayDate(), style = MaterialTheme.typography.labelSmall)
         }
         Text(
             text = transaction.signedAmount(),
@@ -2871,6 +2943,9 @@ private fun AccountEditDialog(
     var editName by rememberSaveable(account.id, account.name) { mutableStateOf(account.name) }
     var editBalance by rememberSaveable(account.id, account.currentBalance) { mutableStateOf(account.currentBalance) }
     var editCurrency by rememberSaveable(account.id, account.currency) { mutableStateOf(account.currency) }
+    var editIsPaymentAccount by rememberSaveable(account.id, account.isPaymentAccount) {
+        mutableStateOf(account.isPaymentAccount)
+    }
     val cleanBalance = editBalance.normalizedBalanceAmount()
     val canSave = editName.isNotBlank() && cleanBalance != null
 
@@ -2913,6 +2988,13 @@ private fun AccountEditDialog(
                         )
                     }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = editIsPaymentAccount,
+                        onCheckedChange = { editIsPaymentAccount = it },
+                    )
+                    Text("Счёт для оплаты")
+                }
             }
         },
         confirmButton = {
@@ -2926,6 +3008,7 @@ private fun AccountEditDialog(
                                 name = cleanName,
                                 currentBalance = normalizedBalance,
                                 currency = editCurrency,
+                                isPaymentAccount = editIsPaymentAccount,
                             ),
                         )
                     }
@@ -2953,6 +3036,77 @@ private fun pluralItems(count: Int): String {
         count % 10 == 1 && count % 100 != 11 -> "счёт"
         count % 10 in 2..4 && count % 100 !in 12..14 -> "счёта"
         else -> "счетов"
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerField(
+    label: String,
+    date: String,
+    onDateSelected: (String) -> Unit,
+) {
+    var showPicker by rememberSaveable { mutableStateOf(false) }
+    OutlinedButton(
+        onClick = { showPicker = true },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("$label: ${date.displayDateOnly()}")
+    }
+    if (showPicker) {
+        val pickerState = rememberDatePickerState(
+            initialSelectedDateMillis = date.dateOnlyMillis() ?: currentDateString().dateOnlyMillis(),
+        )
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { onDateSelected(it.toDateOnlyString()) }
+                        showPicker = false
+                    },
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) {
+                    Text("Отмена")
+                }
+            },
+        ) {
+            DatePicker(state = pickerState)
+        }
+    }
+}
+
+@Composable
+private fun ReportMonthSwitcher(
+    selectedMonth: String,
+    onSelected: (String) -> Unit,
+) {
+    val month = selectedMonth.toYearMonthOrCurrent()
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = { onSelected(month.minusMonths(1).toString()) }) {
+                Text("<")
+            }
+            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(month.displayReportMonth(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                val boundaries = month.toString().reportMonthBoundary()
+                Text("${boundaries.startDate} - ${boundaries.endDate}", style = MaterialTheme.typography.labelSmall)
+            }
+            OutlinedButton(onClick = { onSelected(currentReportMonth()) }) {
+                Text("Текущий")
+            }
+            OutlinedButton(onClick = { onSelected(month.plusMonths(1).toString()) }) {
+                Text(">")
+            }
+        }
     }
 }
 
@@ -3274,11 +3428,12 @@ private fun AddAccountSheet(
     initialMode: FinanceMode,
     hasHousehold: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (String, String, String, FinanceMode) -> Unit,
+    onSubmit: (String, String, String, FinanceMode, Boolean) -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf("") }
     var balance by rememberSaveable { mutableStateOf("") }
     var currency by rememberSaveable { mutableStateOf("RUB") }
+    var isPaymentAccount by rememberSaveable { mutableStateOf(true) }
     val modeOptions = writableFinanceModes(hasHousehold)
     var mode by rememberSaveable(initialMode, hasHousehold) {
         mutableStateOf(initialMode.takeIf { it in modeOptions })
@@ -3374,6 +3529,13 @@ private fun AddAccountSheet(
                     )
                 }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = isPaymentAccount,
+                    onCheckedChange = { isPaymentAccount = it },
+                )
+                Text("Счёт для оплаты")
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onDismiss,
@@ -3384,7 +3546,13 @@ private fun AddAccountSheet(
                 Button(
                     onClick = {
                         val cleanBalance = balance.trim().ifBlank { "0" }
-                        onSubmit(name.trim().ifBlank { kind.title }, cleanBalance, currency, mode ?: FinanceMode.Overview)
+                        onSubmit(
+                            name.trim().ifBlank { kind.title },
+                            cleanBalance,
+                            currency,
+                            mode ?: FinanceMode.Overview,
+                            isPaymentAccount,
+                        )
                     },
                     enabled = mode != null && (name.isNotBlank() || balance.isNotBlank()),
                     modifier = Modifier.weight(1f),
@@ -3413,16 +3581,18 @@ private fun QuickAddSheet(
     var destinationAccountId by rememberSaveable(sheetKey) { mutableStateOf("") }
     var categoryId by rememberSaveable(sheetKey) { mutableStateOf("") }
     var assetKind by rememberSaveable(sheetKey) { mutableStateOf(AssetKind.Bank) }
+    var transactionDate by rememberSaveable(sheetKey) { mutableStateOf(currentDateString()) }
     val writableModes = writableFinanceModes(!dashboard?.session?.householdId.isNullOrBlank())
     var visibility by rememberSaveable(sheetKey) {
         mutableStateOf(selectedMode.takeIf { it in writableModes })
     }
     val accounts = dashboard?.accounts.orEmpty().filter { it.status == "active" }
     val scopedAccounts = accounts.filter { mode -> visibility?.let { mode.matchesWritableMode(it) } == true }
+    val operationAccounts = scopedAccounts.operationAccountsFor(type)
     val categories = dashboard?.categories.orEmpty()
         .filter { it.type == type.apiValue && it.status == "active" }
         .filter { category -> visibility?.let { category.matchesWritableMode(it) } == true }
-    val firstAccountId = scopedAccounts.firstOrNull()?.id.orEmpty()
+    val firstAccountId = operationAccounts.firstOrNull()?.id.orEmpty()
     val firstCategoryId = categories.firstOrNull()?.id.orEmpty()
     val selectedSource = scopedAccounts.firstByIdOrFirst(accountId)
     val compatibleDestinations = scopedAccounts.compatibleTransferDestinations(selectedSource)
@@ -3443,7 +3613,7 @@ private fun QuickAddSheet(
         type = type,
         amount = amount,
         visibility = visibility,
-        accounts = scopedAccounts,
+        accounts = if (type == QuickEntryType.Transfer) scopedAccounts else operationAccounts,
         categories = categories,
         transferValidation = if (type == QuickEntryType.Transfer) transferPairValidationMessage(selectedSource, selectedDestination) else null,
     )
@@ -3500,7 +3670,7 @@ private fun QuickAddSheet(
             } else {
                 AccountPicker(
                     title = if (type == QuickEntryType.Transfer) "Со счета" else "Счет",
-                    accounts = scopedAccounts,
+                    accounts = if (type == QuickEntryType.Transfer) scopedAccounts else operationAccounts,
                     selectedId = accountId.ifBlank { firstAccountId },
                     onSelected = { accountId = it },
                 )
@@ -3523,10 +3693,16 @@ private fun QuickAddSheet(
                     )
                 }
             }
+            if (type == QuickEntryType.Expense || type == QuickEntryType.Income) {
+                DatePickerField(
+                    label = "Дата операции",
+                    date = transactionDate,
+                    onDateSelected = { transactionDate = it },
+                )
+            }
             disabledReason?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            Text("Сегодня", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     onClick = onDismiss,
@@ -3545,6 +3721,7 @@ private fun QuickAddSheet(
                                 categoryId = categoryId.ifBlank { firstCategoryId },
                                 assetKind = assetKind,
                                 visibility = visibility ?: FinanceMode.Overview,
+                                transactionDate = transactionDate,
                             ),
                         )
                     },
@@ -3636,6 +3813,54 @@ private fun List<AccountSummary>.compatibleTransferDestinations(source: AccountS
                     candidate.householdId.orEmpty() == source.householdId.orEmpty()
                 )
     }
+}
+
+internal fun List<AccountSummary>.operationAccountsFor(type: QuickEntryType): List<AccountSummary> {
+    return if (type == QuickEntryType.Expense) {
+        filter { it.isPaymentAccount }
+    } else {
+        this
+    }
+}
+
+internal fun currentDateString(): String = LocalDate.now().toString()
+
+internal fun currentReportMonth(): String = YearMonth.now().toString()
+
+internal fun String.reportMonthBoundary(): ReportMonthBoundary {
+    val month = toYearMonthOrCurrent()
+    return ReportMonthBoundary(
+        startDate = month.atDay(1).toString(),
+        endDate = month.atEndOfMonth().toString(),
+    )
+}
+
+internal fun String.isDateOnly(): Boolean {
+    return runCatching { LocalDate.parse(this) }.isSuccess
+}
+
+private fun String.toYearMonthOrCurrent(): YearMonth {
+    return runCatching { YearMonth.parse(this) }.getOrDefault(YearMonth.now())
+}
+
+private fun String.dateOnlyMillis(): Long? {
+    return runCatching {
+        LocalDate.parse(this).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    }.getOrNull()
+}
+
+private fun Long.toDateOnlyString(): String {
+    return Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate().toString()
+}
+
+private fun String.displayDateOnly(): String {
+    val date = runCatching { LocalDate.parse(this) }.getOrNull() ?: return this
+    return date.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale("ru", "RU")))
+}
+
+private fun YearMonth.displayReportMonth(): String {
+    return atDay(1).format(java.time.format.DateTimeFormatter.ofPattern("LLLL yyyy", Locale("ru", "RU")))
+        .replaceFirstChar { it.titlecase(Locale("ru", "RU")) }
 }
 
 @Composable
@@ -3732,7 +3957,8 @@ internal suspend fun restoredFinanceUiState(apiClient: FinanceApiClient): Financ
                     message = "Войдите, чтобы увидеть финансы",
                 )
             } else {
-                when (val dashboardResult = apiClient.dashboard()) {
+                val monthBoundary = currentReportMonth().reportMonthBoundary()
+                when (val dashboardResult = apiClient.dashboard(monthBoundary.startDate, monthBoundary.endDate)) {
                     is ApiResult.Success -> FinanceUiState(
                         session = dashboardResult.value.session,
                         dashboard = dashboardResult.value,
@@ -3798,6 +4024,11 @@ data class CategorySpend(
     @DrawableRes val icon: Int,
 )
 
+data class ReportMonthBoundary(
+    val startDate: String,
+    val endDate: String,
+)
+
 data class QuickAddDraft(
     val amount: String,
     val type: QuickEntryType,
@@ -3806,6 +4037,7 @@ data class QuickAddDraft(
     val categoryId: String,
     val assetKind: AssetKind,
     val visibility: FinanceMode,
+    val transactionDate: String = currentDateString(),
 )
 
 data class AddAccountState(
@@ -3852,7 +4084,7 @@ fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<Sectio
             SectionCard("Расходы месяца", view.monthExpenses.formatMoney(view.primaryCurrency), "переводы отдельно"),
         )
         AppSection.Operations -> dashboard?.transactions.orEmpty().map {
-            SectionCard(it.displayDescription(), it.signedAmount(), it.occurredAt.take(10))
+            SectionCard(it.displayDescription(), it.signedAmount(), it.displayDate())
         }
         AppSection.Assets -> view.assetSummaries.map {
             SectionCard(it.kind.title, it.balance.formatMoney(it.currency), "${it.count} шт.")
@@ -3904,7 +4136,7 @@ fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
         operationCount = transactions.size,
         assetSummaries = assetSummaries(accounts),
         topCategories = topCategories(transactions, dashboard?.categories.orEmpty(), currency),
-        recentTransactions = transactions.sortedByDescending { it.occurredAt }.take(6),
+        recentTransactions = transactions.sortedByDescending { it.sortDateKey() }.take(6),
     )
 }
 
@@ -4250,6 +4482,14 @@ private fun TransactionSummary.signedAmount(): String {
     return "$prefix${amount.toMoney().formatMoney(currency)}"
 }
 
+private fun TransactionSummary.displayDate(): String {
+    return transactionDate.ifBlank { occurredAt.take(10) }
+}
+
+private fun TransactionSummary.sortDateKey(): String {
+    return transactionDate.ifBlank { occurredAt }
+}
+
 private fun TransactionSummary.localizedType(): String = when (type) {
     "income" -> "Доход"
     "transfer" -> "Перевод"
@@ -4465,7 +4705,7 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         return ApiResult.Success(SessionStatus(true, "Пользователь", "household"))
     }
 
-    override suspend fun dashboard(): ApiResult<FinanceDashboard> {
+    override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> {
         val session = SessionStatus(true, "Пользователь", "household")
         return ApiResult.Success(previewDashboard(session))
     }
@@ -4476,8 +4716,9 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         initialBalance: String,
         accountType: String,
         ownershipType: String,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary("Новый актив", accountType, ownershipType, currency, initialBalance, id = "acc-created", householdId = householdId, version = 1))
+        return ApiResult.Success(AccountSummary("Новый актив", accountType, ownershipType, currency, initialBalance, id = "acc-created", householdId = householdId, version = 1, isPaymentAccount = isPaymentAccount))
     }
 
     override suspend fun createAccount(
@@ -4487,8 +4728,9 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         accountType: String,
         householdId: String?,
         assetCategoryId: String?,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> {
-        return ApiResult.Success(AccountSummary(name, accountType, if (householdId.isNullOrBlank()) "personal" else "shared", currency, initialBalance, id = "acc-created", householdId = householdId, assetCategoryId = assetCategoryId, version = 1))
+        return ApiResult.Success(AccountSummary(name, accountType, if (householdId.isNullOrBlank()) "personal" else "shared", currency, initialBalance, id = "acc-created", householdId = householdId, assetCategoryId = assetCategoryId, version = 1, isPaymentAccount = isPaymentAccount))
     }
 
     override suspend fun updateAccount(account: AccountSummary): ApiResult<AccountSummary> {
@@ -4535,8 +4777,9 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         category: CategorySummary?,
         transactionType: String,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Success(TransactionSummary(transactionType, amount, account.currency, "2026-05-18T09:00:00Z", category?.name ?: "Новая операция", null, null, id = "txn-created", accountId = account.id, categoryId = category?.id, version = 1))
+        return ApiResult.Success(TransactionSummary(transactionType, amount, account.currency, "${transactionDate}T00:00:00Z", category?.name ?: "Новая операция", null, null, id = "txn-created", accountId = account.id, categoryId = category?.id, version = 1, transactionDate = transactionDate))
     }
 
     override suspend fun updateTransaction(transaction: TransactionSummary): ApiResult<TransactionSummary> {

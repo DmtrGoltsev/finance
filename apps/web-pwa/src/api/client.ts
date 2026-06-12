@@ -50,6 +50,7 @@ type AccountDto = {
   id: string;
   name: string;
   accountType: string;
+  isPaymentAccount?: boolean;
   ownershipType: "personal" | "shared";
   ownerUserId: string | null;
   householdId: string | null;
@@ -89,6 +90,7 @@ type TransactionDto = {
   amount: string | number;
   currency: string;
   occurredAt: string;
+  transactionDate?: string | null;
   description: string | null;
   sourceType?: "manual";
   transferScope?: string | null;
@@ -123,6 +125,7 @@ type CaptureDraftDto = {
   idempotencyKey: string;
   captureSource: "screenshot";
   capturedAt: string;
+  occurredDate?: string | null;
   occurredAt?: string | null;
   amount: string | number;
   currency: string;
@@ -167,6 +170,7 @@ type DataEnvelope<T> = {
 type AccountCreateInput = {
   name?: string;
   kind?: AccountKind;
+  isPaymentAccount?: boolean;
   currency?: CurrencyCode;
   initialBalance?: number;
   ownershipType?: "personal" | "shared";
@@ -201,8 +205,14 @@ type OperationCreateInput = {
   currency: CurrencyCode;
   transactionType?: "income" | "expense";
   amount?: number;
+  transactionDate?: string;
   occurredAt?: string;
   description?: string | null;
+};
+
+type ReportPeriodInput = {
+  startDate?: string;
+  endDate?: string;
 };
 
 type TransferCreateInput = {
@@ -229,10 +239,11 @@ export class ApiRequestError extends Error {
 export interface FinanceApiClient {
   loginWithPassword(input: LoginInput): Promise<void>;
   logout(): Promise<void>;
-  getDashboardSnapshot(): Promise<DashboardSnapshot>;
+  getDashboardSnapshot(input?: ReportPeriodInput): Promise<DashboardSnapshot>;
   createDemoAccount(input?: AccountCreateInput): Promise<AccountSummary>;
   updateAccount(input: {
     accountId: string;
+    isPaymentAccount?: boolean;
     version?: number;
   }): Promise<AccountSummary>;
   archiveAccount(accountId: string): Promise<AccountSummary>;
@@ -327,7 +338,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     clearCookie(CSRF_COOKIE_NAME);
   }
 
-  async getDashboardSnapshot(): Promise<DashboardSnapshot> {
+  async getDashboardSnapshot(input: ReportPeriodInput = {}): Promise<DashboardSnapshot> {
     const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
     const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope] =
       await Promise.all([
@@ -346,7 +357,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       .map((transaction) => mapTransfer(transaction, accounts));
     const householdId = pickHouseholdId(session.actor);
     const currency = accounts[0]?.balance.currency ?? "RUB";
-    const reports = await this.getReports(householdId, currency);
+    const reports = await this.getReports(householdId, currency, input);
 
     return {
       session: {
@@ -371,6 +382,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         body: JSON.stringify({
           name: input.name?.trim() || `Новый актив ${uniqueSuffix()}`,
           accountType: accountTypeFromKind(input.kind ?? "cash"),
+          isPaymentAccount: input.isPaymentAccount ?? true,
           ownershipType: input.ownershipType ?? "personal",
           householdId: input.ownershipType === "shared" ? input.householdId : null,
           currency: input.currency ?? "RUB",
@@ -384,16 +396,24 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   async updateAccount(input: {
     accountId: string;
+    isPaymentAccount?: boolean;
     version?: number;
   }): Promise<AccountSummary> {
+    const body =
+      input.isPaymentAccount === undefined
+        ? {
+            name: `Updated account ${uniqueSuffix()}`,
+            ...(input.version ? { version: input.version } : {})
+          }
+        : {
+            isPaymentAccount: input.isPaymentAccount,
+            ...(input.version ? { version: input.version } : {})
+          };
     const envelope = await this.request<DataEnvelope<AccountDto>>(
       `/api/v1/accounts/${input.accountId}`,
       {
         method: "PATCH",
-        body: JSON.stringify({
-          name: `Обновленный счет ${uniqueSuffix()}`,
-          ...(input.version ? { version: input.version } : {})
-        })
+        body: JSON.stringify(body)
       }
     );
 
@@ -501,7 +521,9 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           categoryId: input.categoryId,
           amount: amount.toFixed(4),
           currency: input.currency,
-          occurredAt: input.occurredAt ?? new Date().toISOString(),
+          transactionDate:
+            input.transactionDate ?? dateOnlyFromValue(input.occurredAt) ?? todayDateOnly(),
+          ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
           description: input.description?.trim() || transactionTypeLabel(transactionType),
           sourceType: "manual"
         })
@@ -673,6 +695,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           amount: input.amount.toFixed(4),
           currency: input.currency,
           description: input.description.trim(),
+          ...(input.occurredDate ? { occurredDate: input.occurredDate } : {}),
           ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
           ...(input.merchantName ? { merchantName: input.merchantName } : {}),
           ...(input.accountId ? { accountId: input.accountId } : {}),
@@ -717,6 +740,9 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           ...(input.description !== undefined
             ? { description: input.description.trim() }
             : {}),
+          ...(input.occurredDate !== undefined
+            ? { occurredDate: input.occurredDate }
+            : {}),
           ...(input.occurredAt !== undefined ? { occurredAt: input.occurredAt } : {}),
           ...(input.accountId !== undefined ? { accountId: input.accountId } : {}),
           ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
@@ -752,7 +778,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   private async getReports(
     householdId: string | null,
-    currency: CurrencyCode
+    currency: CurrencyCode,
+    period: ReportPeriodInput = {}
   ): Promise<ReportSummary[]> {
     const modes: ReportMode[] = [
       "shared_family_report",
@@ -770,11 +797,17 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           householdId,
           currency
         });
+        if (period.startDate) {
+          params.set("startDate", period.startDate);
+        }
+        if (period.endDate) {
+          params.set("endDate", period.endDate);
+        }
         const envelope = await this.get<DataEnvelope<ReportSummaryDto>>(
           `/api/v1/reports/summary?${params.toString()}`
         );
 
-        return mapReport(envelope.data, currency);
+        return mapReport(envelope.data, currency, period);
       })
     );
   }
@@ -867,6 +900,7 @@ function mapAccount(account: AccountDto): AccountSummary {
     name: userFacingSeedText(account.name),
     ownerName: account.ownershipType === "shared" ? "Общее" : "Личное",
     kind: mapAccountKind(account.accountType),
+    isPaymentAccount: account.isPaymentAccount ?? true,
     ownershipType: account.ownershipType,
     householdId: account.householdId,
     status: account.status,
@@ -941,7 +975,7 @@ function mapOperation(
 
   return {
     id: transaction.id,
-    date: transaction.occurredAt,
+    date: transaction.transactionDate ?? transaction.occurredAt,
     title:
       userFacingSeedText(transaction.description) ||
       transactionTypeLabel(transaction.transactionType),
@@ -964,7 +998,7 @@ function mapTransfer(
 ): TransferSummary {
   return {
     id: transaction.id,
-    date: transaction.occurredAt,
+    date: transaction.transactionDate ?? transaction.occurredAt,
     accountId: transaction.accountId,
     counterpartyAccountId: transaction.counterpartyAccountId,
     version: transaction.version,
@@ -987,6 +1021,7 @@ function mapCaptureDraft(draft: CaptureDraftDto): CaptureDraftSummary {
     idempotencyKey: draft.idempotencyKey,
     captureSource: draft.captureSource,
     capturedAt: draft.capturedAt,
+    occurredDate: draft.occurredDate ?? dateOnlyFromValue(draft.occurredAt) ?? null,
     occurredAt: draft.occurredAt ?? null,
     amount: money(draft.amount, draft.currency),
     description: draft.description,
@@ -998,7 +1033,8 @@ function mapCaptureDraft(draft: CaptureDraftDto): CaptureDraftSummary {
 
 function mapReport(
   report: ReportSummaryDto,
-  fallbackCurrency: CurrencyCode
+  fallbackCurrency: CurrencyCode,
+  period: ReportPeriodInput = {}
 ): ReportSummary {
   const total = report.totalsByCurrency?.[0];
   const mode = report.reportMode ?? report.scope?.reportMode;
@@ -1019,7 +1055,7 @@ function mapReport(
   return {
     mode: mode ?? "combined_viewer_overview",
     title: reportModeLabels[mode ?? "combined_viewer_overview"],
-    periodLabel: "Текущий месяц",
+    periodLabel: reportPeriodLabel(period),
     income: money(income, currency),
     expense: money(expense, currency),
     balanceDelta: money(delta, currency)
@@ -1035,6 +1071,43 @@ function emptyReport(mode: ReportMode, currency: CurrencyCode): ReportSummary {
     expense: money(0, currency),
     balanceDelta: money(0, currency)
   };
+}
+
+function reportPeriodLabel(period: ReportPeriodInput): string {
+  if (period.startDate && period.endDate) {
+    return `${period.startDate} - ${period.endDate}`;
+  }
+
+  return "Текущий месяц";
+}
+
+function todayDateOnly(): string {
+  const date = new Date();
+  return formatDateOnly(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+function dateOnlyFromValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return formatDateOnly(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+function formatDateOnly(year: number, month: number, day: number): string {
+  return [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0")
+  ].join("-");
 }
 
 function money(value: string | number, currency: string): MoneyAmount {

@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -20,7 +21,6 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     text,
@@ -84,7 +84,10 @@ class User(TimestampMixin, VersionedMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(enum_check("auth_status", AUTH_STATUSES), name="auth_status_valid"),
-        CheckConstraint(enum_check("record_status", ACTIVE_DELETED_STATUSES), name="record_status_valid"),
+        CheckConstraint(
+            enum_check("record_status", ACTIVE_DELETED_STATUSES),
+            name="record_status_valid",
+        ),
         Index(
             "uq_users_email_normalized_not_deleted",
             "email_normalized",
@@ -98,9 +101,21 @@ class User(TimestampMixin, VersionedMixin, Base):
     email_normalized: Mapped[str | None] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text)
-    auth_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
-    session_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
+    auth_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    session_version: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default=text("1"),
+    )
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -109,7 +124,10 @@ class Household(TimestampMixin, VersionedMixin, Base):
     __tablename__ = "households"
     __table_args__ = (
         CheckConstraint(enum_check("status", HOUSEHOLD_STATUSES), name="status_valid"),
-        CheckConstraint(enum_check("record_status", ACTIVE_DELETED_STATUSES), name="record_status_valid"),
+        CheckConstraint(
+            enum_check("record_status", ACTIVE_DELETED_STATUSES),
+            name="record_status_valid",
+        ),
         Index("ix_households_created_by_user_id", "created_by_user_id"),
         Index("ix_households_status_record_status", "status", "record_status"),
     )
@@ -117,9 +135,21 @@ class Household(TimestampMixin, VersionedMixin, Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     name: Mapped[str] = mapped_column(Text, nullable=False)
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
-    membership_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    membership_version: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default=text("1"),
+    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -218,8 +248,19 @@ class Account(TimestampMixin, VersionedMixin, Base):
         Index("ix_accounts_owner_user_status", "owner_user_id", "record_status"),
         Index("ix_accounts_household_status", "household_id", "record_status"),
         Index("ix_accounts_asset_category_id", "asset_category_id"),
-        Index("ix_accounts_ownership_owner_status", "ownership_type", "owner_user_id", "record_status"),
-        Index("ix_accounts_ownership_household_status", "ownership_type", "household_id", "record_status"),
+        Index("ix_accounts_payment_status", "is_payment_account", "record_status"),
+        Index(
+            "ix_accounts_ownership_owner_status",
+            "ownership_type",
+            "owner_user_id",
+            "record_status",
+        ),
+        Index(
+            "ix_accounts_ownership_household_status",
+            "ownership_type",
+            "household_id",
+            "record_status",
+        ),
     )
     # TODO(db-trigger): forbid updates to ownership_type/owner_user_id/household_id before release.
 
@@ -230,6 +271,12 @@ class Account(TimestampMixin, VersionedMixin, Base):
     owner_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     asset_category_id: Mapped[uuid.UUID | None] = uuid_fk("asset_categories.id", nullable=True)
+    is_payment_account: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     initial_balance_amount: Mapped[Decimal] = mapped_column(
         MONEY_NUMERIC,
@@ -237,10 +284,36 @@ class Account(TimestampMixin, VersionedMixin, Base):
         server_default=text("0"),
     )
     current_balance_amount: Mapped[Decimal | None] = mapped_column(MONEY_NUMERIC)
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AccountBalanceSnapshot(TimestampMixin, VersionedMixin, Base):
+    __tablename__ = "account_balance_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "currency = upper(currency) AND length(currency) = 3",
+            name="currency_iso_shape",
+        ),
+        Index(
+            "ix_account_balance_snapshots_account_date_created",
+            "account_id",
+            text("snapshot_date DESC"),
+            text("created_at DESC"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = uuid_fk("accounts.id")
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    balance_amount: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
 
 class AssetCategory(TimestampMixin, VersionedMixin, Base):
@@ -282,7 +355,11 @@ class AssetCategory(TimestampMixin, VersionedMixin, Base):
         nullable=False,
         server_default=text("false"),
     )
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -295,12 +372,18 @@ class Category(TimestampMixin, VersionedMixin, Base):
         CheckConstraint(enum_check("category_type", CATEGORY_TYPES), name="category_type_valid"),
         CheckConstraint(
             "(category_scope = 'personal' AND owner_user_id IS NOT NULL AND household_id IS NULL) "
-            "OR (category_scope = 'household' AND household_id IS NOT NULL AND owner_user_id IS NULL)",
+            "OR (category_scope = 'household' "
+            "AND household_id IS NOT NULL AND owner_user_id IS NULL)",
             name="exactly_one_scope",
         ),
         CheckConstraint(enum_check("record_status", RECORD_STATUSES), name="record_status_valid"),
         Index("ix_categories_owner_type_status", "owner_user_id", "category_type", "record_status"),
-        Index("ix_categories_household_type_status", "household_id", "category_type", "record_status"),
+        Index(
+            "ix_categories_household_type_status",
+            "household_id",
+            "category_type",
+            "record_status",
+        ),
     )
     # TODO(db-trigger): forbid updates to category_scope/owner_user_id/household_id before release.
 
@@ -312,7 +395,11 @@ class Category(TimestampMixin, VersionedMixin, Base):
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     icon_key: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str | None] = mapped_column(Text)
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -321,7 +408,10 @@ class Category(TimestampMixin, VersionedMixin, Base):
 class Transaction(TimestampMixin, VersionedMixin, Base):
     __tablename__ = "transactions"
     __table_args__ = (
-        CheckConstraint(enum_check("transaction_type", TRANSACTION_TYPES), name="transaction_type_valid"),
+        CheckConstraint(
+            enum_check("transaction_type", TRANSACTION_TYPES),
+            name="transaction_type_valid",
+        ),
         CheckConstraint(enum_check("source_type", SOURCE_TYPES), name="source_type_valid"),
         CheckConstraint("source_type = 'manual'", name="source_type_manual_only"),
         CheckConstraint("amount > 0", name="positive_amount"),
@@ -346,8 +436,22 @@ class Transaction(TimestampMixin, VersionedMixin, Base):
             "transaction_type NOT IN ('income', 'expense') OR category_id IS NOT NULL",
             name="income_expense_category_required",
         ),
-        CheckConstraint(enum_check("record_status", ACTIVE_DELETED_STATUSES), name="record_status_valid"),
-        Index("ix_transactions_account_occurred_status", "account_id", text("occurred_at DESC"), "record_status"),
+        CheckConstraint(
+            enum_check("record_status", ACTIVE_DELETED_STATUSES),
+            name="record_status_valid",
+        ),
+        Index(
+            "ix_transactions_account_occurred_status",
+            "account_id",
+            text("occurred_at DESC"),
+            "record_status",
+        ),
+        Index(
+            "ix_transactions_account_transaction_date_status",
+            "account_id",
+            text("transaction_date DESC"),
+            "record_status",
+        ),
         Index(
             "ix_transactions_category_occurred",
             "category_id",
@@ -355,14 +459,25 @@ class Transaction(TimestampMixin, VersionedMixin, Base):
             postgresql_where=text("category_id IS NOT NULL"),
         ),
         Index(
+            "ix_transactions_category_transaction_date",
+            "category_id",
+            text("transaction_date DESC"),
+            postgresql_where=text("category_id IS NOT NULL"),
+        ),
+        Index(
             "ix_transactions_counterparty_account",
             "counterparty_account_id",
             postgresql_where=text("counterparty_account_id IS NOT NULL"),
         ),
-        Index("ix_transactions_created_by_occurred", "created_by_user_id", text("occurred_at DESC")),
+        Index(
+            "ix_transactions_created_by_occurred",
+            "created_by_user_id",
+            text("occurred_at DESC"),
+        ),
         Index("ix_transactions_source_type", "source_type"),
     )
-    # TODO(db-trigger): validate transfer same-scope and same-currency by comparing both account rows.
+    # TODO(db-trigger): validate transfer same-scope and same-currency by comparing both
+    # account rows.
 
     id: Mapped[uuid.UUID] = uuid_pk()
     transaction_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -372,11 +487,16 @@ class Transaction(TimestampMixin, VersionedMixin, Base):
     amount: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'manual'"))
     transfer_scope: Mapped[str | None] = mapped_column(Text)
     transfer_status: Mapped[str | None] = mapped_column(Text)
-    record_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     last_edited_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -423,6 +543,7 @@ class CaptureDraft(TimestampMixin, VersionedMixin, Base):
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    occurred_date: Mapped[date | None] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(MONEY_NUMERIC, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -659,7 +780,12 @@ class PasswordResetToken(Base):
             unique=True,
             postgresql_where=text("status = 'pending'"),
         ),
-        Index("ix_password_reset_tokens_email_status_created", "email_hash", "status", "created_at"),
+        Index(
+            "ix_password_reset_tokens_email_status_created",
+            "email_hash",
+            "status",
+            "created_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -680,20 +806,30 @@ class ExportJob(TimestampMixin, VersionedMixin, Base):
         CheckConstraint(enum_check("scope_type", EXPORT_SCOPE_TYPES), name="scope_type_valid"),
         CheckConstraint(enum_check("status", EXPORT_STATUSES), name="status_valid"),
         CheckConstraint(
-            "(scope_type = 'personal' AND owner_user_id = requested_by_user_id AND household_id IS NULL) "
+            "(scope_type = 'personal' "
+            "AND owner_user_id = requested_by_user_id AND household_id IS NULL) "
             "OR (scope_type = 'household' AND household_id IS NOT NULL AND owner_user_id IS NULL) "
             "OR (scope_type = 'combined' AND owner_user_id = requested_by_user_id "
             "AND household_id IS NOT NULL)",
             name="export_scope_shape",
         ),
-        Index("ix_export_jobs_requested_status_created", "requested_by_user_id", "status", text("created_at DESC")),
+        Index(
+            "ix_export_jobs_requested_status_created",
+            "requested_by_user_id",
+            "status",
+            text("created_at DESC"),
+        ),
         Index(
             "ix_export_jobs_household_status",
             "household_id",
             "status",
             postgresql_where=text("household_id IS NOT NULL"),
         ),
-        Index("ix_export_jobs_ready_expires", "expires_at", postgresql_where=text("status = 'ready'")),
+        Index(
+            "ix_export_jobs_ready_expires",
+            "expires_at",
+            postgresql_where=text("status = 'ready'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -752,8 +888,18 @@ class AuditEvent(Base):
             name="audit_scope_shape",
         ),
         Index("ix_audit_events_actor_occurred", "actor_user_id", text("occurred_at DESC")),
-        Index("ix_audit_events_scope_owner_occurred", "scope_type", "owner_user_id", text("occurred_at DESC")),
-        Index("ix_audit_events_scope_household_occurred", "scope_type", "household_id", text("occurred_at DESC")),
+        Index(
+            "ix_audit_events_scope_owner_occurred",
+            "scope_type",
+            "owner_user_id",
+            text("occurred_at DESC"),
+        ),
+        Index(
+            "ix_audit_events_scope_household_occurred",
+            "scope_type",
+            "household_id",
+            text("occurred_at DESC"),
+        ),
         Index("ix_audit_events_request_id", "request_id"),
     )
 

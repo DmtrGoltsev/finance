@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from app.config import get_settings
+from app.db.models import AccountBalanceSnapshot
+from app.db.session import sync_session_scope
 from tests.transactions.test_transactions_db_runtime import (
     _assert_no_hidden_markers,
     _assert_same_public_error,
@@ -46,6 +51,46 @@ def _drilldown_ids(body: dict[str, Any]) -> set[str]:
 
 def _account_ids(body: dict[str, Any]) -> set[str]:
     return {item["accountId"] for item in body["data"]["items"]}
+
+
+def _expenses_by_category(body: dict[str, Any]) -> list[dict[str, Any]]:
+    return body["data"]["expensesByCategory"]
+
+
+def _account_item(body: dict[str, Any], account_id: str) -> dict[str, Any]:
+    for item in body["data"]["items"]:
+        if item["accountId"] == account_id:
+            return item
+    raise AssertionError(f"account not present in response: {account_id}")
+
+
+def _insert_balance_snapshot(
+    *,
+    account_id: str,
+    snapshot_date: date,
+    balance: str,
+    currency: str = "RUB",
+) -> None:
+    observed_at = datetime(
+        snapshot_date.year,
+        snapshot_date.month,
+        snapshot_date.day,
+        12,
+        tzinfo=UTC,
+    )
+    with sync_session_scope(get_settings()) as session:
+        session.add(
+            AccountBalanceSnapshot(
+                id=uuid4(),
+                account_id=UUID(account_id),
+                snapshot_date=snapshot_date,
+                balance_amount=Decimal(balance),
+                currency=currency,
+                created_at=observed_at,
+                updated_at=observed_at,
+                version=1,
+            )
+        )
 
 
 def _assert_report_response_has_no_hidden_signals(response: Any, *hidden_values: str) -> None:
@@ -151,6 +196,153 @@ def test_report_breakdown_cash_flow_and_detail_drilldown_are_visible_only(
     _assert_report_response_has_no_hidden_signals(cash_flow)
 
 
+def test_monthly_expense_category_aggregation_uses_date_only_boundaries(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    params = _params(transaction_graph, "shared_family_report")
+    account_id = transaction_graph["accounts"]["acc_ab_cash"]
+    category_id = transaction_graph["categories"]["cat_ab_groceries"]
+
+    with _client_for_actor(owner) as client:
+        first = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "5.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-05-01",
+                "sourceType": "manual",
+            },
+        )
+        second = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "7.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-05-31",
+                "sourceType": "manual",
+            },
+        )
+        outside = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "99.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-06-01",
+                "sourceType": "manual",
+            },
+        )
+        breakdown = client.get("/api/v1/reports/category-breakdown", params=params)
+        cash_flow = client.get("/api/v1/reports/cash-flow", params={**params, "bucket": "month"})
+
+    assert first.status_code == second.status_code == outside.status_code == 201
+    assert breakdown.status_code == 200, breakdown.text
+    [row] = _expenses_by_category(breakdown.json())
+    assert row["categoryId"] == category_id
+    assert row["amount"] == "28.0000"
+    assert row["transactionCount"] == 3
+    assert cash_flow.status_code == 200, cash_flow.text
+    [point] = cash_flow.json()["data"]["points"]
+    assert point["periodStartDate"] == "2026-05-01"
+    assert point["periodEndDate"] == "2026-05-31"
+    assert point["totalsByCurrency"][0]["expenseTotal"] == "28.0000"
+
+
+def test_monthly_reports_aggregate_repeated_expenses_across_multiple_months(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    account_id = transaction_graph["accounts"]["acc_ab_cash"]
+    category_id = transaction_graph["categories"]["cat_ab_groceries"]
+    base_params = {
+        "reportMode": "shared_family_report",
+        "householdId": transaction_graph["households"]["hh_ab"],
+        "timezone": "Europe/Moscow",
+    }
+
+    with _client_for_actor(owner) as client:
+        january_first = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "5.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-01-05",
+                "sourceType": "manual",
+            },
+        )
+        january_second = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "7.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-01-31",
+                "sourceType": "manual",
+            },
+        )
+        february = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "expense",
+                "accountId": account_id,
+                "categoryId": category_id,
+                "amount": "11.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-02-01",
+                "sourceType": "manual",
+            },
+        )
+        january_breakdown = client.get(
+            "/api/v1/reports/category-breakdown",
+            params={
+                **base_params,
+                "startDate": "2026-01-01",
+                "endDate": "2026-01-31",
+            },
+        )
+        cash_flow = client.get(
+            "/api/v1/reports/cash-flow",
+            params={
+                **base_params,
+                "startDate": "2026-01-01",
+                "endDate": "2026-02-28",
+                "bucket": "month",
+            },
+        )
+
+    assert january_first.status_code == 201, january_first.text
+    assert january_second.status_code == 201, january_second.text
+    assert february.status_code == 201, february.text
+    assert january_breakdown.status_code == 200, january_breakdown.text
+    [january_row] = _expenses_by_category(january_breakdown.json())
+    assert january_row["categoryId"] == category_id
+    assert january_row["amount"] == "12.0000"
+    assert january_row["transactionCount"] == 2
+
+    assert cash_flow.status_code == 200, cash_flow.text
+    points_by_start = {
+        point["periodStartDate"]: point for point in cash_flow.json()["data"]["points"]
+    }
+    assert points_by_start["2026-01-01"]["periodEndDate"] == "2026-01-31"
+    assert points_by_start["2026-01-01"]["totalsByCurrency"][0]["expenseTotal"] == "12.0000"
+    assert points_by_start["2026-02-01"]["periodEndDate"] == "2026-02-28"
+    assert points_by_start["2026-02-01"]["totalsByCurrency"][0]["expenseTotal"] == "11.0000"
+
+
 def test_report_totals_keep_transfers_and_asset_ops_out_of_spending(
     transaction_graph: dict[str, Any],
 ) -> None:
@@ -227,6 +419,14 @@ def test_account_balances_include_asset_categories_manual_amount_and_investments
         )
         before_delete = client.get("/api/v1/reports/account-balances", params=params)
         summary = client.get("/api/v1/reports/summary", params=params)
+        changed_balance = client.patch(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}",
+            json={"currentBalance": "999.0000"},
+        )
+        historical_after_balance_change = client.get(
+            "/api/v1/reports/account-balances",
+            params=params,
+        )
         deleted = client.delete(
             f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}"
         )
@@ -244,6 +444,13 @@ def test_account_balances_include_asset_categories_manual_amount_and_investments
     ]
     assert summary.status_code == 200
     assert _summary_by_currency(summary.json())["RUB"]["investmentsTotal"] == "200.0000"
+    assert changed_balance.status_code == 200, changed_balance.text
+    assert historical_after_balance_change.status_code == 200
+    historical_group = historical_after_balance_change.json()["data"]["assetCategoryGroups"][0]
+    assert historical_group["currentBalanceTotal"] == "200.0000"
+    assert historical_after_balance_change.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "200.0000"}
+    ]
 
     assert deleted.status_code == 204
     group_after_delete = after_delete.json()["data"]["assetCategoryGroups"][0]
@@ -253,6 +460,100 @@ def test_account_balances_include_asset_categories_manual_amount_and_investments
         {"currency": "RUB", "investmentsTotal": "100.0000"}
     ]
     assert transaction_graph["accounts"]["acc_ab_savings"] not in _account_ids(after_delete.json())
+
+
+def test_account_balance_reports_use_historical_snapshot_dates_for_investments(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    account_id = transaction_graph["accounts"]["acc_ab_savings"]
+    params = {
+        "reportMode": "shared_family_report",
+        "householdId": transaction_graph["households"]["hh_ab"],
+        "timezone": "Europe/Moscow",
+    }
+
+    with _client_for_actor(owner) as client:
+        category = client.post(
+            "/api/v1/asset-categories",
+            json={
+                "name": "Historical Investments",
+                "scopeType": "household",
+                "householdId": transaction_graph["households"]["hh_ab"],
+                "currency": "RUB",
+                "assetType": "brokerage",
+                "manualAmount": "100.0000",
+                "isInvestment": True,
+            },
+        )
+        assert category.status_code == 201, category.text
+        category_id = category.json()["data"]["id"]
+
+        linked = client.patch(
+            f"/api/v1/accounts/{account_id}",
+            json={"assetCategoryId": category_id},
+        )
+        assert linked.status_code == 200, linked.text
+
+    _insert_balance_snapshot(
+        account_id=account_id,
+        snapshot_date=date(2026, 3, 31),
+        balance="75.0000",
+    )
+    _insert_balance_snapshot(
+        account_id=account_id,
+        snapshot_date=date(2026, 4, 30),
+        balance="120.0000",
+    )
+    _insert_balance_snapshot(
+        account_id=account_id,
+        snapshot_date=date(2026, 5, 31),
+        balance="200.0000",
+    )
+
+    with _client_for_actor(owner) as client:
+        before_april_snapshot = client.get(
+            "/api/v1/reports/account-balances",
+            params={**params, "startDate": "2026-04-01", "endDate": "2026-04-15"},
+        )
+        after_april_snapshot = client.get(
+            "/api/v1/reports/account-balances",
+            params={**params, "startDate": "2026-04-01", "endDate": "2026-04-30"},
+        )
+        may_snapshot = client.get(
+            "/api/v1/reports/account-balances",
+            params={**params, "startDate": "2026-05-01", "endDate": "2026-05-31"},
+        )
+
+    assert before_april_snapshot.status_code == 200, before_april_snapshot.text
+    before_item = _account_item(before_april_snapshot.json(), account_id)
+    assert before_item["currentBalance"] == "75.0000"
+    assert before_item["balanceAsOf"] == "2026-03-31"
+    assert before_april_snapshot.json()["data"]["assetCategoryGroups"][0][
+        "currentBalanceTotal"
+    ] == "175.0000"
+    assert before_april_snapshot.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "175.0000"}
+    ]
+
+    assert after_april_snapshot.status_code == 200, after_april_snapshot.text
+    after_item = _account_item(after_april_snapshot.json(), account_id)
+    assert after_item["currentBalance"] == "120.0000"
+    assert after_item["balanceAsOf"] == "2026-04-30"
+    assert after_april_snapshot.json()["data"]["assetCategoryGroups"][0][
+        "currentBalanceTotal"
+    ] == "220.0000"
+    assert after_april_snapshot.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "220.0000"}
+    ]
+
+    assert may_snapshot.status_code == 200, may_snapshot.text
+    may_item = _account_item(may_snapshot.json(), account_id)
+    assert may_item["currentBalance"] == "200.0000"
+    assert may_item["balanceAsOf"] == "2026-05-31"
+    assert may_snapshot.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "300.0000"}
+    ]
 
 
 def test_personal_report_without_household_id_succeeds_for_summary_and_account_balances(

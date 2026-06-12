@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from threading import RLock
 from typing import Protocol
@@ -25,6 +25,7 @@ class CaptureDraftRecord:
     capture_source: str
     captured_at: datetime
     occurred_at: datetime | None
+    occurred_date: date | None
     amount: Decimal
     currency: str
     description: str
@@ -48,6 +49,7 @@ class CaptureDraftCreateValues:
     capture_source: str
     captured_at: datetime
     occurred_at: datetime | None
+    occurred_date: date | None
     amount: Decimal
     currency: str
     description: str
@@ -112,6 +114,7 @@ class InMemoryCaptureDraftRepository:
                 capture_source=values.capture_source,
                 captured_at=values.captured_at,
                 occurred_at=values.occurred_at,
+                occurred_date=values.occurred_date,
                 amount=values.amount,
                 currency=values.currency,
                 description=values.description,
@@ -186,6 +189,7 @@ class SqlAlchemyCaptureDraftRepository:
             capture_source=values.capture_source,
             captured_at=values.captured_at,
             occurred_at=values.occurred_at,
+            occurred_date=values.occurred_date,
             amount=values.amount,
             currency=values.currency,
             description=values.description,
@@ -262,6 +266,7 @@ class SqlAlchemyCaptureDraftRepository:
 
         model.status = record.status
         model.occurred_at = record.occurred_at
+        model.occurred_date = record.occurred_date
         model.amount = record.amount
         model.currency = record.currency
         model.description = record.description
@@ -306,6 +311,7 @@ def _record_from_model(model: CaptureDraftModel) -> CaptureDraftRecord:
         capture_source=model.capture_source,
         captured_at=model.captured_at,
         occurred_at=model.occurred_at,
+        occurred_date=model.occurred_date,
         amount=Decimal(model.amount),
         currency=model.currency,
         description=model.description,

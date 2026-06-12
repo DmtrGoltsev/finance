@@ -424,6 +424,34 @@ class AppSectionTest {
         assertEquals(null, categories.quickAddCategoryFor("cat-food", "income"))
     }
 
+    @Test
+    fun expenseOperationAccountsUseOnlyPaymentAccounts() {
+        val payment = AccountSummary("Card", "card", "personal", "USD", "10.00", id = "acc-card")
+        val savings = AccountSummary(
+            "Savings",
+            "deposit",
+            "personal",
+            "USD",
+            "100.00",
+            id = "acc-save",
+            isPaymentAccount = false,
+        )
+        val accounts = listOf(payment, savings)
+
+        assertEquals(listOf("acc-card"), accounts.operationAccountsFor(QuickEntryType.Expense).map { it.id })
+        assertEquals(listOf("acc-card", "acc-save"), accounts.operationAccountsFor(QuickEntryType.Income).map { it.id })
+    }
+
+    @Test
+    fun reportMonthBoundaryUsesDateOnlyMonthStartAndEnd() {
+        val boundary = "2026-02".reportMonthBoundary()
+
+        assertEquals("2026-02-01", boundary.startDate)
+        assertEquals("2026-02-28", boundary.endDate)
+        assertTrue("2026-02-28".isDateOnly())
+        assertFalse("2026-02-28T00:00:00Z".isDateOnly())
+    }
+
     private fun dashboardFixture(): FinanceDashboard {
         return FinanceDashboard(
             session = SessionStatus(true, "Пользователь", "household"),

@@ -156,6 +156,7 @@ def _draft_dto(record: CaptureDraftRecord) -> CaptureDraftDto:
         capture_source=record.capture_source,
         captured_at=record.captured_at,
         occurred_at=record.occurred_at,
+        occurred_date=record.occurred_date,
         amount=record.amount,
         currency=record.currency,
         description=record.description,

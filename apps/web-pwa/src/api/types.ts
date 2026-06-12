@@ -19,6 +19,7 @@ export type AccountSummary = {
   name: string;
   ownerName: string;
   kind: AccountKind;
+  isPaymentAccount: boolean;
   ownershipType?: "personal" | "shared";
   householdId?: string | null;
   status?: "active" | "archived" | "deleted";
@@ -87,6 +88,7 @@ export type CaptureDraftCreateInput = {
   amount: number;
   currency: CurrencyCode;
   description: string;
+  occurredDate?: string | null;
   occurredAt?: string | null;
   merchantName?: string | null;
   accountId?: string | null;
@@ -102,6 +104,7 @@ export type CaptureDraftUpdateInput = {
   amount?: number;
   currency?: CurrencyCode;
   description?: string;
+  occurredDate?: string | null;
   occurredAt?: string | null;
   accountId?: string | null;
   categoryId?: string | null;
@@ -114,6 +117,7 @@ export type CaptureDraftSummary = {
   idempotencyKey: string;
   captureSource: "screenshot";
   capturedAt: string;
+  occurredDate: string | null;
   occurredAt: string | null;
   amount: MoneyAmount;
   description: string;

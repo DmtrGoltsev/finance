@@ -18,8 +18,11 @@ from tests.transactions.test_transactions_db_runtime import (
     _assert_same_public_error,
     _client_for_actor,
 )
+from tests.transactions.test_transactions_db_runtime import (
+    transaction_graph as _transaction_graph_fixture,
+)
 
-pytest_plugins = ["tests.transactions.test_transactions_db_runtime"]
+transaction_graph = _transaction_graph_fixture
 
 
 def _draft_payload(
@@ -75,6 +78,7 @@ def test_capture_draft_create_list_dedup_update_and_confirm(
         updated = client.patch(
             f"/api/v1/capture-drafts/{draft_id}",
             json={
+                "occurredDate": "2026-05-16",
                 "amount": "13.0000",
                 "description": "reviewed grocery candidate",
                 "merchantName": "Reviewed Market",
@@ -98,6 +102,7 @@ def test_capture_draft_create_list_dedup_update_and_confirm(
     assert updated.status_code == 200, updated.text
     assert updated.json()["data"]["amount"] == "13.0000"
     assert updated.json()["data"]["merchantName"] == "Reviewed Market"
+    assert updated.json()["data"]["occurredDate"] == "2026-05-16"
 
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["data"]["status"] == "confirmed"
@@ -105,6 +110,8 @@ def test_capture_draft_create_list_dedup_update_and_confirm(
     assert transaction.status_code == 200
     assert transaction.json()["data"]["sourceType"] == "manual"
     assert transaction.json()["data"]["transactionType"] == "expense"
+    assert transaction.json()["data"]["transactionDate"] == "2026-05-16"
+    assert transaction.json()["data"]["occurredAt"].startswith("2026-05-16T12:00:00")
     assert transaction.json()["data"]["description"] == "reviewed grocery candidate"
     assert transaction.json()["data"]["amount"] == "13.0000"
     assert confirm_again.status_code == 200

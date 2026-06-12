@@ -35,6 +35,8 @@ from app.transactions.repository import (
     TransactionFilters,
     TransactionRecord,
     TransactionRepository,
+)
+from app.transactions.repository import (
     repository as default_transaction_repository,
 )
 
@@ -662,8 +664,8 @@ class PlanningService:
             [account.id for account in accounts],
             filters=TransactionFilters(
                 status="active",
-                start=_month_start(plan.plan_month),
-                end=_month_end_inclusive(plan.plan_month),
+                start_date=plan.plan_month,
+                end_date=_month_end_date(plan.plan_month),
             ),
         )
 
@@ -836,6 +838,10 @@ def _month_end_inclusive(value: date) -> datetime:
     return datetime(next_value.year, next_value.month, 1, tzinfo=UTC).replace(microsecond=0) - (
         datetime.resolution
     )
+
+
+def _month_end_date(value: date) -> date:
+    return date.fromordinal(_add_months(value, 1).toordinal() - 1)
 
 
 def money(value: Decimal) -> Decimal:

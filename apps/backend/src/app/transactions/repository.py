@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from threading import RLock
 from typing import Protocol
@@ -36,6 +36,7 @@ class TransactionRecord:
     updated_at: datetime
     deleted_at: datetime | None
     version: int
+    transaction_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +45,8 @@ class TransactionFilters:
     category_id: str | None = None
     transaction_type: str | None = None
     status: str | None = None
-    start: datetime | None = None
-    end: datetime | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     q: str | None = None
     sort: str | None = None
 
@@ -75,6 +76,7 @@ class TransactionRepository(Protocol):
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -133,6 +135,7 @@ class InMemoryTransactionRepository:
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -149,6 +152,7 @@ class InMemoryTransactionRepository:
             amount=amount,
             currency=currency,
             occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=description,
             source_type=source_type,
             transfer_scope=transfer_scope,
@@ -230,10 +234,10 @@ class SqlAlchemyTransactionRepository:
             )
         if filters.status is not None:
             statement = statement.where(TransactionModel.record_status == filters.status)
-        if filters.start is not None:
-            statement = statement.where(TransactionModel.occurred_at >= filters.start)
-        if filters.end is not None:
-            statement = statement.where(TransactionModel.occurred_at <= filters.end)
+        if filters.start_date is not None:
+            statement = statement.where(TransactionModel.transaction_date >= filters.start_date)
+        if filters.end_date is not None:
+            statement = statement.where(TransactionModel.transaction_date <= filters.end_date)
 
         rows = [_record_from_model(row) for row in self._session.execute(statement).scalars()]
         return _filter_and_sort(rows, filters)
@@ -255,6 +259,7 @@ class SqlAlchemyTransactionRepository:
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -275,6 +280,7 @@ class SqlAlchemyTransactionRepository:
             amount=amount,
             currency=currency,
             occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=description,
             source_type=source_type,
             transfer_scope=transfer_scope,
@@ -306,6 +312,7 @@ class SqlAlchemyTransactionRepository:
         model.amount = record.amount
         model.currency = record.currency
         model.occurred_at = record.occurred_at
+        model.transaction_date = transaction_record_date(record)
         model.description = record.description
         model.source_type = record.source_type
         model.transfer_scope = record.transfer_scope
@@ -343,17 +350,13 @@ def _filter_and_sort(
         ]
     if filters.status is not None:
         filtered = [record for record in filtered if record.record_status == filters.status]
-    if filters.start is not None:
-        start = _comparable_datetime(filters.start)
+    if filters.start_date is not None:
         filtered = [
-            record
-            for record in filtered
-            if _comparable_datetime(record.occurred_at) >= start
+            record for record in filtered if transaction_record_date(record) >= filters.start_date
         ]
-    if filters.end is not None:
-        end = _comparable_datetime(filters.end)
+    if filters.end_date is not None:
         filtered = [
-            record for record in filtered if _comparable_datetime(record.occurred_at) <= end
+            record for record in filtered if transaction_record_date(record) <= filters.end_date
         ]
     if filters.q:
         needle = filters.q.casefold()
@@ -387,6 +390,7 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
         amount=Decimal(model.amount),
         currency=model.currency,
         occurred_at=model.occurred_at,
+        transaction_date=model.transaction_date,
         description=model.description,
         source_type=model.source_type,
         transfer_scope=model.transfer_scope,
@@ -401,10 +405,13 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
     )
 
 
-def _comparable_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(UTC).replace(tzinfo=None)
+def transaction_record_date(record: TransactionRecord) -> date:
+    if record.transaction_date is not None:
+        return record.transaction_date
+    occurred_at = record.occurred_at
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=UTC)
+    return occurred_at.astimezone(UTC).date()
 
 
 def _optional_uuid(value: str | UUID | None) -> UUID | None:
