@@ -205,7 +205,7 @@ data class AssetCategoryGroup(
     val isInvestment: Boolean,
     val assetType: String,
     val iconKey: String = "",
-    val accountCount: Int = 0,
+    val accountCount: Int? = null,
 )
 
 data class MoneyAmount(
@@ -1203,6 +1203,11 @@ private fun parseAssetCategoryGroup(json: JSONObject): AssetCategoryGroup {
         ),
     )
     val fallbackTotal = (accountsTotal.toApiMoney() + manualAmount.toApiMoney()).toPlainString()
+    val accountCount = when {
+        json.has("accountCount") -> json.optInt("accountCount")
+        json.has("accounts") -> json.optJSONArray("accounts")?.length()
+        else -> null
+    }
     return AssetCategoryGroup(
         assetCategoryId = categoryId,
         name = userFacingSeedText(
@@ -1227,7 +1232,7 @@ private fun parseAssetCategoryGroup(json: JSONObject): AssetCategoryGroup {
         isInvestment = json.optBoolean("isInvestment", category?.optBoolean("isInvestment", false) ?: false),
         assetType = json.optString("assetType", category?.optString("assetType", "bank") ?: "bank"),
         iconKey = json.optString("iconKey", category?.optString("iconKey", "") ?: ""),
-        accountCount = json.optInt("accountCount", json.optJSONArray("accounts")?.length() ?: 0),
+        accountCount = accountCount,
     )
 }
 

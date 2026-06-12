@@ -1,6 +1,7 @@
 package com.finance.mvp.ui
 
 import com.finance.mvp.api.AccountSummary
+import com.finance.mvp.api.AssetCategory
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceDashboard
 import com.finance.mvp.api.MoneyTotal
@@ -329,6 +330,312 @@ class AppSectionTest {
     }
 
     @Test
+    fun assetCategoryGroupEditPreservesIconAndUpdatesInvestmentFlag() {
+        val category = AssetCategory(
+            id = "asset-broker",
+            name = "Брокер",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "0",
+            isInvestment = true,
+            assetType = "brokerage",
+            iconKey = "chart",
+            version = 7,
+        )
+
+        val updated = updatedAssetCategoryFromGroupEdit(
+            category = category,
+            nameDraft = "  Карта  ",
+            isInvestmentChecked = false,
+        )
+
+        requireNotNull(updated)
+        assertEquals("Карта", updated.name)
+        assertFalse(updated.isInvestment)
+        assertEquals("chart", updated.iconKey)
+        assertEquals("brokerage", updated.assetType)
+        assertEquals("0", updated.manualAmount)
+        assertEquals(7, updated.version)
+    }
+
+    @Test
+    fun assetCategoryGroupEditUpdatesManualAmountForManualOnlyCategory() {
+        val category = AssetCategory(
+            id = "asset-cash",
+            name = "Manual cash",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "100",
+            isInvestment = false,
+            assetType = "cash",
+            iconKey = "cash",
+            version = 3,
+        )
+
+        val updated = updatedAssetCategoryFromGroupEdit(
+            category = category,
+            nameDraft = "Manual cash",
+            isInvestmentChecked = false,
+            manualAmountDraft = " 1234,50 ",
+            canEditManualAmount = true,
+        )
+
+        requireNotNull(updated)
+        assertEquals("1234.50", updated.manualAmount)
+        assertEquals("cash", updated.iconKey)
+        assertEquals("cash", updated.assetType)
+        assertEquals("RUB", updated.currency)
+    }
+
+    @Test
+    fun assetCategoryGroupEditPreservesManualAmountForAccountBackedCategory() {
+        val category = AssetCategory(
+            id = "asset-broker",
+            name = "Broker",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "100",
+            isInvestment = true,
+            assetType = "brokerage",
+            iconKey = "chart",
+        )
+
+        val updated = updatedAssetCategoryFromGroupEdit(
+            category = category,
+            nameDraft = "Broker",
+            isInvestmentChecked = true,
+            manualAmountDraft = "999",
+            canEditManualAmount = false,
+        )
+
+        requireNotNull(updated)
+        assertEquals("100", updated.manualAmount)
+    }
+
+    @Test
+    fun d401LegacyMetalSummaryWithNoAccountsAllowsManualAmountCreation() {
+        val summary = AssetSummary(
+            kind = AssetKind.Metal,
+            balance = BigDecimal.ZERO,
+            currency = "RUB",
+            count = 0,
+        )
+
+        assertTrue(shouldEditLegacyAssetGroupManualAmount(summary, emptyList()))
+
+        val request = legacyManualAssetCategoryCreateRequest(
+            kind = summary.kind,
+            nameDraft = " Металл ",
+            manualAmountDraft = "777,70",
+            isInvestmentChecked = false,
+            target = LegacyAssetCategoryMigrationTarget(
+                scopeType = "personal",
+                householdId = null,
+                currency = "RUB",
+            ),
+        )
+
+        requireNotNull(request)
+        assertEquals("Металл", request.name)
+        assertEquals("777.70", request.manualAmount)
+        assertEquals("metal", request.assetType)
+        assertFalse(request.isInvestment)
+        assertEquals("personal", request.scopeType)
+    }
+
+    @Test
+    fun legacyManualAmountCreationUsesAssetKindNotDisplayName() {
+        val summary = AssetSummary(
+            kind = AssetKind.Metal,
+            balance = BigDecimal.ZERO,
+            currency = "RUB",
+            count = 0,
+        )
+
+        val request = legacyManualAssetCategoryCreateRequest(
+            kind = summary.kind,
+            nameDraft = "QA legacy bullion",
+            manualAmountDraft = "1.23",
+            isInvestmentChecked = true,
+            target = LegacyAssetCategoryMigrationTarget("personal", null, "RUB"),
+        )
+
+        requireNotNull(request)
+        assertEquals("QA legacy bullion", request.name)
+        assertEquals("metal", request.assetType)
+        assertTrue(request.isInvestment)
+    }
+
+    @Test
+    fun accountBackedBrokerAndCardLegacyGroupsDoNotAllowManualAmountCreation() {
+        val brokerAccount = AccountSummary(
+            "Брокер",
+            "brokerage",
+            "personal",
+            "RUB",
+            "150000.00",
+            id = "acc-broker",
+        )
+        val cardAccount = AccountSummary(
+            "Карта",
+            "card",
+            "personal",
+            "RUB",
+            "25000.00",
+            id = "acc-card",
+        )
+
+        assertFalse(
+            shouldEditLegacyAssetGroupManualAmount(
+                AssetSummary(AssetKind.Brokerage, BigDecimal("150000.00"), "RUB", 1),
+                listOf(brokerAccount),
+            ),
+        )
+        assertFalse(
+            shouldEditLegacyAssetGroupManualAmount(
+                AssetSummary(AssetKind.Card, BigDecimal("25000.00"), "RUB", 1),
+                listOf(cardAccount),
+            ),
+        )
+        assertFalse(
+            shouldEditLegacyAssetGroupManualAmount(
+                AssetSummary(AssetKind.Bank, BigDecimal.ZERO, "RUB", 0),
+                emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun legacyMetalManualOnlyCategoryAllowsManualAmountEditing() {
+        val row = AssetCategoryUiRow(
+            category = AssetCategory(
+                id = "asset-metal",
+                name = "Металл",
+                scopeType = "personal",
+                currency = "RUB",
+                manualAmount = "300.00",
+                isInvestment = false,
+                assetType = "metal",
+                iconKey = "gold",
+            ),
+            totalAmount = "300.00",
+            manualAmount = "300.00",
+            accountsTotal = "0",
+            linkedAccountCount = 0,
+            currency = "RUB",
+            scopeTitle = "Личные",
+        )
+        val staleLocalAccount = AccountSummary(
+            "Металл",
+            "metal",
+            "personal",
+            "RUB",
+            "300.00",
+            id = "acc-metal",
+            assetCategoryId = "asset-metal",
+        )
+
+        assertTrue(shouldEditAssetCategoryManualAmount(row, listOf(staleLocalAccount)))
+        val updated = updatedAssetCategoryFromGroupEdit(
+            category = row.category,
+            nameDraft = "Металл",
+            isInvestmentChecked = false,
+            manualAmountDraft = "777,70",
+            canEditManualAmount = shouldEditAssetCategoryManualAmount(row, listOf(staleLocalAccount)),
+        )
+
+        requireNotNull(updated)
+        assertEquals("777.70", updated.manualAmount)
+        assertEquals("gold", updated.iconKey)
+    }
+
+    @Test
+    fun accountBackedAssetCategoryDoesNotAllowManualAmountEditing() {
+        val row = AssetCategoryUiRow(
+            category = AssetCategory(
+                id = "asset-broker",
+                name = "Брокер",
+                scopeType = "personal",
+                currency = "RUB",
+                manualAmount = "0",
+                isInvestment = true,
+                assetType = "brokerage",
+                iconKey = "chart",
+            ),
+            totalAmount = "2200.00",
+            manualAmount = "0",
+            accountsTotal = "2200.00",
+            linkedAccountCount = 1,
+            currency = "RUB",
+            scopeTitle = "Личные",
+        )
+        val account = AccountSummary(
+            "Брокер",
+            "brokerage",
+            "personal",
+            "RUB",
+            "2200.00",
+            id = "acc-broker",
+            assetCategoryId = "asset-broker",
+        )
+
+        assertFalse(shouldEditAssetCategoryManualAmount(row, listOf(account)))
+        val updated = updatedAssetCategoryFromGroupEdit(
+            category = row.category,
+            nameDraft = "Брокер",
+            isInvestmentChecked = true,
+            manualAmountDraft = "999",
+            canEditManualAmount = shouldEditAssetCategoryManualAmount(row, listOf(account)),
+        )
+
+        requireNotNull(updated)
+        assertEquals("0", updated.manualAmount)
+        assertEquals("chart", updated.iconKey)
+    }
+
+    @Test
+    fun assetCategoryGroupEditRejectsInvalidManualAmountForManualOnlyCategory() {
+        val category = AssetCategory(
+            id = "asset-cash",
+            name = "Manual cash",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "100",
+            isInvestment = false,
+            assetType = "cash",
+            iconKey = "cash",
+        )
+
+        assertEquals(
+            null,
+            updatedAssetCategoryFromGroupEdit(
+                category = category,
+                nameDraft = "Manual cash",
+                isInvestmentChecked = false,
+                manualAmountDraft = "",
+                canEditManualAmount = true,
+            ),
+        )
+    }
+
+    @Test
+    fun assetCategoryGroupEditRejectsBlankName() {
+        val category = AssetCategory(
+            id = "asset-broker",
+            name = "Брокер",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "0",
+            isInvestment = true,
+            assetType = "brokerage",
+            iconKey = "chart",
+        )
+
+        assertEquals(null, updatedAssetCategoryFromGroupEdit(category, "   ", isInvestmentChecked = false))
+        assertTrue(assetCategoryGroupEditError("   ", "0", canEditManualAmount = false).contains("название"))
+    }
+
+    @Test
     fun legacyInvestmentMigrationUsesAccountsWhenOverviewIsUnambiguous() {
         val selection = selectLegacyAssetCategoryMigrationTarget(
             selectedMode = FinanceMode.Overview,
@@ -440,6 +747,41 @@ class AppSectionTest {
 
         assertEquals(listOf("acc-card"), accounts.operationAccountsFor(QuickEntryType.Expense).map { it.id })
         assertEquals(listOf("acc-card", "acc-save"), accounts.operationAccountsFor(QuickEntryType.Income).map { it.id })
+    }
+
+    @Test
+    fun writableOperationAccountsExcludeNonPaymentOnlyForExpense() {
+        val payment = AccountSummary("Card", "card", "personal", "USD", "10.00", id = "acc-card")
+        val nonPayment = AccountSummary(
+            "QANonPay0836",
+            "deposit",
+            "personal",
+            "USD",
+            "100.00",
+            id = "acc-nonpay",
+            isPaymentAccount = false,
+        )
+        val sharedNonPayment = nonPayment.copy(
+            name = "Shared savings",
+            ownershipType = "shared",
+            householdId = "household",
+            id = "acc-shared-nonpay",
+        )
+        val archivedPayment = payment.copy(id = "acc-archived", status = "archived")
+        val accounts = listOf(payment, nonPayment, sharedNonPayment, archivedPayment)
+
+        assertEquals(
+            listOf("acc-card"),
+            accounts.writableOperationAccountsFor(QuickEntryType.Expense, FinanceMode.Personal).map { it.id },
+        )
+        assertEquals(
+            listOf("acc-card", "acc-nonpay"),
+            accounts.writableOperationAccountsFor(QuickEntryType.Income, FinanceMode.Personal).map { it.id },
+        )
+        assertEquals(
+            listOf("acc-shared-nonpay"),
+            accounts.writableOperationAccountsFor(QuickEntryType.Income, FinanceMode.Shared).map { it.id },
+        )
     }
 
     @Test

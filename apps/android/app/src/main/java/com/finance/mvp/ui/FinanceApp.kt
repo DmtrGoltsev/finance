@@ -577,9 +577,7 @@ fun FinanceApp(
                     QuickEntryType.Income,
                     -> {
                         val account = dashboard.accounts
-                            .filter { it.status == "active" && it.id.isNotBlank() }
-                            .filter { it.matchesWritableMode(draft.visibility) }
-                            .filter { draft.type != QuickEntryType.Expense || it.isPaymentAccount }
+                            .writableOperationAccountsFor(draft.type, draft.visibility)
                             .firstByIdOrFirst(draft.accountId)
                             ?: return@withContext ApiResult.Failure(
                                 "В режиме ${draft.visibility.title} нет активного счёта. Создайте счёт в «Активы» и повторите сохранение.",
@@ -940,6 +938,55 @@ fun FinanceApp(
                                     assetGroupNames = assetGroupNames - kind.apiValue
                                     onComplete(LegacyGroupMigrationResult.Success)
                                     loadDashboard("Legacy-группа «$newName» стала инвестиционной категорией")
+                                }
+                                is ApiResult.Failure -> {
+                                    val message = result.userFacingMessage()
+                                    uiState = uiState.copy(isLoading = false, message = message)
+                                    onComplete(LegacyGroupMigrationResult.Failure(message))
+                                }
+                            }
+                        }
+                    },
+                    onCreateLegacyManualCategory = manual@ { kind, name, manualAmount, isInvestment, onComplete ->
+                        val fallbackCurrency = uiState.dashboard
+                            ?.viewFor(selectedMode)
+                            ?.primaryCurrency
+                            ?.takeIf { it.isNotBlank() }
+                        val targetSelection = selectLegacyAssetCategoryMigrationTarget(
+                            selectedMode = selectedMode,
+                            accounts = emptyList(),
+                            sessionHouseholdId = uiState.session?.householdId,
+                            fallbackCurrency = fallbackCurrency,
+                            groupName = name,
+                        )
+                        val target = when (targetSelection) {
+                            is LegacyAssetCategoryMigrationTargetSelection.Ready -> targetSelection.target
+                            is LegacyAssetCategoryMigrationTargetSelection.Blocked -> {
+                                uiState = uiState.copy(message = targetSelection.message)
+                                onComplete(LegacyGroupMigrationResult.Failure(targetSelection.message))
+                                return@manual
+                            }
+                        }
+                        val request = legacyManualAssetCategoryCreateRequest(
+                            kind = kind,
+                            nameDraft = name,
+                            manualAmountDraft = manualAmount,
+                            isInvestmentChecked = isInvestment,
+                            target = target,
+                        )
+                        if (request == null) {
+                            val message = "Введите корректную ручную сумму"
+                            uiState = uiState.copy(message = message)
+                            onComplete(LegacyGroupMigrationResult.Failure(message))
+                            return@manual
+                        }
+                        scope.launch {
+                            uiState = uiState.copy(isLoading = true, message = "Создаём ручную категорию активов")
+                            when (val result = withContext(Dispatchers.IO) { apiClient.createAssetCategory(request) }) {
+                                is ApiResult.Success -> {
+                                    assetGroupNames = assetGroupNames - kind.apiValue
+                                    onComplete(LegacyGroupMigrationResult.Success)
+                                    loadDashboard("Ручная категория активов «${request.name}» создана")
                                 }
                                 is ApiResult.Failure -> {
                                     val message = result.userFacingMessage()
@@ -1842,6 +1889,7 @@ private fun LazyListScope.assetsContent(
     groupNames: Map<String, String>,
     onRenameGroup: (AssetKind, String) -> Unit,
     onMigrateLegacyGroupToInvestment: (AssetKind, String, List<AccountSummary>, (LegacyGroupMigrationResult) -> Unit) -> Unit,
+    onCreateLegacyManualCategory: (AssetKind, String, String, Boolean, (LegacyGroupMigrationResult) -> Unit) -> Unit,
     onCreateAssetCategory: () -> Unit,
     onUpdateAssetCategory: (AssetCategory) -> Unit,
     onUpdateAccount: (AccountSummary) -> Unit,
@@ -1894,6 +1942,9 @@ private fun LazyListScope.assetsContent(
             displayName = groupNames[summary.kind.apiValue] ?: summary.kind.title,
             onRenameGroup = { name ->
                 onRenameGroup(summary.kind, name)
+            },
+            onCreateManualCategory = { name, manualAmount, isInvestment, onComplete ->
+                onCreateLegacyManualCategory(summary.kind, name, manualAmount, isInvestment, onComplete)
             },
             onMigrateGroupToInvestment = { name, onComplete ->
                 val groupAccounts = legacyAccounts.filter { it.assetKind() == summary.kind }
@@ -2311,12 +2362,11 @@ private fun AssetCategoryGroupCard(
     var isExpanded by rememberSaveable(category.id) { mutableStateOf(false) }
     var isEditing by rememberSaveable(category.id) { mutableStateOf(false) }
     var editName by rememberSaveable(category.id, category.name) { mutableStateOf(category.name) }
-    var editManual by rememberSaveable(category.id, category.manualAmount) { mutableStateOf(category.manualAmount) }
     var editInvestment by rememberSaveable(category.id, category.isInvestment) { mutableStateOf(category.isInvestment) }
-    var editIconKey by rememberSaveable(category.id, category.iconKey, category.assetType) {
-        mutableStateOf(category.iconKey.ifBlank { defaultAssetCategoryIconKey(category.assetType) })
-    }
+    var editManualAmount by rememberSaveable(category.id, row.manualAmount) { mutableStateOf(row.manualAmount) }
+    var editError by rememberSaveable(category.id) { mutableStateOf<String?>(null) }
     var confirmArchiveCategory by rememberSaveable(category.id) { mutableStateOf(false) }
+    val isManualOnlyCategory = shouldEditAssetCategoryManualAmount(row, accounts)
     val iconOption = assetCategoryIcon(category.iconKey, category.assetType)
     val subtitle = if (accounts.isNotEmpty()) {
         "${accounts.size} ${pluralItems(accounts.size)}"
@@ -2361,7 +2411,16 @@ private fun AssetCategoryGroupCard(
                     )
                 }
                 Text(row.totalAmount.toMoney().formatMoney(row.currency), fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = { isEditing = !isEditing }, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = {
+                        editName = category.name
+                        editInvestment = category.isInvestment
+                        editManualAmount = row.manualAmount
+                        editError = null
+                        isEditing = true
+                    },
+                    modifier = Modifier.size(32.dp),
+                ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_edit_24),
                         contentDescription = "Изменить",
@@ -2375,70 +2434,6 @@ private fun AssetCategoryGroupCard(
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(18.dp),
                     )
-                }
-            }
-
-            if (isEditing) {
-                OutlinedTextField(
-                    value = editName,
-                    onValueChange = { editName = it },
-                    label = { Text("Название") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (accounts.isEmpty()) {
-                    OutlinedTextField(
-                        value = editManual,
-                        onValueChange = { editManual = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' } },
-                        label = { Text("Ручная сумма") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                AssetCategoryIconPicker(selectedKey = editIconKey, onSelected = { editIconKey = it })
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = editInvestment, onCheckedChange = { editInvestment = it })
-                    Text("Инвестиционная категория")
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { confirmArchiveCategory = true }, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_delete_24),
-                            contentDescription = "Удалить категорию активов",
-                            tint = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = { isEditing = false },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    ) {
-                        Text("Отмена", maxLines = 1)
-                    }
-                    Button(
-                        onClick = {
-                            onUpdateCategory(
-                                category.copy(
-                                    name = editName.trim().ifBlank { category.name },
-                                    manualAmount = if (accounts.isEmpty()) editManual.normalizedBalanceAmount() ?: "0" else category.manualAmount,
-                                    isInvestment = editInvestment,
-                                    assetType = category.assetType,
-                                    iconKey = editIconKey,
-                                ),
-                            )
-                            isEditing = false
-                        },
-                        enabled = editName.isNotBlank() && (accounts.isNotEmpty() || editManual.normalizedBalanceAmount() != null),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    ) {
-                        Text("Сохранить", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
                 }
             }
 
@@ -2462,6 +2457,88 @@ private fun AssetCategoryGroupCard(
                 }
             }
         }
+    }
+
+    if (isEditing) {
+        AlertDialog(
+            onDismissRequest = { isEditing = false },
+            title = { Text("Название группы") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = {
+                            editName = it
+                            editError = null
+                        },
+                        label = { Text("Название") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (isManualOnlyCategory) {
+                        OutlinedTextField(
+                            value = editManualAmount,
+                            onValueChange = {
+                                editManualAmount = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' }
+                                editError = null
+                            },
+                            label = { Text("Ручная сумма") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = editInvestment,
+                            onCheckedChange = {
+                                editInvestment = it
+                                editError = null
+                            },
+                        )
+                        Text("Инвестиция")
+                    }
+                    editError?.let { message ->
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val updated = updatedAssetCategoryFromGroupEdit(
+                            category = category,
+                            nameDraft = editName,
+                            isInvestmentChecked = editInvestment,
+                            manualAmountDraft = editManualAmount,
+                            canEditManualAmount = isManualOnlyCategory,
+                        )
+                        if (updated == null) {
+                            editError = assetCategoryGroupEditError(
+                                nameDraft = editName,
+                                manualAmountDraft = editManualAmount,
+                                canEditManualAmount = isManualOnlyCategory,
+                            )
+                        } else {
+                            onUpdateCategory(updated)
+                            isEditing = false
+                        }
+                    },
+                    enabled = editName.isNotBlank(),
+                ) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { isEditing = false }) {
+                    Text("Отмена")
+                }
+            },
+        )
     }
 
     if (confirmArchiveCategory) {
@@ -2512,6 +2589,7 @@ private fun AssetCategoryCard(
     accounts: List<AccountSummary>,
     displayName: String,
     onRenameGroup: (String) -> Unit,
+    onCreateManualCategory: (String, String, Boolean, (LegacyGroupMigrationResult) -> Unit) -> Unit,
     onMigrateGroupToInvestment: (String, (LegacyGroupMigrationResult) -> Unit) -> Unit,
     onUpdate: (AccountSummary) -> Unit,
     onArchive: (String) -> Unit,
@@ -2521,8 +2599,12 @@ private fun AssetCategoryCard(
     var isEditingGroup by rememberSaveable { mutableStateOf(false) }
     var groupNameDraft by rememberSaveable(displayName) { mutableStateOf(displayName) }
     var groupInvestmentDraft by rememberSaveable(displayName) { mutableStateOf(false) }
+    var groupManualAmountDraft by rememberSaveable(displayName, summary.kind.apiValue) {
+        mutableStateOf(summary.balance.toPlainString())
+    }
     var groupSaveInProgress by rememberSaveable { mutableStateOf(false) }
     var groupSaveError by rememberSaveable { mutableStateOf<String?>(null) }
+    val canEditManualAmount = shouldEditLegacyAssetGroupManualAmount(summary, accounts)
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -2544,7 +2626,11 @@ private fun AssetCategoryCard(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(displayName, fontWeight = FontWeight.SemiBold)
                         Text(
-                            text = if (accounts.isEmpty()) "Нажмите чтобы добавить" else "${accounts.size} ${pluralItems(accounts.size)}",
+                            text = when {
+                                canEditManualAmount -> "Ручная ${summary.balance.formatMoney(summary.currency)}"
+                                accounts.isEmpty() -> "Нажмите чтобы добавить"
+                                else -> "${accounts.size} ${pluralItems(accounts.size)}"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -2558,6 +2644,7 @@ private fun AssetCategoryCard(
                     onClick = {
                         groupNameDraft = displayName
                         groupInvestmentDraft = false
+                        groupManualAmountDraft = summary.balance.toPlainString()
                         groupSaveInProgress = false
                         groupSaveError = null
                         isEditingGroup = true
@@ -2625,6 +2712,20 @@ private fun AssetCategoryCard(
                         enabled = !groupSaveInProgress,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (canEditManualAmount) {
+                        OutlinedTextField(
+                            value = groupManualAmountDraft,
+                            onValueChange = {
+                                groupManualAmountDraft = it.filter { char -> char.isDigit() || char == '.' || char == ',' || char == '-' }
+                                groupSaveError = null
+                            },
+                            label = { Text("Ручная сумма") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            enabled = !groupSaveInProgress,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = groupInvestmentDraft,
@@ -2648,27 +2749,50 @@ private fun AssetCategoryCard(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        when (val action = legacyGroupSaveAction(groupNameDraft, groupInvestmentDraft)) {
-                            is LegacyGroupSaveAction.Invalid -> groupSaveError = action.message
-                            is LegacyGroupSaveAction.Rename -> {
-                                groupSaveError = null
-                                onRenameGroup(action.name)
-                                isEditingGroup = false
+                        if (canEditManualAmount) {
+                            val cleanName = groupNameDraft.trim()
+                            if (cleanName.isBlank()) {
+                                groupSaveError = "Введите название группы"
+                                return@TextButton
                             }
-                            is LegacyGroupSaveAction.MigrateToInvestment -> {
-                                groupSaveInProgress = true
-                                groupSaveError = null
-                                onMigrateGroupToInvestment(action.name) { result ->
-                                    groupSaveInProgress = false
-                                    when (result) {
-                                        LegacyGroupMigrationResult.Success -> isEditingGroup = false
-                                        is LegacyGroupMigrationResult.Failure -> groupSaveError = result.message
+                            if (groupManualAmountDraft.normalizedBalanceAmount() == null) {
+                                groupSaveError = "Введите корректную ручную сумму"
+                                return@TextButton
+                            }
+                            groupSaveInProgress = true
+                            groupSaveError = null
+                            onCreateManualCategory(cleanName, groupManualAmountDraft, groupInvestmentDraft) { result ->
+                                groupSaveInProgress = false
+                                when (result) {
+                                    LegacyGroupMigrationResult.Success -> isEditingGroup = false
+                                    is LegacyGroupMigrationResult.Failure -> groupSaveError = result.message
+                                }
+                            }
+                        } else {
+                            when (val action = legacyGroupSaveAction(groupNameDraft, groupInvestmentDraft)) {
+                                is LegacyGroupSaveAction.Invalid -> groupSaveError = action.message
+                                is LegacyGroupSaveAction.Rename -> {
+                                    groupSaveError = null
+                                    onRenameGroup(action.name)
+                                    isEditingGroup = false
+                                }
+                                is LegacyGroupSaveAction.MigrateToInvestment -> {
+                                    groupSaveInProgress = true
+                                    groupSaveError = null
+                                    onMigrateGroupToInvestment(action.name) { result ->
+                                        groupSaveInProgress = false
+                                        when (result) {
+                                            LegacyGroupMigrationResult.Success -> isEditingGroup = false
+                                            is LegacyGroupMigrationResult.Failure -> groupSaveError = result.message
+                                        }
                                     }
                                 }
                             }
                         }
                     },
-                    enabled = !groupSaveInProgress && groupNameDraft.isNotBlank(),
+                    enabled = !groupSaveInProgress &&
+                        groupNameDraft.isNotBlank() &&
+                        (!canEditManualAmount || groupManualAmountDraft.normalizedBalanceAmount() != null),
                 ) {
                     Text(if (groupSaveInProgress) "Сохраняем..." else "Сохранить")
                 }
@@ -3586,9 +3710,11 @@ private fun QuickAddSheet(
     var visibility by rememberSaveable(sheetKey) {
         mutableStateOf(selectedMode.takeIf { it in writableModes })
     }
-    val accounts = dashboard?.accounts.orEmpty().filter { it.status == "active" }
-    val scopedAccounts = accounts.filter { mode -> visibility?.let { mode.matchesWritableMode(it) } == true }
-    val operationAccounts = scopedAccounts.operationAccountsFor(type)
+    val accounts = dashboard?.accounts.orEmpty()
+    val scopedAccounts = accounts
+        .filter { it.status == "active" && it.id.isNotBlank() }
+        .filter { mode -> visibility?.let { mode.matchesWritableMode(it) } == true }
+    val operationAccounts = accounts.writableOperationAccountsFor(type, visibility)
     val categories = dashboard?.categories.orEmpty()
         .filter { it.type == type.apiValue && it.status == "active" }
         .filter { category -> visibility?.let { category.matchesWritableMode(it) } == true }
@@ -3816,11 +3942,21 @@ private fun List<AccountSummary>.compatibleTransferDestinations(source: AccountS
 }
 
 internal fun List<AccountSummary>.operationAccountsFor(type: QuickEntryType): List<AccountSummary> {
+    val activeAccounts = filter { it.status == "active" && it.id.isNotBlank() }
     return if (type == QuickEntryType.Expense) {
-        filter { it.isPaymentAccount }
+        activeAccounts.filter { it.isPaymentAccount }
     } else {
-        this
+        activeAccounts
     }
+}
+
+internal fun List<AccountSummary>.writableOperationAccountsFor(
+    type: QuickEntryType,
+    visibility: FinanceMode?,
+): List<AccountSummary> {
+    if (visibility == null) return emptyList()
+    return filter { it.matchesWritableMode(visibility) }
+        .operationAccountsFor(type)
 }
 
 internal fun currentDateString(): String = LocalDate.now().toString()
@@ -4012,6 +4148,8 @@ data class AssetCategoryUiRow(
     val category: AssetCategory,
     val totalAmount: String,
     val manualAmount: String,
+    val accountsTotal: String,
+    val linkedAccountCount: Int?,
     val currency: String,
     val scopeTitle: String,
 )
@@ -4209,6 +4347,8 @@ private fun FinanceDashboard?.assetCategoryRows(mode: FinanceMode): List<AssetCa
                 category = category,
                 totalAmount = group.totalAmount,
                 manualAmount = group.manualAmount,
+                accountsTotal = group.accountsTotal,
+                linkedAccountCount = group.accountCount,
                 currency = group.currency,
                 scopeTitle = group.scopeType.assetScopeTitle(),
             )
@@ -4221,6 +4361,8 @@ private fun FinanceDashboard?.assetCategoryRows(mode: FinanceMode): List<AssetCa
                 category = category,
                 totalAmount = category.manualAmount,
                 manualAmount = category.manualAmount,
+                accountsTotal = "0",
+                linkedAccountCount = null,
                 currency = category.currency,
                 scopeTitle = category.scopeType.assetScopeTitle(),
             )
@@ -4345,6 +4487,94 @@ internal fun legacyGroupSaveAction(
     } else {
         LegacyGroupSaveAction.Rename(cleanName)
     }
+}
+
+internal fun shouldEditLegacyAssetGroupManualAmount(
+    summary: AssetSummary,
+    linkedAccounts: List<AccountSummary>,
+): Boolean {
+    return summary.kind == AssetKind.Metal &&
+        summary.count == 0 &&
+        linkedAccounts.none { it.status == "active" }
+}
+
+internal fun legacyManualAssetCategoryCreateRequest(
+    kind: AssetKind,
+    nameDraft: String,
+    manualAmountDraft: String,
+    isInvestmentChecked: Boolean,
+    target: LegacyAssetCategoryMigrationTarget,
+): AssetCategoryCreateRequest? {
+    val cleanName = nameDraft.trim()
+    if (cleanName.isBlank()) {
+        return null
+    }
+    val manualAmount = manualAmountDraft.normalizedBalanceAmount() ?: return null
+    return AssetCategoryCreateRequest(
+        name = cleanName,
+        scopeType = target.scopeType,
+        householdId = target.householdId,
+        currency = target.currency,
+        manualAmount = manualAmount,
+        isInvestment = isInvestmentChecked,
+        assetType = kind.apiValue,
+        iconKey = defaultAssetCategoryIconKey(kind.apiValue),
+    )
+}
+
+internal fun updatedAssetCategoryFromGroupEdit(
+    category: AssetCategory,
+    nameDraft: String,
+    isInvestmentChecked: Boolean,
+    manualAmountDraft: String? = null,
+    canEditManualAmount: Boolean = false,
+): AssetCategory? {
+    val cleanName = nameDraft.trim()
+    if (cleanName.isBlank()) {
+        return null
+    }
+    val manualAmount = if (canEditManualAmount) {
+        manualAmountDraft?.normalizedBalanceAmount() ?: return null
+    } else {
+        category.manualAmount
+    }
+    return category.copy(
+        name = cleanName,
+        manualAmount = manualAmount,
+        isInvestment = isInvestmentChecked,
+        assetType = category.assetType,
+        iconKey = category.iconKey,
+    )
+}
+
+internal fun shouldEditAssetCategoryManualAmount(
+    row: AssetCategoryUiRow,
+    linkedAccounts: List<AccountSummary>,
+): Boolean {
+    row.linkedAccountCount?.let { return it == 0 }
+    if (linkedAccounts.isEmpty()) {
+        return true
+    }
+    val manualAmount = row.manualAmount.toMoney()
+    if (manualAmount == BigDecimal.ZERO) {
+        return false
+    }
+    return row.accountsTotal.toMoney() == BigDecimal.ZERO &&
+        row.totalAmount.toMoney() == manualAmount
+}
+
+internal fun assetCategoryGroupEditError(
+    nameDraft: String,
+    manualAmountDraft: String?,
+    canEditManualAmount: Boolean,
+): String {
+    if (nameDraft.trim().isBlank()) {
+        return "Введите название группы"
+    }
+    if (canEditManualAmount && manualAmountDraft?.normalizedBalanceAmount() == null) {
+        return "Введите корректную ручную сумму"
+    }
+    return "Проверьте данные"
 }
 
 internal fun selectLegacyAssetCategoryMigrationTarget(
