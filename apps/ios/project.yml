@@ -11,7 +11,6 @@ settings:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1,2"
-    DEVELOPMENT_TEAM: ""
 
 targets:
   FinanceApp:
@@ -24,11 +23,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp
-        INFOPLIST_FILE: FinanceApp/Info.plist
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: FinanceApp/Info.plist
+    info:
+      path: FinanceApp/Info.plist
