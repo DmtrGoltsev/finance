@@ -101,7 +101,7 @@ extension OperationsTab {
     private func loadCaptureDrafts() async {
         captureIsLoading = true
         do {
-            let (drafts, _) = try await apiClient.listCaptureDrafts(status: .pending)
+            let (drafts, _) = try await apiClient.listCaptureDrafts(limit: nil, status: .pending)
             captureDrafts = drafts
             captureMessage = "Черновики обновлены"
         } catch {
