@@ -49,6 +49,7 @@ struct ReportCategoryBreakdown: Codable, Sendable {
 }
 
 struct AccountBalance: Codable, Identifiable, Sendable {
+    var id: String { accountId }
     let accountId: String
     let accountName: String
     let accountType: AccountType

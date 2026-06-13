@@ -39,7 +39,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let householdId = actor?.memberships.first(where: { $0.status == "active" })?.householdId
         return SessionStatus(
             isAuthenticated: actor != nil,
-            displayName: actor?.userId.prefix(8).map { "Пользователь \($0)" } ?? nil,
+            displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
             householdId: householdId
         )
     }
@@ -668,7 +668,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let householdId = actor?.memberships.first(where: { $0.status == "active" })?.householdId
         return SessionStatus(
             isAuthenticated: actor != nil,
-            displayName: actor?.userId.prefix(8).map { "Пользователь \($0)" },
+            displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
             householdId: householdId
         )
     }
