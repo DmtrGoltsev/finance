@@ -49,52 +49,56 @@ struct FinanceAppView: View {
     private var mainView: some View {
         ZStack(alignment: .bottomTrailing) {
             TabView(selection: $selectedTab) {
-                Tab("Главная", systemImage: "house", value: 0) {
-                    HomeTab(
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: { selectedMode = $0 },
-                        onOpenPlanning: { selectedTab = 4 }
-                    )
-                }
-                Tab("Операции", systemImage: "list.bullet", value: 1) {
-                    OperationsTab(
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: { selectedMode = $0 },
-                        onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
-                        apiClient: apiClient,
-                        householdId: dashboard?.session.householdId,
-                        onRefreshDashboard: loadDashboard
-                    )
-                }
-                Tab("Активы", systemImage: "building.columns", value: 2) {
-                    AssetsTab(
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: { selectedMode = $0 },
-                        apiClient: apiClient,
-                        onRefresh: { await loadDashboard() }
-                    )
-                }
-                Tab("Категории", systemImage: "tag", value: 3) {
-                    CategoriesTab(
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: { selectedMode = $0 },
-                        apiClient: apiClient,
-                        onRefresh: { await loadDashboard() }
-                    )
-                }
-                Tab("Аналитика", systemImage: "chart.bar", value: 4) {
-                    AnalyticsTab(
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: { selectedMode = $0 },
-                        apiClient: apiClient,
-                        onRefresh: { await loadDashboard() }
-                    )
-                }
+                HomeTab(
+                    dashboard: dashboard,
+                    selectedMode: selectedMode,
+                    onModeSelected: { selectedMode = $0 },
+                    onOpenPlanning: { selectedTab = 4 }
+                )
+                .tabItem { Label("Главная", systemImage: "house") }
+                .tag(0)
+
+                OperationsTab(
+                    dashboard: dashboard,
+                    selectedMode: selectedMode,
+                    onModeSelected: { selectedMode = $0 },
+                    onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
+                    apiClient: apiClient,
+                    householdId: dashboard?.session.householdId,
+                    onRefreshDashboard: loadDashboard
+                )
+                .tabItem { Label("Операции", systemImage: "list.bullet") }
+                .tag(1)
+
+                AssetsTab(
+                    dashboard: dashboard,
+                    selectedMode: selectedMode,
+                    onModeSelected: { selectedMode = $0 },
+                    apiClient: apiClient,
+                    onRefresh: { await loadDashboard() }
+                )
+                .tabItem { Label("Активы", systemImage: "building.columns") }
+                .tag(2)
+
+                CategoriesTab(
+                    dashboard: dashboard,
+                    selectedMode: selectedMode,
+                    onModeSelected: { selectedMode = $0 },
+                    apiClient: apiClient,
+                    onRefresh: { await loadDashboard() }
+                )
+                .tabItem { Label("Категории", systemImage: "tag") }
+                .tag(3)
+
+                AnalyticsTab(
+                    dashboard: dashboard,
+                    selectedMode: selectedMode,
+                    onModeSelected: { selectedMode = $0 },
+                    apiClient: apiClient,
+                    onRefresh: { await loadDashboard() }
+                )
+                .tabItem { Label("Аналитика", systemImage: "chart.bar") }
+                .tag(4)
             }
 
             Button {

@@ -159,8 +159,8 @@ private struct IncomeSourceRow: View {
                     Button("Сохранить") {
                         guard let normAmt = normalizedEditAmount, let pDay = editPlanningDay else { return }
                         let request = PlanningIncomeSourceUpdateRequest(
-                            source: editSource.trimmingCharacters(in: .whitespaces),
                             amount: normAmt,
+                            source: editSource.trimmingCharacters(in: .whitespaces),
                             description: nil,
                             dayOfMonth: pDay,
                             effectiveDate: nil,
