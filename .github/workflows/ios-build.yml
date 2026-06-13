@@ -21,6 +21,10 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
+      - name: Verify project
+        working-directory: apps/ios
+        run: ls -la FinanceApp.xcodeproj
+
       - name: Build
         working-directory: apps/ios
         run: |
@@ -33,16 +37,6 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            | xcpretty || true
-          xcodebuild build \
-            -project FinanceApp.xcodeproj \
-            -scheme FinanceApp \
-            -destination 'generic/platform=iOS' \
-            -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            COMPILER_INDEX_STORE_STORE_ENABLE=NO \
             2>&1 | tee build.log
 
       - name: Check build result
