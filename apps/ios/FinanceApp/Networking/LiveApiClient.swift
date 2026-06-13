@@ -573,7 +573,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let (accounts, _) = try await accountsResult
         let (categories, _) = try await categoriesResult
         let (transactions, _) = try await transactionsResult
-        let assetCategories = (try? await assetCategoriesResult.items) ?? []
+        let assetCategories = (try? await assetCategoriesResult.0) ?? []
 
         let currency = accounts.first?.currency ?? .RUB
         let reportMode: ReportMode = sessionStatus.householdId != nil ? .combined_viewer_overview : .personal

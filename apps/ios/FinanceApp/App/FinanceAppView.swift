@@ -31,10 +31,10 @@ struct FinanceAppView: View {
                 isLoading: isLoading,
                 message: message ?? "Войдите, чтобы увидеть финансы",
                 onLogin: { email, password in
-                    await performLogin(email: email, password: password)
+                    Task { await performLogin(email: email, password: password) }
                 },
                 onRegister: { email, password, confirm, displayName in
-                    await performRegister(email: email, password: password, confirmPassword: confirm, displayName: displayName)
+                    Task { await performRegister(email: email, password: password, confirmPassword: confirm, displayName: displayName) }
                 }
             )
             .padding(16)
@@ -62,7 +62,7 @@ struct FinanceAppView: View {
                         dashboard: dashboard,
                         selectedMode: selectedMode,
                         onModeSelected: { selectedMode = $0 },
-                        onDeleteTransaction: { id in await deleteTransaction(id) },
+                        onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
                         apiClient: apiClient,
                         householdId: dashboard?.session.householdId,
                         onRefreshDashboard: loadDashboard
@@ -118,7 +118,7 @@ struct FinanceAppView: View {
                 selectedMode: selectedMode,
                 errorMessage: quickAddError,
                 onDismiss: { showQuickAdd = false },
-                onSubmit: { draft in await submitQuickAdd(draft) }
+                onSubmit: { draft in Task { await submitQuickAdd(draft) } }
             )
         }
         .overlay(alignment: .bottom) {
@@ -249,7 +249,7 @@ struct FinanceAppView: View {
         isLoading = true
         message = "Удаляем операцию"
         do {
-            try await apiClient.deleteTransaction(id)
+            try await apiClient.deleteTransaction(transactionId: id)
             await loadDashboard()
             message = "Операция удалена"
         } catch {
