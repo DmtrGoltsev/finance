@@ -54,7 +54,7 @@ struct CaptureDraftRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(draft.merchantName ?? draft.description.isEmpty ? "Распознанный платёж" : draft.description)
+                    Text(draft.merchantName ?? (draft.description.isEmpty ? "Распознанный платёж" : draft.description))
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .lineLimit(1)

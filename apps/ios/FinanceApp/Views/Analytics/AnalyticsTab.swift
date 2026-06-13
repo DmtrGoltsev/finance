@@ -84,19 +84,22 @@ struct AnalyticsTab: View {
                 reportMode: mode, householdId: hhId,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
-                timezone: tz
+                timezone: tz,
+                accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let breakdown = apiClient.getReportCategoryBreakdown(
                 reportMode: mode, householdId: hhId,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
-                timezone: tz
+                timezone: tz,
+                accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let balances = apiClient.getReportAccountBalances(
                 reportMode: mode, householdId: hhId,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
-                timezone: tz
+                timezone: tz,
+                accountIds: nil, currency: nil
             )
             reportSummary = try await summary
             categoryBreakdown = try await breakdown

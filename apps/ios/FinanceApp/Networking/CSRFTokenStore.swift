@@ -58,10 +58,10 @@ final class CSRFTokenStore: @unchecked Sendable {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
-        let attributes: [String: Any] = query + [
+        let attributes: [String: Any] = query.merging([
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]
+        ]) { _, new in new }
         SecItemAdd(attributes as CFDictionary, nil)
     }
 
