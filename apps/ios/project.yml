@@ -3,9 +3,7 @@ options:
   bundleIdPrefix: com.codex
   deploymentTarget:
     iOS: "17.0"
-  xcodeVersion: "15.0"
   generateEmptyDirectories: true
-  projectFormat: "1.18"
 
 settings:
   base:
