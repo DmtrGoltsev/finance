@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
 import uuid
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Numeric, text
 from sqlalchemy.orm import MappedColumn, mapped_column
 from sqlalchemy.types import Uuid
-
 
 MONEY_NUMERIC = Numeric(20, 4)
 

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from logging.config import fileConfig
 from pathlib import Path
-import sys
 
 from alembic import context
 from sqlalchemy import pool
@@ -15,10 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_SRC = REPO_ROOT / "apps" / "backend" / "src"
 sys.path.insert(0, str(BACKEND_SRC))
 
+import app.db.models  # noqa: F401,E402
 from app.config import get_settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
-import app.db.models  # noqa: F401,E402
-
 
 config = context.config
 

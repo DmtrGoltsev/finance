@@ -17,6 +17,10 @@ show the deploy and rollback workflows:
 - `docs/production/finance-secrets-and-host-key.md`
 - `docs/production/finance-release-preflight-checklist.md`
 
+After the release branch is merged, verify the deploy and rollback workflows
+are available from the repository default branch before treating production
+deployment as unblocked.
+
 The deploy workflows must remain free of hardcoded production host keys,
 private keys, passwords, database URLs, QA passwords, and token values. Pinned
 SSH trust must use `StrictHostKeyChecking=yes`.
@@ -160,3 +164,7 @@ confirm_production_deploy: finance-production
 confirm_backend_restart: finance-backend.service, only when restart_backend=true
 environment: production
 ```
+
+Retain the GitHub Actions deploy workflow run URL in the release record together
+with production health evidence and links to the sanitized production smoke/E2E
+evidence. Do not copy secret values into evidence.

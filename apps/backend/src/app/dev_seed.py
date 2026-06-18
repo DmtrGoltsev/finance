@@ -15,12 +15,12 @@ from app.accounts.repository import (
     SqlAlchemyAccountRepository,
     seed_accounts_for_tests,
 )
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.auth.models import AuthMembershipRecord, AuthUserRecord
 from app.auth.runtime import AuthSessionService, InMemoryCredentialStore, get_auth_session_service
 from app.auth.security import HmacSha256TokenHashingBackend, Pbkdf2Sha256PasswordHashingBackend
 from app.auth.session_tokens import InMemorySessionTokenStore
 from app.authz import AccountOwnershipType, MembershipStatus, ResourceStatus
-from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.categories.repository import CategoryRecord, SqlAlchemyCategoryRepository
 from app.categories.repository import repository as category_repository
 from app.categories.schemas import CategoryScope, CategoryType, RecordStatus

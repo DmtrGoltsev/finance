@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Final
 
 
-class DomainStrEnum(str, Enum):
+class DomainStrEnum(StrEnum):
     """String enum base that serializes cleanly in Pydantic and JSON."""
 
     def __str__(self) -> str:

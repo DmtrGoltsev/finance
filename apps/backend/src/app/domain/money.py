@@ -6,11 +6,10 @@ amounts as ``Decimal`` values and reject floats to avoid binary rounding.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-import re
 from typing import Final
-
 
 MAX_MONEY_SCALE: Final[int] = 6
 DECIMAL_STRING_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -60,7 +59,7 @@ class Money:
     currency: str
 
     @classmethod
-    def from_wire(cls, amount: Decimal | int | str, currency: str) -> "Money":
+    def from_wire(cls, amount: Decimal | int | str, currency: str) -> Money:
         if not CURRENCY_CODE_PATTERN.fullmatch(currency):
             raise ValueError("currency must be an ISO 4217-style uppercase code")
         return cls(amount=parse_money_decimal(amount), currency=currency)

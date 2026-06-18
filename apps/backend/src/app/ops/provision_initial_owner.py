@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 import json
 import os
 import sys
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
