@@ -48,6 +48,7 @@ class AssetCategoryRepository(Protocol):
     def create(
         self,
         *,
+        asset_category_id: str | None = None,
         name: str,
         scope_type: AssetCategoryScope,
         owner_user_id: str | None,
@@ -88,6 +89,7 @@ class InMemoryAssetCategoryRepository:
     def create(
         self,
         *,
+        asset_category_id: str | None = None,
         name: str,
         scope_type: AssetCategoryScope,
         owner_user_id: str | None,
@@ -101,12 +103,12 @@ class InMemoryAssetCategoryRepository:
     ) -> AssetCategoryRecord:
         now = datetime.now(UTC)
         with self._lock:
-            asset_category_id = f"assetcat_{next(self._counter)}"
-            while asset_category_id in self._records:
-                asset_category_id = f"assetcat_{next(self._counter)}"
+            record_id = asset_category_id or f"assetcat_{next(self._counter)}"
+            while record_id in self._records:
+                record_id = f"assetcat_{next(self._counter)}"
 
             record = AssetCategoryRecord(
-                id=asset_category_id,
+                id=record_id,
                 name=name,
                 scope_type=scope_type,
                 owner_user_id=owner_user_id,
@@ -152,6 +154,7 @@ class SqlAlchemyAssetCategoryRepository:
     def create(
         self,
         *,
+        asset_category_id: str | None = None,
         name: str,
         scope_type: AssetCategoryScope,
         owner_user_id: str | None,
@@ -165,7 +168,11 @@ class SqlAlchemyAssetCategoryRepository:
     ) -> AssetCategoryRecord:
         now = datetime.now(UTC)
         model = AssetCategoryModel(
-            id=uuid4(),
+            id=(
+                _required_uuid(asset_category_id, "asset_category_id")
+                if asset_category_id
+                else uuid4()
+            ),
             name=name,
             scope_type=scope_type.value,
             owner_user_id=_nullable_uuid(owner_user_id, "owner_user_id"),

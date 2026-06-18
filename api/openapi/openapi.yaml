@@ -44,6 +44,8 @@ tags:
     description: Privacy-filtered MVP reports over visible manual financial data.
   - name: Planning
     description: Monthly personal and household planning; confirmations never create transactions.
+  - name: Sync
+    description: Offline-first sync push/pull for the mounted MVP entity subset.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
@@ -357,6 +359,36 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /asset-categories/investment-migrations:
+    post:
+      tags: [Asset Categories]
+      operationId: createInvestmentMigration
+      summary: Atomically create an investment category and link accounts.
+      description: |
+        Online immediate command for converting active same-scope, same-currency,
+        unlinked accounts into one investment asset category. The command is
+        atomic within the backend request. Offline retry/idempotency is provided
+        through `/sync/push` with `entityType=investment_migrations` and
+        `operation=create`; this REST endpoint does not store clientMutationId.
+        `color` is accepted for client command parity but is not persisted by the
+        current asset category storage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvestmentMigrationCreateRequest'
+      responses:
+        '201':
+          description: Created investment category and linked accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestmentMigrationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /asset-categories/{assetCategoryId}:
     get:
       tags: [Asset Categories]
@@ -591,6 +623,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sync/push:
+    post:
+      tags: [Sync]
+      operationId: syncPush
+      summary: Push ordered offline mutations.
+      description: |
+        Idempotent mutation ingestion for the MVP sync subset. The server stores a
+        canonical request hash per actor, deviceId, and clientMutationId. Reusing
+        the same key with the same hash returns the stored result; reusing it with
+        different content returns `IDEMPOTENCY_KEY_REUSED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncPushRequest'
+      responses:
+        '200':
+          description: Ordered mutation results. Unsupported or invalid mutations are explicit rejected results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncPushResponse'
+        '409':
+          description: Idempotency key reused with a different request hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sync/pull:
+    post:
+      tags: [Sync]
+      operationId: syncPull
+      summary: Pull ordered visible changes after a cursor.
+      description: Returns only changes visible to the authenticated actor by personal owner scope or active household membership.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncPullRequest'
+      responses:
+        '200':
+          description: Visible ordered sync changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncPullResponse'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -1624,6 +1712,24 @@ components:
       enum: [manual]
       description: MVP accepts only manual source. Reserved post-MVP values are rejected by create/update flows.
       x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
+    SyncEntityType:
+      type: string
+      enum:
+        - transactions
+        - accounts
+        - categories
+        - asset_categories
+        - investment_migrations
+        - planning_plans
+        - planning_income_sources
+        - planning_allocations
+      description: MVP sync supports manual transactions, account/category/asset-category CRUD hooks, atomic investment_migrations:create, and offline-first planning CRUD hooks.
+    SyncOperation:
+      type: string
+      enum: [create, update, archive, delete, restore, confirm]
+    SyncMutationStatus:
+      type: string
+      enum: [applied, rejected]
     CaptureDraftStatus:
       type: string
       enum: [pending, confirmed, discarded]
@@ -1681,6 +1787,13 @@ components:
         - RESET_TOKEN_NOT_FOUND_OR_EXPIRED
         - RESET_TOKEN_ALREADY_USED
         - PASSWORD_POLICY_FAILED
+        - IDEMPOTENCY_KEY_REUSED
+        - UNSUPPORTED_ENTITY_TYPE
+        - UNSUPPORTED_OPERATION
+        - UNSUPPORTED_TRANSACTION_TYPE
+        - PAYLOAD_REQUIRED
+        - BASE_VERSION_REQUIRED
+        - ENTITY_ALREADY_EXISTS
     ErrorDetail:
       type: object
       description: Field-level details for caller-supplied invalid fields only; never includes hidden object names, amounts, emails, tokens, SQL, stack traces, or raw payloads.
@@ -2128,6 +2241,55 @@ components:
         version:
           type: integer
           minimum: 1
+    InvestmentMigrationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [assetCategoryId, name, assetType, currency, accountIds, accountVersions]
+      properties:
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Client-provided ID for the asset category to create. For sync this must match mutation.entityId.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        icon:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
+          description: Stored as asset category iconKey. Backend also accepts iconKey.
+        color:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 32
+          description: Accepted for client command parity; not persisted by current asset category storage.
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        scope:
+          $ref: '#/components/schemas/AssetCategoryScope'
+          description: Optional. If omitted, derived from the validated accounts; backend also accepts scopeType.
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for household scope unless derivable from shared accounts; forbidden for personal.
+        accountIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ResourceId'
+        accountVersions:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 1
+          description: Map of accountId to expected optimistic version. Keys must exactly match accountIds.
+      description: |
+        Creates an investment asset category with manualAmount=0 and isInvestment=true,
+        then links all requested accounts without changing balances. Rejects stale
+        account versions, linked accounts, mixed scope, mixed currency, or account
+        type versus assetType mismatches before writing.
     PlanningSummaryDto:
       type: object
       additionalProperties: false
@@ -2342,6 +2504,9 @@ components:
       additionalProperties: false
       required: [scope, month, currency]
       properties:
+        id:
+          type: string
+          format: uuid
         scope:
           $ref: '#/components/schemas/PlanningScope'
         month:
@@ -2356,6 +2521,9 @@ components:
       additionalProperties: false
       required: [amount, source, dayOfMonth]
       properties:
+        id:
+          type: string
+          format: uuid
         amount:
           $ref: '#/components/schemas/DecimalString'
         source:
@@ -2394,6 +2562,9 @@ components:
       additionalProperties: false
       required: [targetType, targetId, allocationMode, allocationValue]
       properties:
+        id:
+          type: string
+          format: uuid
         targetType:
           $ref: '#/components/schemas/AllocationTargetType'
         targetId:
@@ -2600,6 +2771,170 @@ components:
           $ref: '#/components/schemas/DateOnly'
         sourceType:
           $ref: '#/components/schemas/SourceType'
+    SyncMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [clientMutationId, entityType, entityId, operation]
+      properties:
+        clientMutationId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/SyncOperation'
+        baseVersion:
+          type: [integer, 'null']
+          minimum: 1
+          description: Required by sync MVP for update/delete/restore/confirm to avoid unsafe overwrites.
+        payload:
+          type: [object, 'null']
+          additionalProperties: true
+          description: Entity-specific mutation body. Create/update follows the matching online request shape for transactions, accounts, categories, asset_categories, investment_migrations, or planning records. Planning child create payloads also require planId. Offline account currentBalance changes are rejected.
+    SyncPushRequest:
+      type: object
+      additionalProperties: false
+      required: [deviceId, clientSchemaVersion, mutations]
+      properties:
+        deviceId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        clientSchemaVersion:
+          type: integer
+          minimum: 1
+        mutations:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SyncMutationRequest'
+    SyncMutationResult:
+      type: object
+      additionalProperties: false
+      required: [clientMutationId, entityType, entityId, operation, status]
+      properties:
+        clientMutationId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/SyncOperation'
+        status:
+          $ref: '#/components/schemas/SyncMutationStatus'
+        serverVersion:
+          type: [integer, 'null']
+          minimum: 1
+        changeSeq:
+          type: [integer, 'null']
+          minimum: 1
+        errorCode:
+          type: [string, 'null']
+        message:
+          type: [string, 'null']
+        data:
+          type: [object, 'null']
+          additionalProperties: true
+    SyncPushResponse:
+      type: object
+      additionalProperties: false
+      required: [deviceId, serverTime, results]
+      properties:
+        deviceId:
+          type: string
+        serverTime:
+          $ref: '#/components/schemas/DateTime'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncMutationResult'
+    SyncPullRequest:
+      type: object
+      additionalProperties: false
+      required: [deviceId, clientSchemaVersion]
+      properties:
+        deviceId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        clientSchemaVersion:
+          type: integer
+          minimum: 1
+        cursor:
+          type: integer
+          minimum: 0
+          default: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+        entityTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncEntityType'
+    SyncChangeDto:
+      type: object
+      additionalProperties: false
+      required: [seq, entityType, entityId, changeType, createdAt]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        changeType:
+          $ref: '#/components/schemas/SyncOperation'
+        entityVersion:
+          type: [integer, 'null']
+          minimum: 1
+        entityUpdatedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        changedByUserId:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        clientMutationId:
+          type: [string, 'null']
+        payload:
+          type: [object, 'null']
+          additionalProperties: true
+        tombstonePayload:
+          type: [object, 'null']
+          additionalProperties: true
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+    SyncPullResponse:
+      type: object
+      additionalProperties: false
+      required: [changes, nextCursor, hasMore, serverTime]
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncChangeDto'
+        nextCursor:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+        serverTime:
+          $ref: '#/components/schemas/DateTime'
     CaptureDraftDto:
       type: object
       additionalProperties: false
@@ -3333,6 +3668,24 @@ components:
             $ref: '#/components/schemas/AssetCategoryDto'
         page:
           $ref: '#/components/schemas/PageInfo'
+    InvestmentMigrationDto:
+      type: object
+      additionalProperties: false
+      required: [assetCategory, accounts]
+      properties:
+        assetCategory:
+          $ref: '#/components/schemas/AssetCategoryDto'
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountDto'
+    InvestmentMigrationEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/InvestmentMigrationDto'
     TransactionEnvelope:
       type: object
       additionalProperties: false

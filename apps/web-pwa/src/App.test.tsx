@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiRequestError } from "./api/client";
 import type {
@@ -158,6 +158,10 @@ const financeSnapshot: DashboardSnapshot = {
   investmentsByCurrency: [],
   investmentsTotal: null
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
   return {
@@ -813,6 +817,9 @@ describe("PWA finance experience", () => {
 
     await screen.findByRole("heading", { name: "Деньги" });
     const nav = screen.getByRole("navigation", { name: "Нижняя навигация" });
+    expect(within(nav).getByRole("button", { name: "Операции" })).toHaveAttribute("title", "Операции");
+    expect(within(nav).getByText("Операции")).toHaveClass("visuallyHidden");
+
     await user.click(screen.getByTestId("mobile-nav-operations"));
     expect(screen.getByRole("heading", { level: 2, name: "Операции" })).toBeInTheDocument();
 
@@ -826,6 +833,9 @@ describe("PWA finance experience", () => {
   });
 
   it("uploads a screenshot, reviews OCR category candidates, saves mapping and creates drafts after confirmation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-12T10:00:00.000Z"));
+
     const user = userEvent.setup();
     const client = makeClient();
     client.uploadScreenshotOcr = vi.fn(async () => ({

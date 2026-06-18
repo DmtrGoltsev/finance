@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response, status
 from app.api.auth_context import CurrentActor
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
 
 from .repository import SqlAlchemyCategoryRepository
 from .schemas import (
@@ -32,7 +33,7 @@ def category_service_for_request() -> Iterator[CategoryService]:
         return
 
     with sync_session_scope(get_settings()) as session:
-        yield CategoryService(SqlAlchemyCategoryRepository(session))
+        yield CategoryService(SqlAlchemyCategoryRepository(session), SyncChangeRecorder(session))
 
 
 CategoryServiceDependency = Annotated[CategoryService, Depends(category_service_for_request)]

@@ -13,6 +13,7 @@ from app.authz import DenialReason
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.config import get_settings
 from app.db.session import sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
 from app.transactions.repository import SqlAlchemyTransactionRepository
 
 from .repository import (
@@ -61,6 +62,7 @@ def planning_service_for_request() -> Iterator[PlanningService]:
             SqlAlchemyCategoryRepository(session),
             SqlAlchemyAssetCategoryRepository(session),
             SqlAlchemyTransactionRepository(session),
+            SyncChangeRecorder(session),
         )
 
 

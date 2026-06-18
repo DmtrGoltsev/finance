@@ -49,6 +49,8 @@ class PlanningIncomeSourceRecord:
     created_at: datetime
     updated_at: datetime
     version: int
+    record_status: str = "active"
+    deleted_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +73,8 @@ class PlanningAllocationRecord:
     created_at: datetime
     updated_at: datetime
     version: int
+    record_status: str = "active"
+    deleted_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +147,7 @@ class SqlAlchemyPlanningRepository:
     def create_plan(
         self,
         *,
+        plan_id: str | None = None,
         scope_type: str,
         owner_user_id: str | None,
         household_id: str | None,
@@ -152,7 +157,7 @@ class SqlAlchemyPlanningRepository:
     ) -> PlanningPlanRecord:
         now = datetime.now(UTC)
         model = PlanningPlanModel(
-            id=uuid4(),
+            id=_required_uuid(plan_id, "plan_id") if plan_id else uuid4(),
             scope_type=scope_type,
             owner_user_id=_nullable_uuid(owner_user_id, "owner_user_id"),
             household_id=_nullable_uuid(household_id, "household_id"),
@@ -172,6 +177,7 @@ class SqlAlchemyPlanningRepository:
         statement = (
             select(PlanningIncomeSourceModel)
             .where(PlanningIncomeSourceModel.plan_id == parsed_id)
+            .where(PlanningIncomeSourceModel.record_status == "active")
             .order_by(PlanningIncomeSourceModel.day_of_month, PlanningIncomeSourceModel.created_at)
         )
         return [_income_from_model(row) for row in self._session.execute(statement).scalars()]
@@ -186,6 +192,7 @@ class SqlAlchemyPlanningRepository:
     def create_income_source(
         self,
         *,
+        income_source_id: str | None = None,
         plan_id: str,
         amount: Decimal,
         source: str,
@@ -198,7 +205,11 @@ class SqlAlchemyPlanningRepository:
     ) -> PlanningIncomeSourceRecord:
         now = datetime.now(UTC)
         model = PlanningIncomeSourceModel(
-            id=uuid4(),
+            id=(
+                _required_uuid(income_source_id, "income_source_id")
+                if income_source_id
+                else uuid4()
+            ),
             plan_id=_required_uuid(plan_id, "plan_id"),
             amount=amount,
             source=source,
@@ -211,6 +222,8 @@ class SqlAlchemyPlanningRepository:
             created_at=now,
             updated_at=now,
             version=1,
+            record_status="active",
+            deleted_at=None,
         )
         self._session.add(model)
         self._session.flush()
@@ -236,25 +249,36 @@ class SqlAlchemyPlanningRepository:
             record.confirmed_by_user_id,
             "confirmed_by_user_id",
         )
+        model.record_status = record.record_status
+        model.deleted_at = record.deleted_at
         model.updated_at = datetime.now(UTC)
         model.version = int(record.version) + 1
         self._session.flush()
         return _income_from_model(model)
 
-    def delete_income_source(self, record: PlanningIncomeSourceRecord) -> None:
+    def delete_income_source(
+        self,
+        record: PlanningIncomeSourceRecord,
+    ) -> PlanningIncomeSourceRecord:
         model = self._session.get(
             PlanningIncomeSourceModel,
             _required_uuid(record.id, "id"),
         )
-        if model is not None:
-            self._session.delete(model)
-            self._session.flush()
+        if model is None:
+            raise KeyError(f"planning income source does not exist: {record.id}")
+        model.record_status = "deleted"
+        model.deleted_at = model.deleted_at or datetime.now(UTC)
+        model.updated_at = datetime.now(UTC)
+        model.version = int(model.version or record.version) + 1
+        self._session.flush()
+        return _income_from_model(model)
 
     def list_allocations(self, plan_id: str) -> list[PlanningAllocationRecord]:
         parsed_id = _required_uuid(plan_id, "plan_id")
         statement = (
             select(PlanningAllocationModel)
             .where(PlanningAllocationModel.plan_id == parsed_id)
+            .where(PlanningAllocationModel.record_status == "active")
             .order_by(PlanningAllocationModel.created_at, PlanningAllocationModel.id)
         )
         return [_allocation_from_model(row) for row in self._session.execute(statement).scalars()]
@@ -269,6 +293,7 @@ class SqlAlchemyPlanningRepository:
     def create_allocation(
         self,
         *,
+        allocation_id: str | None = None,
         plan_id: str,
         target_type: str,
         target_id: str | None,
@@ -286,7 +311,7 @@ class SqlAlchemyPlanningRepository:
     ) -> PlanningAllocationRecord:
         now = datetime.now(UTC)
         model = PlanningAllocationModel(
-            id=uuid4(),
+            id=_required_uuid(allocation_id, "allocation_id") if allocation_id else uuid4(),
             plan_id=_required_uuid(plan_id, "plan_id"),
             target_type=target_type,
             target_id=_nullable_uuid(target_id, "target_id"),
@@ -304,6 +329,8 @@ class SqlAlchemyPlanningRepository:
             created_at=now,
             updated_at=now,
             version=1,
+            record_status="active",
+            deleted_at=None,
         )
         self._session.add(model)
         self._session.flush()
@@ -328,19 +355,26 @@ class SqlAlchemyPlanningRepository:
         model.is_savings_goal = record.is_savings_goal
         model.goal_target_amount = record.goal_target_amount
         model.goal_due_month = record.goal_due_month
+        model.record_status = record.record_status
+        model.deleted_at = record.deleted_at
         model.updated_at = datetime.now(UTC)
         model.version = int(record.version) + 1
         self._session.flush()
         return _allocation_from_model(model)
 
-    def delete_allocation(self, record: PlanningAllocationRecord) -> None:
+    def delete_allocation(self, record: PlanningAllocationRecord) -> PlanningAllocationRecord:
         model = self._session.get(
             PlanningAllocationModel,
             _required_uuid(record.id, "id"),
         )
-        if model is not None:
-            self._session.delete(model)
-            self._session.flush()
+        if model is None:
+            raise KeyError(f"planning allocation does not exist: {record.id}")
+        model.record_status = "deleted"
+        model.deleted_at = model.deleted_at or datetime.now(UTC)
+        model.updated_at = datetime.now(UTC)
+        model.version = int(model.version or record.version) + 1
+        self._session.flush()
+        return _allocation_from_model(model)
 
 
 def _plan_from_model(model: PlanningPlanModel) -> PlanningPlanRecord:
@@ -377,6 +411,8 @@ def _income_from_model(model: PlanningIncomeSourceModel) -> PlanningIncomeSource
         created_at=model.created_at,
         updated_at=model.updated_at,
         version=int(model.version or 1),
+        record_status=model.record_status,
+        deleted_at=model.deleted_at,
     )
 
 
@@ -403,6 +439,8 @@ def _allocation_from_model(model: PlanningAllocationModel) -> PlanningAllocation
         created_at=model.created_at,
         updated_at=model.updated_at,
         version=int(model.version or 1),
+        record_status=model.record_status,
+        deleted_at=model.deleted_at,
     )
 
 

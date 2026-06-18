@@ -1,5 +1,6 @@
 package com.finance.mvp.ui
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,6 +62,8 @@ import com.finance.mvp.api.PlanningPlan
 import com.finance.mvp.api.PlanningPlanCopyRequest
 import com.finance.mvp.api.PlanningPlanCreateRequest
 import com.finance.mvp.api.userFacingSeedText
+import com.finance.mvp.sync.PlanningMutationOutcome
+import com.finance.mvp.sync.PlanningRepository
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
@@ -146,40 +149,67 @@ fun PlanningUi(
     onCreateCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
     onCreateAccount: suspend (String, String, String, FinanceMode) -> ApiResult<AccountSummary>,
     onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
+    planningRepository: PlanningRepository? = null,
+    onOfflineMutationQueued: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
     var month by rememberSaveable { mutableStateOf(nextPlanningMonth()) }
     val boundedMonth = month.coercePlanningMonthAtLeastCurrent()
     val resolvedScope = selectedMode.toPlanningScope(dashboard?.session?.householdId)
+    val userId = dashboard?.session?.userId?.takeIf { it.isNotBlank() }
     val currency = remember(dashboard, selectedMode) { dashboard.planningCurrency(selectedMode) }
     var plan by remember { mutableStateOf<PlanningPlan?>(null) }
     var history by remember { mutableStateOf<List<PlanningPlan>>(emptyList()) }
     var isLoading by rememberSaveable { mutableStateOf(false) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingPlanningCount by rememberSaveable { mutableStateOf(0) }
     var showCategorySheet by rememberSaveable { mutableStateOf(false) }
     var showAccountSheet by rememberSaveable { mutableStateOf(false) }
     var createAccountTargetType by rememberSaveable { mutableStateOf(TARGET_INVESTMENT_ASSET_CATEGORY) }
+
+    suspend fun refreshCachedPlanningState(): Boolean {
+        val scopeInfo = resolvedScope ?: return false
+        val repository = planningRepository ?: return false
+        val localUserId = userId ?: return false
+        val cached = withContext(Dispatchers.IO) {
+            repository.cachedState(localUserId, scopeInfo.apiScope, boundedMonth, scopeInfo.householdId)
+        }
+        pendingPlanningCount = cached.pendingCount
+        val hasCachedState = cached.plan != null || cached.history.isNotEmpty()
+        if (hasCachedState) {
+            plan = cached.plan
+            history = cached.history
+        }
+        return hasCachedState
+    }
 
     fun loadPlanningState(successMessage: String? = null) {
         val scopeInfo = resolvedScope ?: return
         coroutineScope.launch {
             isLoading = true
             message = null
+            val hadCachedState = refreshCachedPlanningState()
             val result = withContext(Dispatchers.IO) {
-                when (val currentResult = apiClient.listPlanningPlans(scopeInfo.apiScope, boundedMonth, scopeInfo.householdId)) {
-                    is ApiResult.Success -> {
-                        val current = currentResult.value
-                        if (current == null) {
-                            ApiResult.Success(null)
-                        } else {
-                            when (val full = apiClient.getPlanningPlan(current.id)) {
-                                is ApiResult.Success -> ApiResult.Success(full.value)
-                                is ApiResult.Failure -> full
+                val repository = planningRepository
+                val localUserId = userId
+                if (repository != null && localUserId != null) {
+                    repository.refreshPlan(localUserId, scopeInfo.apiScope, boundedMonth, scopeInfo.householdId)
+                } else {
+                    when (val currentResult = apiClient.listPlanningPlans(scopeInfo.apiScope, boundedMonth, scopeInfo.householdId)) {
+                        is ApiResult.Success -> {
+                            val current = currentResult.value
+                            if (current == null) {
+                                ApiResult.Success(null)
+                            } else {
+                                when (val full = apiClient.getPlanningPlan(current.id)) {
+                                    is ApiResult.Success -> ApiResult.Success(full.value)
+                                    is ApiResult.Failure -> full
+                                }
                             }
                         }
+                        is ApiResult.Failure -> currentResult
                     }
-                    is ApiResult.Failure -> currentResult
                 }
             }
             when (result) {
@@ -187,22 +217,62 @@ fun PlanningUi(
                     plan = result.value
                     message = successMessage
                 }
-                is ApiResult.Failure -> message = result.planningMessage()
+                is ApiResult.Failure -> {
+                    message = if (hadCachedState) {
+                        "Показаны сохранённые данные. ${result.planningMessage()}"
+                    } else {
+                        result.planningMessage()
+                    }
+                }
             }
             history = when (val historyResult = withContext(Dispatchers.IO) {
-                apiClient.listPlanningPlanHistory(scopeInfo.apiScope, scopeInfo.householdId)
+                val repository = planningRepository
+                val localUserId = userId
+                if (repository != null && localUserId != null) {
+                    repository.refreshHistory(localUserId, scopeInfo.apiScope, scopeInfo.householdId)
+                } else {
+                    apiClient.listPlanningPlanHistory(scopeInfo.apiScope, scopeInfo.householdId)
+                }
             }) {
                 is ApiResult.Success -> historyResult.value
                 is ApiResult.Failure -> {
-                    message = message ?: historyResult.planningMessage()
-                    emptyList()
+                    message = message ?: if (hadCachedState) {
+                        "Показаны сохранённые данные. ${historyResult.planningMessage()}"
+                    } else {
+                        historyResult.planningMessage()
+                    }
+                    history
                 }
             }
+            refreshCachedPlanningState()
             isLoading = false
         }
     }
 
-    LaunchedEffect(apiClient, resolvedScope, month) {
+    suspend fun <T> handlePlanningMutationOutcome(
+        outcome: PlanningMutationOutcome<T>,
+        successMessage: String,
+        onApplied: suspend (T) -> Unit = {},
+    ) {
+        when (outcome) {
+            is PlanningMutationOutcome.Applied -> {
+                onApplied(outcome.value)
+                loadPlanningState(successMessage)
+            }
+            is PlanningMutationOutcome.Queued -> {
+                message = outcome.message
+                refreshCachedPlanningState()
+                userId?.let(onOfflineMutationQueued)
+                isLoading = false
+            }
+            is PlanningMutationOutcome.Failed -> {
+                message = outcome.failure.planningMessage()
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(apiClient, planningRepository, userId, resolvedScope, month) {
         plan = null
         history = emptyList()
         message = null
@@ -274,6 +344,9 @@ fun PlanningUi(
         if (!message.isNullOrBlank()) {
             PlanningMessageCard(message.orEmpty())
         }
+        if (pendingPlanningCount > 0) {
+            PlanningMessageCard("Есть несинхронизированные изменения планирования: $pendingPlanningCount. Итоги могут обновиться после синхронизации.")
+        }
 
         PlanningPlanCard(
             plan = plan,
@@ -284,26 +357,26 @@ fun PlanningUi(
             onCreatePlan = {
                 coroutineScope.launch {
                     isLoading = true
-                    val result = withContext(Dispatchers.IO) {
-                        apiClient.createPlanningPlan(
-                            PlanningPlanCreateRequest(
-                                scope = resolvedScope.apiScope,
-                                month = boundedMonth,
-                                currency = currency,
-                                householdId = resolvedScope.householdId,
-                            ),
-                        )
+                    val request = PlanningPlanCreateRequest(
+                        scope = resolvedScope.apiScope,
+                        month = boundedMonth,
+                        currency = currency,
+                        householdId = resolvedScope.householdId,
+                    )
+                    val outcome = withContext(Dispatchers.IO) {
+                        val repository = planningRepository
+                        val localUserId = userId
+                        if (repository != null && localUserId != null) {
+                            repository.createPlan(localUserId, request)
+                        } else {
+                            when (val result = apiClient.createPlanningPlan(request)) {
+                                is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                            }
+                        }
                     }
-                    when (result) {
-                        is ApiResult.Success -> {
-                            plan = result.value
-                            message = "План создан"
-                            loadPlanningState("План создан")
-                        }
-                        is ApiResult.Failure -> {
-                            message = result.planningMessage()
-                            isLoading = false
-                        }
+                    handlePlanningMutationOutcome(outcome, "План создан") { createdPlan ->
+                        plan = createdPlan
                     }
                 }
             },
@@ -317,92 +390,116 @@ fun PlanningUi(
                 onCreate = { request ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.createPlanningIncomeSource(currentPlan.id, request)
-                        }) {
-                            is ApiResult.Success -> {
-                                onPlanningNotificationCandidate(
-                                    result.value.toPlanningNotificationCandidate(
-                                        plan = currentPlan,
-                                        action = PlanningNotificationCandidateAction.ScheduleIncomeSource,
-                                    ),
-                                )
-                                loadPlanningState("Источник дохода добавлен")
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.createIncomeSource(localUserId, currentPlan, request)
+                            } else {
+                                when (val result = apiClient.createPlanningIncomeSource(currentPlan.id, request)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
-                            }
+                        }
+                        handlePlanningMutationOutcome(
+                            outcome = outcome,
+                            successMessage = "Источник дохода добавлен",
+                        ) { source ->
+                            onPlanningNotificationCandidate(
+                                source.toPlanningNotificationCandidate(
+                                    plan = currentPlan,
+                                    action = PlanningNotificationCandidateAction.ScheduleIncomeSource,
+                                ),
+                            )
                         }
                     }
                 },
                 onUpdate = { source, request ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.updatePlanningIncomeSource(source.id, request)
-                        }) {
-                            is ApiResult.Success -> {
-                                onPlanningNotificationCandidate(
-                                    result.value.toPlanningNotificationCandidate(
-                                        plan = currentPlan,
-                                        action = if (result.value.confirmed) {
-                                            PlanningNotificationCandidateAction.CancelIncomeSource
-                                        } else {
-                                            PlanningNotificationCandidateAction.ScheduleIncomeSource
-                                        },
-                                    ),
-                                )
-                                loadPlanningState("Источник дохода обновлён")
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.updateIncomeSource(localUserId, source, request)
+                            } else {
+                                when (val result = apiClient.updatePlanningIncomeSource(source.id, request)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
-                            }
+                        }
+                        handlePlanningMutationOutcome(
+                            outcome = outcome,
+                            successMessage = "Источник дохода обновлён",
+                        ) { updatedSource ->
+                            onPlanningNotificationCandidate(
+                                updatedSource.toPlanningNotificationCandidate(
+                                    plan = currentPlan,
+                                    action = if (updatedSource.confirmed) {
+                                        PlanningNotificationCandidateAction.CancelIncomeSource
+                                    } else {
+                                        PlanningNotificationCandidateAction.ScheduleIncomeSource
+                                    },
+                                ),
+                            )
                         }
                     }
                 },
                 onConfirm = { source ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.confirmPlanningIncomeSource(source.id)
-                        }) {
-                            is ApiResult.Success -> {
-                                onPlanningNotificationCandidate(
-                                    result.value.toPlanningNotificationCandidate(
-                                        plan = currentPlan,
-                                        action = PlanningNotificationCandidateAction.CancelIncomeSource,
-                                    ),
-                                )
-                                loadPlanningState("Доход подтверждён")
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.confirmIncomeSource(localUserId, source)
+                            } else {
+                                when (val result = apiClient.confirmPlanningIncomeSource(source.id)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
-                            }
+                        }
+                        handlePlanningMutationOutcome(
+                            outcome = outcome,
+                            successMessage = "Доход подтверждён",
+                        ) { confirmedSource ->
+                            onPlanningNotificationCandidate(
+                                confirmedSource.toPlanningNotificationCandidate(
+                                    plan = currentPlan,
+                                    action = PlanningNotificationCandidateAction.CancelIncomeSource,
+                                ),
+                            )
                         }
                     }
                 },
                 onDelete = { source ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.deletePlanningIncomeSource(source.id)
-                        }) {
-                            is ApiResult.Success -> {
-                                onPlanningNotificationCandidate(
-                                    source.toPlanningNotificationCandidate(
-                                        plan = currentPlan,
-                                        action = PlanningNotificationCandidateAction.CancelIncomeSource,
-                                    ),
-                                )
-                                loadPlanningState("Источник дохода удалён")
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.deleteIncomeSource(localUserId, source)
+                            } else {
+                                when (val result = apiClient.deletePlanningIncomeSource(source.id)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(Unit)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
-                            }
+                        }
+                        handlePlanningMutationOutcome(
+                            outcome = outcome,
+                            successMessage = "Источник дохода удалён",
+                        ) {
+                            onPlanningNotificationCandidate(
+                                source.toPlanningNotificationCandidate(
+                                    plan = currentPlan,
+                                    action = PlanningNotificationCandidateAction.CancelIncomeSource,
+                                ),
+                            )
                         }
                     }
                 },
@@ -421,43 +518,55 @@ fun PlanningUi(
                 onCreate = { request ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.createPlanningAllocation(currentPlan.id, request)
-                        }) {
-                            is ApiResult.Success -> loadPlanningState("Распределение добавлено")
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.createAllocation(localUserId, currentPlan, request)
+                            } else {
+                                when (val result = apiClient.createPlanningAllocation(currentPlan.id, request)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
                         }
+                        handlePlanningMutationOutcome(outcome, "Распределение добавлено")
                     }
                 },
                 onUpdate = { allocation, request ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.updatePlanningAllocation(allocation.id, request)
-                        }) {
-                            is ApiResult.Success -> loadPlanningState("Распределение обновлено")
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.updateAllocation(localUserId, allocation, request)
+                            } else {
+                                when (val result = apiClient.updatePlanningAllocation(allocation.id, request)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
                         }
+                        handlePlanningMutationOutcome(outcome, "Распределение обновлено")
                     }
                 },
                 onDelete = { allocation ->
                     coroutineScope.launch {
                         isLoading = true
-                        when (val result = withContext(Dispatchers.IO) {
-                            apiClient.deletePlanningAllocation(allocation.id)
-                        }) {
-                            is ApiResult.Success -> loadPlanningState("Распределение удалено")
-                            is ApiResult.Failure -> {
-                                message = result.planningMessage()
-                                isLoading = false
+                        val outcome = withContext(Dispatchers.IO) {
+                            val repository = planningRepository
+                            val localUserId = userId
+                            if (repository != null && localUserId != null) {
+                                repository.deleteAllocation(localUserId, allocation)
+                            } else {
+                                when (val result = apiClient.deletePlanningAllocation(allocation.id)) {
+                                    is ApiResult.Success -> PlanningMutationOutcome.Applied(Unit)
+                                    is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                                }
                             }
                         }
+                        handlePlanningMutationOutcome(outcome, "Распределение удалено")
                     }
                 },
             )
@@ -470,20 +579,24 @@ fun PlanningUi(
             onCopy = { historyPlan ->
                 coroutineScope.launch {
                     isLoading = true
-                    when (val result = withContext(Dispatchers.IO) {
-                        apiClient.copyPlanningPlan(
-                            historyPlan.id,
-                            PlanningPlanCopyRequest(targetMonth = boundedMonth),
-                        )
-                    }) {
-                        is ApiResult.Success -> {
-                            plan = result.value
-                            loadPlanningState("План ${historyPlan.month.localizedPlanningMonth()} скопирован на ${boundedMonth.localizedPlanningMonth()}")
+                    val outcome = withContext(Dispatchers.IO) {
+                        val repository = planningRepository
+                        val localUserId = userId
+                        val request = PlanningPlanCopyRequest(targetMonth = boundedMonth)
+                        if (repository != null && localUserId != null) {
+                            repository.copyPlan(localUserId, historyPlan.id, request)
+                        } else {
+                            when (val result = apiClient.copyPlanningPlan(historyPlan.id, request)) {
+                                is ApiResult.Success -> PlanningMutationOutcome.Applied(result.value)
+                                is ApiResult.Failure -> PlanningMutationOutcome.Failed(result)
+                            }
                         }
-                        is ApiResult.Failure -> {
-                            message = result.planningMessage()
-                            isLoading = false
-                        }
+                    }
+                    handlePlanningMutationOutcome(
+                        outcome = outcome,
+                        successMessage = "План ${historyPlan.month.localizedPlanningMonth()} скопирован на ${boundedMonth.localizedPlanningMonth()}",
+                    ) { copiedPlan ->
+                        plan = copiedPlan
                     }
                 }
             },
@@ -659,10 +772,10 @@ private fun PlanningPlanCard(
                     PlanningMetric("Сверх", plan.overallocatedAmount.planningMoney(currency), Modifier.weight(1f))
                 }
                 if (plan.isUnderallocated) {
-                    PlanningBanner("Есть доход без распределений. Добавьте allocation или уменьшите плановый доход.", Color(0xFF8A6A12))
+                    PlanningBanner("Есть доход без распределений. Добавьте распределение или уменьшите плановый доход.", Color(0xFF8A6A12))
                 }
                 if (plan.isOverallocated) {
-                    PlanningBanner("Распределения выше планового дохода. Исправьте allocations, чтобы снять предупреждение.", Color(0xFFE35D4F))
+                    PlanningBanner("Распределения выше планового дохода. Исправьте распределения, чтобы снять предупреждение.", Color(0xFFE35D4F))
                 }
                 PlanningHighlights(plan)
             }
@@ -686,7 +799,7 @@ private fun PlanningHighlights(plan: PlanningPlan) {
         }
     }
     if (allocationHighlights.isEmpty()) {
-        PlanningBanner("Статусы появятся в строках распределений после расчета по allocation.", Color(0xFF6D5BD0))
+        PlanningBanner("Статусы появятся в строках распределений после расчета плана.", Color(0xFF6D5BD0))
     }
     allocationHighlights.take(3).forEach { highlight ->
         val color = if (highlight.startsWith("Расходы")) Color(0xFFE35D4F) else Color(0xFF8A6A12)
@@ -916,50 +1029,60 @@ private fun AllocationsCard(
         draft.allocationValue.trim().normalizedPlanningAmount() != null &&
         draft.hasValidSavingsGoalState()
 
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Распределения", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            PlanningAllocationEditor(
-                draft = draft,
-                currency = plan.currency,
-                targetOptions = targetOptions,
-                onDraftChange = { draft = it },
-                onShowCreateCategory = onShowCreateCategory,
-                onShowCreateAccount = onShowCreateAccount,
-            )
-            Button(
-                onClick = {
-                    onCreate(draft.toCreateRequest())
-                    draft = PlanningAllocationDraft()
-                },
-                enabled = canCreateAllocation,
-                modifier = Modifier.fillMaxWidth(),
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Добавить распределение")
+                Text("Распределения в плане", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (plan.allocations.isEmpty()) {
+                    Text("В плане ${plan.scope.localizedPlanningScope()} пока нет распределений. Добавьте расходную или инвестиционную цель.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    plan.allocations.forEach { allocation ->
+                        AllocationRow(
+                            allocation = allocation,
+                            currency = plan.currency,
+                            categories = categories,
+                            investments = investments,
+                            isLoading = isLoading,
+                            onUpdate = onUpdate,
+                            onDelete = onDelete,
+                        )
+                    }
+                }
             }
-            if (!canCreateAllocation) {
-                Text(
-                    "Чтобы добавить allocation, выберите цель этого scope и укажите сумму или процент.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
 
-            if (plan.allocations.isEmpty()) {
-                Text("В плане ${plan.scope.localizedPlanningScope()} пока нет распределений. Добавьте расходную или инвестиционную цель.", style = MaterialTheme.typography.bodySmall)
-            } else {
-                plan.allocations.forEach { allocation ->
-                    AllocationRow(
-                        allocation = allocation,
-                        currency = plan.currency,
-                        categories = categories,
-                        investments = investments,
-                        isLoading = isLoading,
-                        onUpdate = onUpdate,
-                        onDelete = onDelete,
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Добавить распределение", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                PlanningAllocationEditor(
+                    draft = draft,
+                    currency = plan.currency,
+                    targetOptions = targetOptions,
+                    onDraftChange = { draft = it },
+                    onShowCreateCategory = onShowCreateCategory,
+                    onShowCreateAccount = onShowCreateAccount,
+                )
+                Button(
+                    onClick = {
+                        onCreate(draft.toCreateRequest())
+                        draft = PlanningAllocationDraft()
+                    },
+                    enabled = canCreateAllocation,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Добавить распределение")
+                }
+                if (!canCreateAllocation) {
+                    Text(
+                        "Чтобы добавить распределение, выберите цель текущего режима и укажите сумму или процент.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1156,7 +1279,9 @@ private fun AllocationRow(
     }
     val targetOptions = planningTargetOptions(draft.targetType, categories, investments)
     val targetName = allocation.readableTargetName(targetOptions)
-    val statusText = allocation.readableStatus()
+    val statusText = allocation.readableStatus().takeUnless { allocation.hasNoActualsMetaStatus() }
+    val showInvestmentAttentionIcon = allocation.showInvestmentAttentionIcon()
+    val attentionText = allocation.readableAttentionReason()
 
     Column(
         modifier = Modifier
@@ -1179,20 +1304,24 @@ private fun AllocationRow(
                         append(allocation.targetType.localizedTargetType())
                         append(" • ")
                         append(allocation.recurrenceType.orEmpty().ifBlank { RECURRENCE_REGULAR }.localizedRecurrenceType())
-                        append(" • ")
-                        if (allocation.allocationMode == ALLOCATION_PERCENT) {
-                            append("${allocation.allocationMode.localizedAllocationMode()}: ${allocation.allocationValue} = ${allocation.calculatedAmount.planningMoney(currency)}")
-                        } else {
-                            append(allocation.calculatedAmount.planningMoney(currency))
+                        statusText?.let {
+                            append(" • ")
+                            append(it)
                         }
-                        append(" • ")
-                        append(statusText)
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("План", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        allocation.plannedAmountText(currency),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 allocation.actualAmount?.takeIf { it.isNotBlank() }?.let {
                     Text("Факт: ${it.planningMoney(currency)}${allocation.progressPercent?.let { percent -> " • $percent%" }.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                } ?: Text("Факт появится после операций в этой категории", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("Факт", style = MaterialTheme.typography.bodySmall)
                 if (allocation.isSavingsGoal) {
                     val goalText = allocation.goalTargetAmount?.takeIf { it.isNotBlank() }?.planningMoney(currency) ?: "не задана"
                     val dueText = allocation.goalDueMonth?.localizedPlanningMonth() ?: "срок не задан"
@@ -1205,13 +1334,26 @@ private fun AllocationRow(
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            TextButton(onClick = { isEditing = !isEditing }) {
-                Text(if (isEditing) "Закрыть" else "Править")
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (showInvestmentAttentionIcon) {
+                    PlanningIcon(
+                        icon = allocation.attentionIcon(),
+                        color = Color(0xFF2E7D62),
+                        containerSize = 24.dp,
+                        iconSize = 14.dp,
+                    )
+                }
+                TextButton(onClick = { isEditing = !isEditing }) {
+                    Text(if (isEditing) "Закрыть" else "Править")
+                }
             }
         }
-        if (allocation.requiresAttention) {
+        if (attentionText != null) {
             PlanningBanner(
-                allocation.attentionReason?.takeIf { it.isNotBlank() } ?: "Эта цель требует внимания",
+                attentionText,
                 Color(0xFF8A6A12),
             )
         }
@@ -1428,18 +1570,23 @@ private fun PlanningBanner(text: String, color: Color) {
 }
 
 @Composable
-private fun PlanningIcon(icon: Int, color: Color) {
+private fun PlanningIcon(
+    icon: Int,
+    color: Color,
+    containerSize: androidx.compose.ui.unit.Dp = 36.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 20.dp,
+) {
     Box(
         modifier = Modifier
-            .size(36.dp)
-            .background(color.copy(alpha = 0.14f), RoundedCornerShape(18.dp)),
+            .size(containerSize)
+            .background(color.copy(alpha = 0.14f), RoundedCornerShape(containerSize / 2)),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(icon),
             contentDescription = null,
             tint = color,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(iconSize),
         )
     }
 }
@@ -1645,26 +1792,93 @@ private fun String.localizedRecurrenceType(): String = when (this) {
     else -> "Регулярная"
 }
 
-private fun String.localizedPlanningStatus(): String = when (this) {
+internal fun String.localizedPlanningStatus(): String = when (trim().lowercase(Locale.getDefault())) {
     "active", "planned", "on_track" -> "по плану"
     "confirmed", "completed", "done" -> "выполнено"
     "needs_attention", "target_attention", "warning", "attention" -> "требует внимания"
-    "no_actuals" -> "нет фактических данных"
+    "no_actuals" -> "Факт"
     "not_applicable" -> "не применяется"
-    "under_plan", "underplanned", "behind" -> "ниже плана"
+    "under_plan", "underplanned", "behind", "investment_under_plan" -> "ниже плана"
     "over_plan", "overplanned", "ahead" -> "выше плана"
     else -> "ожидает данных"
 }
 
 private fun PlanningAllocation.readableStatus(): String {
+    return planningAllocationStatusLabel(
+        targetType = targetType,
+        progressStatus = progressStatus,
+        status = status,
+        requiresAttention = requiresAttention,
+    )
+}
+
+internal fun planningAllocationStatusLabel(
+    targetType: String,
+    progressStatus: String?,
+    status: String?,
+    requiresAttention: Boolean,
+): String {
     val progress = progressStatus?.takeIf { it.isNotBlank() } ?: status?.takeIf { it.isNotBlank() }
+    val normalizedProgress = progress?.trim()?.lowercase(Locale.getDefault())
     val fallback = when {
         targetType == TARGET_INVESTMENT_ASSET_CATEGORY && requiresAttention -> "Инвестиции ниже плана"
         targetType == TARGET_EXPENSE_CATEGORY && requiresAttention -> "Расходы выше плана"
         requiresAttention -> "Нужно внимание"
-        else -> "Статус allocation ожидает факта"
+        else -> "Ожидает факта"
     }
-    return progress?.localizedPlanningStatus() ?: fallback
+    return when {
+        targetType == TARGET_INVESTMENT_ASSET_CATEGORY && normalizedProgress == "investment_under_plan" -> "Инвестиции ниже плана"
+        progress != null -> progress.localizedPlanningStatus()
+        else -> fallback
+    }
+}
+
+internal fun planningAllocationAttentionText(
+    targetType: String,
+    requiresAttention: Boolean,
+    attentionReason: String?,
+): String? {
+    if (!requiresAttention) return null
+    if (targetType == TARGET_INVESTMENT_ASSET_CATEGORY) return null
+    val reason = attentionReason?.trim().orEmpty()
+    if (reason.isBlank() || reason.looksLikeRawPlanningToken()) {
+        return "Эта цель требует внимания"
+    }
+    return reason
+}
+
+internal fun shouldShowInvestmentAttentionIcon(targetType: String, requiresAttention: Boolean): Boolean {
+    return requiresAttention && targetType == TARGET_INVESTMENT_ASSET_CATEGORY
+}
+
+private fun String.looksLikeRawPlanningToken(): Boolean {
+    return any { it == '_' } || (any { it.isLetter() } && none { it.isLowerCase() })
+}
+
+private fun PlanningAllocation.showInvestmentAttentionIcon(): Boolean {
+    return shouldShowInvestmentAttentionIcon(targetType, requiresAttention)
+}
+
+private fun PlanningAllocation.hasNoActualsMetaStatus(): Boolean {
+    val progress = progressStatus?.takeIf { it.isNotBlank() } ?: status?.takeIf { it.isNotBlank() }
+    return progress?.trim()?.lowercase(Locale.getDefault()) == "no_actuals"
+}
+
+private fun PlanningAllocation.readableAttentionReason(): String? {
+    return planningAllocationAttentionText(targetType, requiresAttention, attentionReason)
+}
+
+@DrawableRes
+private fun PlanningAllocation.attentionIcon(): Int {
+    return if (targetType == TARGET_INVESTMENT_ASSET_CATEGORY) R.drawable.ic_trending_up_24 else R.drawable.ic_analytics_24
+}
+
+private fun PlanningAllocation.plannedAmountText(currency: String): String {
+    return if (allocationMode == ALLOCATION_PERCENT) {
+        "${allocationValue}% = ${calculatedAmount.planningMoney(currency)}"
+    } else {
+        calculatedAmount.planningMoney(currency)
+    }
 }
 
 private fun PlanningAllocation.readableTargetName(options: List<PlanningTargetOption>): String {

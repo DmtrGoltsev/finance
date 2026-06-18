@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -150,6 +151,7 @@ class PlanningPlanSummaryDto(ApiModel):
 
 
 class PlanningPlanCreateRequest(ApiModel):
+    id: UUID | None = None
     scope: PlanningScope
     month: PlanMonth
     currency: CurrencyCode
@@ -157,6 +159,7 @@ class PlanningPlanCreateRequest(ApiModel):
 
 
 class PlanningIncomeSourceCreateRequest(ApiModel):
+    id: UUID | None = None
     amount: PositiveMoneyDecimal
     source: ShortText
     description: OptionalShortText | None = None
@@ -172,6 +175,7 @@ class PlanningIncomeSourceUpdateRequest(ApiModel):
 
 
 class PlanningAllocationCreateRequest(ApiModel):
+    id: UUID | None = None
     target_type: AllocationTargetType
     target_id: ResourceId
     comment: OptionalShortText | None = None

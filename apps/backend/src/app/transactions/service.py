@@ -40,6 +40,7 @@ from app.categories.repository import CategoryRecord, CategoryRepository
 from app.categories.repository import repository as category_repository
 from app.categories.schemas import CategoryScope
 from app.categories.schemas import RecordStatus as CategoryRecordStatus
+from app.sync.domain_changes import SyncChangeRecorder
 
 from .repository import TransactionFilters, TransactionRecord, TransactionRepository, repository
 from .schemas import TransactionCreateRequest, TransactionUpdateRequest
@@ -89,10 +90,12 @@ class TransactionService:
         transactions: TransactionRepository = repository,
         accounts: AccountRepository = account_repository,
         categories: CategoryRepository = category_repository,
+        sync_change_recorder: SyncChangeRecorder | None = None,
     ) -> None:
         self._transactions = transactions
         self._accounts = accounts
         self._categories = categories
+        self._sync_change_recorder = sync_change_recorder
 
     def list_transactions(
         self,
@@ -180,12 +183,17 @@ class TransactionService:
         *,
         actor: Actor,
         request: TransactionCreateRequest,
+        transaction_id: str | None = None,
     ) -> TransactionRecord:
         if not actor.user_id:
             raise TransactionNotFoundOrInaccessible()
 
         if str(request.transaction_type) == "transfer":
-            return self._create_transfer(actor=actor, request=request)
+            return self._create_transfer(
+                actor=actor,
+                request=request,
+                transaction_id=transaction_id,
+            )
 
         self._validate_manual_non_transfer_shape(
             transaction_type=str(request.transaction_type),
@@ -214,7 +222,8 @@ class TransactionService:
         if not decision.allowed:
             raise _service_error_for_decision(decision.reason)
 
-        return self._transactions.create(
+        record = self._transactions.create(
+            transaction_id=transaction_id,
             transaction_type=str(request.transaction_type),
             account_id=account.id,
             counterparty_account_id=None,
@@ -229,6 +238,8 @@ class TransactionService:
             transfer_status=None,
             created_by_user_id=actor.user_id,
         )
+        self._record_sync_change(actor=actor, operation="create", record=record)
+        return record
 
     def validate_capture_draft_references(
         self,
@@ -342,13 +353,23 @@ class TransactionService:
             transfer_status=None,
             last_edited_by_user_id=actor.user_id or record.last_edited_by_user_id,
         )
-        return self._transactions.save(updated)
+        saved = self._transactions.save(updated)
+        self._record_sync_change(actor=actor, operation="update", record=saved)
+        return saved
 
-    def delete_transaction(self, *, actor: Actor, transaction_id: str) -> None:
+    def delete_transaction(
+        self,
+        *,
+        actor: Actor,
+        transaction_id: str,
+        version: int | None = None,
+    ) -> None:
         record = self.get_transaction(actor=actor, transaction_id=transaction_id)
         decision = canMutateTransaction(actor, self._authz_transaction(record))
         if not decision.allowed:
             raise _service_error_for_decision(decision.reason)
+        if version is not None and version != record.version:
+            raise TransactionConflictError()
         if record.transaction_type == "transfer":
             source, counterparty = self._require_transfer_accounts_for_existing(actor, record)
             deleted = replace(
@@ -357,16 +378,17 @@ class TransactionService:
                 deleted_at=datetime.now(UTC),
                 last_edited_by_user_id=actor.user_id or record.last_edited_by_user_id,
             )
-            self._transactions.save(deleted)
+            saved = self._transactions.save(deleted)
             self._apply_transfer_balance_delta(
                 source,
                 counterparty,
                 record.amount,
                 posting=False,
             )
+            self._record_sync_change(actor=actor, operation="delete", record=saved)
             return
 
-        self._transactions.save(
+        deleted = self._transactions.save(
             replace(
                 record,
                 record_status="deleted",
@@ -374,8 +396,16 @@ class TransactionService:
                 last_edited_by_user_id=actor.user_id or record.last_edited_by_user_id,
             )
         )
+        self._record_sync_change(actor=actor, operation="delete", record=deleted)
 
-    def restore_transaction(self, *, actor: Actor, transaction_id: str) -> TransactionRecord:
+    def restore_transaction(
+        self,
+        *,
+        actor: Actor,
+        transaction_id: str,
+        version: int | None = None,
+        allowed_transaction_types: frozenset[str] | None = None,
+    ) -> TransactionRecord:
         record = self._transactions.get(transaction_id)
         if record is None:
             raise TransactionNotFoundOrInaccessible()
@@ -397,6 +427,16 @@ class TransactionService:
             )
             if not decision.allowed:
                 raise _service_error_for_decision(decision.reason)
+            if version is not None and version != record.version:
+                raise TransactionConflictError()
+            if (
+                allowed_transaction_types is not None
+                and record.transaction_type not in allowed_transaction_types
+            ):
+                raise TransactionValidationError(
+                    DenialReason.ACTION_NOT_ALLOWED,
+                    code="UNSUPPORTED_TRANSACTION_TYPE",
+                )
 
             restored = replace(
                 record,
@@ -406,6 +446,7 @@ class TransactionService:
             )
             saved = self._transactions.save(restored)
             self._apply_transfer_balance_delta(source, counterparty, record.amount, posting=True)
+            self._record_sync_change(actor=actor, operation="restore", record=saved)
             return saved
 
         account = self._accounts.get(record.account_id)
@@ -420,6 +461,16 @@ class TransactionService:
             raise TransactionNotFoundOrInaccessible()
         if category is not None and not canReadCategory(actor, _authz_category(category)).allowed:
             raise TransactionNotFoundOrInaccessible()
+        if version is not None and version != record.version:
+            raise TransactionConflictError()
+        if (
+            allowed_transaction_types is not None
+            and record.transaction_type not in allowed_transaction_types
+        ):
+            raise TransactionValidationError(
+                DenialReason.ACTION_NOT_ALLOWED,
+                code="UNSUPPORTED_TRANSACTION_TYPE",
+            )
 
         restored = replace(
             record,
@@ -427,13 +478,16 @@ class TransactionService:
             deleted_at=None,
             last_edited_by_user_id=actor.user_id or record.last_edited_by_user_id,
         )
-        return self._transactions.save(restored)
+        saved = self._transactions.save(restored)
+        self._record_sync_change(actor=actor, operation="restore", record=saved)
+        return saved
 
     def _create_transfer(
         self,
         *,
         actor: Actor,
         request: TransactionCreateRequest,
+        transaction_id: str | None = None,
     ) -> TransactionRecord:
         self._validate_transfer_shape(
             source_type=str(request.source_type),
@@ -466,6 +520,7 @@ class TransactionService:
         amount = Decimal(request.amount)
         transaction_date, occurred_at = _date_fields_for_create(request)
         record = self._transactions.create(
+            transaction_id=transaction_id,
             transaction_type="transfer",
             account_id=source.id,
             counterparty_account_id=counterparty.id,
@@ -481,6 +536,7 @@ class TransactionService:
             created_by_user_id=actor.user_id,
         )
         self._apply_transfer_balance_delta(source, counterparty, amount, posting=True)
+        self._record_sync_change(actor=actor, operation="create", record=record)
         return record
 
     def _update_transfer(
@@ -557,6 +613,7 @@ class TransactionService:
         fresh_source = self._require_visible_account(actor, source.id)
         fresh_counterparty = self._require_visible_account(actor, counterparty.id)
         self._apply_transfer_balance_delta(fresh_source, fresh_counterparty, amount, posting=True)
+        self._record_sync_change(actor=actor, operation="update", record=saved)
         return saved
 
     def _visible_accounts(
@@ -757,6 +814,25 @@ class TransactionService:
                 counterparty,
                 current_balance=counterparty.current_balance + counterparty_delta,
             )
+        )
+
+    def _record_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: TransactionRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        account = self._accounts.get(record.account_id)
+        if account is None:
+            raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+        self._sync_change_recorder.record_transaction_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+            account=account,
         )
 
 

@@ -60,6 +60,21 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - Локальный OCR-парсер — backend-side OCR достаточен
 - Drag-and-drop — заменён на кнопки ↑/↓
 
+## Offline-first scope (2026-06-18)
+
+Завершенный offline-first scope покрывает backend/Android синхронизацию для transactions, accounts, categories, asset categories, planning plans/income sources/allocations и investment migration command.
+
+Границы scope зафиксированы в `docs/architecture/client-state-contracts.md`:
+
+- syncable операции: ручные mutations по transactions/accounts/categories/asset categories/planning entities и единая `investment_migrations:create`;
+- online-only операции: OCR/screenshot upload, `copy_plan`, planning history mutation и target repair workflows;
+- OCR/screenshot upload остается online-only навсегда: raw images, raw OCR text и OCR payloads не должны попадать в Room, pending sync, logs или telemetry;
+- planning delete/restore использует tombstones, чтобы local-first Android не воскрешал удаленные plans/income sources/allocations между replay и pull;
+- investment migration является одной атомарной backend command, а не группой независимых queued mutations;
+- conflict UI MVP показывает failed/rejected sync issues, дает retry для failed и безопасное объяснение для rejected без destructive choose-server/choose-local overwrite.
+
+QA evidence для этого scope должно опираться на targeted backend ruff/tests, Android JVM tests, Android APK build и APK zip gate. Full backend ruff может оставаться красным из-за legacy unrelated files и не является единственным gate для этого scope.
+
 ## Финальные доказательства
 
 - Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.

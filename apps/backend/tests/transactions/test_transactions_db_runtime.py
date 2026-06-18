@@ -25,6 +25,9 @@ from app.db.models import (
     CaptureDraft,
     Category,
     Household,
+    SyncChange,
+    SyncClient,
+    SyncClientMutation,
     Transaction,
     User,
 )
@@ -50,6 +53,9 @@ TABLES = [
     AccountBalanceSnapshot.__table__,
     Category.__table__,
     Transaction.__table__,
+    SyncClient.__table__,
+    SyncChange.__table__,
+    SyncClientMutation.__table__,
     CaptureDraft.__table__,
     CaptureCategoryMapping.__table__,
 ]

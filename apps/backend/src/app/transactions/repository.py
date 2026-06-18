@@ -69,6 +69,7 @@ class TransactionRepository(Protocol):
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -128,6 +129,7 @@ class InMemoryTransactionRepository:
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -143,8 +145,9 @@ class InMemoryTransactionRepository:
         created_by_user_id: str,
     ) -> TransactionRecord:
         now = datetime.now(UTC)
+        record_id = transaction_id or f"txn_{uuid4().hex}"
         record = TransactionRecord(
-            id=f"txn_{uuid4().hex}",
+            id=record_id,
             transaction_type=transaction_type,
             account_id=account_id,
             counterparty_account_id=counterparty_account_id,
@@ -252,6 +255,7 @@ class SqlAlchemyTransactionRepository:
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -269,7 +273,7 @@ class SqlAlchemyTransactionRepository:
         now = datetime.now(UTC)
         actor_id = _required_uuid(created_by_user_id, "created_by_user_id")
         model = TransactionModel(
-            id=uuid4(),
+            id=_required_uuid(transaction_id, "transaction_id") if transaction_id else uuid4(),
             transaction_type=transaction_type,
             account_id=_required_uuid(account_id, "account_id"),
             counterparty_account_id=_nullable_uuid(

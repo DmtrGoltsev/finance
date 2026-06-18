@@ -18,7 +18,17 @@ from app.categories.repository import SqlAlchemyCategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType
 from app.config import get_settings
 from app.db.base import Base
-from app.db.models import Account, AccountBalanceSnapshot, Category, Household, Transaction, User
+from app.db.models import (
+    Account,
+    AccountBalanceSnapshot,
+    Category,
+    Household,
+    SyncChange,
+    SyncClient,
+    SyncClientMutation,
+    Transaction,
+    User,
+)
 from app.db.models import Membership as DbMembership
 from app.db.session import sync_engine_for_url
 from app.main import create_app
@@ -32,6 +42,9 @@ SLICE_TABLES = [
     AccountBalanceSnapshot.__table__,
     Category.__table__,
     Transaction.__table__,
+    SyncClient.__table__,
+    SyncChange.__table__,
+    SyncClientMutation.__table__,
 ]
 
 

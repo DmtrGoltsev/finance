@@ -7,6 +7,7 @@ from decimal import Decimal
 from fastapi import HTTPException, status
 
 from app.authz import Actor
+from app.sync.domain_changes import SyncChangeRecorder
 
 from .repository import AssetCategoryRecord, AssetCategoryRepository, repository
 from .schemas import (
@@ -119,8 +120,13 @@ def _dto(record: AssetCategoryRecord) -> AssetCategoryDto:
 
 
 class AssetCategoryService:
-    def __init__(self, store: AssetCategoryRepository = repository) -> None:
+    def __init__(
+        self,
+        store: AssetCategoryRepository = repository,
+        sync_change_recorder: SyncChangeRecorder | None = None,
+    ) -> None:
         self._store = store
+        self._sync_change_recorder = sync_change_recorder
 
     def list(
         self,
@@ -166,7 +172,13 @@ class AssetCategoryService:
             ),
         )
 
-    def create(self, *, actor: Actor, request: AssetCategoryCreateRequest) -> AssetCategoryDto:
+    def create(
+        self,
+        *,
+        actor: Actor,
+        request: AssetCategoryCreateRequest,
+        asset_category_id: str | None = None,
+    ) -> AssetCategoryDto:
         if not actor.user_id:
             raise _not_found(actor)
         scope_type = AssetCategoryScope(request.scope_type)
@@ -182,20 +194,21 @@ class AssetCategoryService:
             owner_user_id = None
             household_id = request.household_id
 
-        return _dto(
-            self._store.create(
-                name=request.name,
-                scope_type=scope_type,
-                owner_user_id=owner_user_id,
-                household_id=household_id,
-                currency=request.currency,
-                asset_type=asset_type,
-                icon_key=request.icon_key,
-                manual_amount=Decimal(request.manual_amount),
-                is_investment=request.is_investment,
-                created_by_user_id=actor.user_id,
-            )
+        record = self._store.create(
+            asset_category_id=asset_category_id,
+            name=request.name,
+            scope_type=scope_type,
+            owner_user_id=owner_user_id,
+            household_id=household_id,
+            currency=request.currency,
+            asset_type=asset_type,
+            icon_key=request.icon_key,
+            manual_amount=Decimal(request.manual_amount),
+            is_investment=request.is_investment,
+            created_by_user_id=actor.user_id,
         )
+        self._record_sync_change(actor=actor, operation="create", record=record)
+        return _dto(record)
 
     def get(self, *, actor: Actor, asset_category_id: str) -> AssetCategoryDto:
         return _dto(self._require_visible(actor, asset_category_id))
@@ -233,7 +246,9 @@ class AssetCategoryService:
             updated = replace(updated, is_investment=request.is_investment)
         if request.record_status is not None:
             updated = _record_with_status(updated, RecordStatus(request.record_status))
-        return _dto(self._store.save(updated))
+        saved = self._store.save(updated)
+        self._record_sync_change(actor=actor, operation="update", record=saved)
+        return _dto(saved)
 
     def archive(self, *, actor: Actor, asset_category_id: str) -> AssetCategoryDto:
         record = self._require_visible(actor, asset_category_id)
@@ -243,13 +258,17 @@ class AssetCategoryService:
                 ARCHIVED_NOT_MUTABLE_CODE,
                 "Archived or deleted records are not mutable.",
             )
-        return _dto(self._store.save(_record_with_status(record, RecordStatus.ARCHIVED)))
+        archived = self._store.save(_record_with_status(record, RecordStatus.ARCHIVED))
+        self._record_sync_change(actor=actor, operation="archive", record=archived)
+        return _dto(archived)
 
     def restore(self, *, actor: Actor, asset_category_id: str) -> AssetCategoryDto:
         record = self._require_visible(actor, asset_category_id)
         if record.status == RecordStatus.DELETED:
             raise _not_found(actor)
-        return _dto(self._store.save(_record_with_status(record, RecordStatus.ACTIVE)))
+        restored = self._store.save(_record_with_status(record, RecordStatus.ACTIVE))
+        self._record_sync_change(actor=actor, operation="restore", record=restored)
+        return _dto(restored)
 
     def delete(self, *, actor: Actor, asset_category_id: str) -> None:
         record = self._require_visible(actor, asset_category_id)
@@ -259,13 +278,29 @@ class AssetCategoryService:
                 ARCHIVED_NOT_MUTABLE_CODE,
                 "Archived or deleted records are not mutable.",
             )
-        self._store.save(_record_with_status(record, RecordStatus.DELETED))
+        deleted = self._store.save(_record_with_status(record, RecordStatus.DELETED))
+        self._record_sync_change(actor=actor, operation="delete", record=deleted)
 
     def _require_visible(self, actor: Actor, asset_category_id: str) -> AssetCategoryRecord:
         record = self._store.get(asset_category_id)
         if record is None or not can_read_asset_category(actor, record):
             raise _not_found(actor)
         return record
+
+    def _record_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: AssetCategoryRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_asset_category_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+        )
 
 
 def _decode_cursor(cursor: str | None, actor: Actor) -> int:

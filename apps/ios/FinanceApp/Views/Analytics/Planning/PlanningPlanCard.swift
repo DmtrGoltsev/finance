@@ -81,13 +81,13 @@ struct PlanningPlanCard: View {
 
                 if summary.underallocated {
                     PlanningBanner(
-                        text: "Есть доход без распределений. Добавьте allocation или уменьшите плановый доход.",
+                        text: "Есть доход без распределений. Добавьте распределение или уменьшите плановый доход.",
                         color: FinanceColors.warning
                     )
                 }
                 if summary.overallocated {
                     PlanningBanner(
-                        text: "Распределения выше планового дохода. Исправьте allocations, чтобы снять предупреждение.",
+                        text: "Распределения выше планового дохода. Исправьте распределения, чтобы снять предупреждение.",
                         color: FinanceColors.expense
                     )
                 }
@@ -95,7 +95,7 @@ struct PlanningPlanCard: View {
                 let highlights = buildHighlights(plan!)
                 if highlights.isEmpty {
                     PlanningBanner(
-                        text: "Статусы появятся в строках распределений после расчёта по allocation.",
+                        text: "Статусы появятся в строках распределений после расчёта плана.",
                         color: FinanceColors.analyticsAccent
                     )
                 }

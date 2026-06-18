@@ -21,6 +21,7 @@ feature work must preserve the privacy invariants below.
 
 - `docs/architecture/decision-records/adr-0001-stack-repo-layout.md`
 - `docs/architecture/wave-2-implementation-plan.md`
+- `docs/architecture/client-state-contracts.md` - client-state, sync, offline-first, and conflict UI contracts.
 - `docs/product/ux-quorum-design-decision-ru.md`
 - `docs/user-guide-ru.md`
 - `MVP_EVIDENCE/reports/2026-05-18_ux-screenshot-checklist.md`
@@ -39,6 +40,8 @@ feature work must preserve the privacy invariants below.
 - MVP excludes file imports, bank APIs, bank credentials, broker credentials, card data, IBAN/account requisites, raw bank statements, SMS interception, and push/notification interception.
 - MVP also excludes report-preview/file-import flows, SMS/push import pipelines, bank API ingestion, and broker API ingestion.
 - The remaining capture-draft flow is user-initiated: OCR from a user-selected screenshot runs on-device on Android, while PWA/iOS browser uses temporary upload to the self-hosted backend OCR endpoint. Screenshots/raw OCR are not persisted, raw external OCR category labels are transient only, a structured draft is created for review, and a transaction is created only after the user confirms or edits the draft.
+- OCR/screenshot upload is intentionally online-only: do not queue capture/OCR/screenshot operations through sync, and do not store raw images, raw OCR text, or OCR payloads in offline Room/pending storage.
+- Offline-first scope is intentionally bounded. Backend/Android sync currently covers transactions, accounts, categories, asset categories, planning plans/income sources/allocations, and the single atomic investment migration command. `copy_plan`, planning history mutation, target repair workflows, and OCR/screenshot upload remain online-only.
 
 ## Repository Areas
 
@@ -56,8 +59,10 @@ feature work must preserve the privacy invariants below.
 Use focused commands for the area being changed:
 
 - Backend tests: from `apps/backend`, run `.\.venv\Scripts\python.exe -m pytest ...`.
+- Backend lint: prefer targeted `.\.venv\Scripts\python.exe -m ruff check ...` for changed sync/offline modules; full-backend ruff may still fail on legacy unrelated files and is not by itself evidence against the offline-first scope.
 - PWA tests: from `apps/web-pwa`, run `npm test -- ...`.
-- Android tests: use the Gradle tasks documented under `apps/android/`.
+- Android tests: use `.\gradlew.bat :app:testDebugUnitTest` from `apps/android`.
+- Android APK gate: use `.\gradlew.bat :app:assembleDebug`, then verify the produced APK is a readable ZIP before sharing or installing it.
 
 Do not add production deploy changes or release evidence churn unless a task
 explicitly owns that work.

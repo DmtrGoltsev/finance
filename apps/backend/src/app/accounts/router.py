@@ -11,6 +11,7 @@ from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.authz import AccountOwnershipType, DenialReason, ResourceStatus
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
 from app.transactions.repository import SqlAlchemyTransactionRepository
 
 from .repository import AccountRecord, SqlAlchemyAccountRepository
@@ -46,6 +47,7 @@ def account_service_for_request() -> Iterator[AccountService]:
             SqlAlchemyAccountRepository(session),
             SqlAlchemyTransactionRepository(session),
             SqlAlchemyAssetCategoryRepository(session),
+            SyncChangeRecorder(session),
         )
 
 

@@ -113,6 +113,82 @@ class ApiClientPlanningAllocationTest {
     }
 
     @Test
+    fun createInvestmentMigrationPostsCommandAndParsesNestedResult() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "assetCategory": {
+                      "id": "asset-cat-broker",
+                      "name": "Broker",
+                      "scopeType": "personal",
+                      "ownerUserId": "user-1",
+                      "householdId": null,
+                      "currency": "RUB",
+                      "assetType": "brokerage",
+                      "manualAmount": "0.0000",
+                      "isInvestment": true,
+                      "iconKey": "briefcase",
+                      "recordStatus": "active",
+                      "version": 1
+                    },
+                    "accounts": [
+                      {
+                        "id": "acc-broker",
+                        "name": "Broker account",
+                        "accountType": "brokerage",
+                        "ownershipType": "personal",
+                        "currency": "RUB",
+                        "currentBalance": "1200.0000",
+                        "assetCategoryId": "asset-cat-broker",
+                        "status": "active",
+                        "version": 4
+                      }
+                    ]
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createInvestmentMigration(
+                InvestmentMigrationCreateRequest(
+                    assetCategoryId = "asset-cat-broker",
+                    name = "Broker",
+                    iconKey = "briefcase",
+                    color = "#336699",
+                    assetType = "brokerage",
+                    currency = "RUB",
+                    scope = "personal",
+                    accountIds = listOf("acc-broker"),
+                    accountVersions = mapOf("acc-broker" to 3),
+                ),
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val request = capturedRequest.get()
+            val requestLine = request.lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/asset-categories/investment-migrations"))
+            val json = JSONObject(request.substringAfter("\r\n\r\n"))
+            assertEquals("asset-cat-broker", json.getString("assetCategoryId"))
+            assertEquals("Broker", json.getString("name"))
+            assertEquals("briefcase", json.getString("icon"))
+            assertEquals("#336699", json.getString("color"))
+            assertEquals("brokerage", json.getString("assetType"))
+            assertEquals("personal", json.getString("scope"))
+            assertEquals("acc-broker", json.getJSONArray("accountIds").getString(0))
+            assertEquals(3, json.getJSONObject("accountVersions").getInt("acc-broker"))
+            val migration = (result as ApiResult.Success).value
+            assertEquals("asset-cat-broker", migration.assetCategory.id)
+            assertEquals("briefcase", migration.assetCategory.iconKey)
+            assertEquals("acc-broker", migration.accounts.single().id)
+            assertEquals("asset-cat-broker", migration.accounts.single().assetCategoryId)
+        }
+    }
+
+    @Test
     fun createPlanningAllocationPostsInvestmentAssetCategoryTargetTypeAndParsesAssetCategoryFallback() = runBlocking {
         withJsonPlanningServer(
             statusCode = 201,

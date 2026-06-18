@@ -55,7 +55,10 @@ struct FinanceAppView: View {
                     onModeSelected: { selectedMode = $0 },
                     onOpenPlanning: { selectedTab = 4 }
                 )
-                .tabItem { Label("Главная", systemImage: "house") }
+                .tabItem {
+                    Image(systemName: "house")
+                        .accessibilityLabel("Главная")
+                }
                 .tag(0)
 
                 OperationsTab(
@@ -67,7 +70,10 @@ struct FinanceAppView: View {
                     householdId: dashboard?.session.householdId,
                     onRefreshDashboard: loadDashboard
                 )
-                .tabItem { Label("Операции", systemImage: "list.bullet") }
+                .tabItem {
+                    Image(systemName: "list.bullet")
+                        .accessibilityLabel("Операции")
+                }
                 .tag(1)
 
                 AssetsTab(
@@ -77,7 +83,10 @@ struct FinanceAppView: View {
                     apiClient: apiClient,
                     onRefresh: { await loadDashboard() }
                 )
-                .tabItem { Label("Активы", systemImage: "building.columns") }
+                .tabItem {
+                    Image(systemName: "building.columns")
+                        .accessibilityLabel("Активы")
+                }
                 .tag(2)
 
                 CategoriesTab(
@@ -87,7 +96,10 @@ struct FinanceAppView: View {
                     apiClient: apiClient,
                     onRefresh: { await loadDashboard() }
                 )
-                .tabItem { Label("Категории", systemImage: "tag") }
+                .tabItem {
+                    Image(systemName: "tag")
+                        .accessibilityLabel("Категории")
+                }
                 .tag(3)
 
                 AnalyticsTab(
@@ -97,7 +109,10 @@ struct FinanceAppView: View {
                     apiClient: apiClient,
                     onRefresh: { await loadDashboard() }
                 )
-                .tabItem { Label("Аналитика", systemImage: "chart.bar") }
+                .tabItem {
+                    Image(systemName: "chart.bar")
+                        .accessibilityLabel("Аналитика")
+                }
                 .tag(4)
             }
 

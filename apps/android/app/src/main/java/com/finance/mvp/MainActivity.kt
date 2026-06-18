@@ -15,7 +15,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.finance.mvp.api.ApiConfig
 import com.finance.mvp.api.LiveFinanceApiClient
+import com.finance.mvp.local.FinanceLocalDatabase
 import com.finance.mvp.session.AndroidSecureTokenStore
+import com.finance.mvp.sync.AndroidDeviceIdStore
+import com.finance.mvp.sync.FinanceSyncApiClientAdapter
+import com.finance.mvp.sync.SyncManager
 import com.finance.mvp.ui.FinanceApp
 import com.finance.mvp.ui.theme.FinanceTheme
 
@@ -29,6 +33,11 @@ class MainActivity : ComponentActivity() {
         val apiConfig = ApiConfig(baseUrl = BuildConfig.FINANCE_API_BASE_URL)
         val tokenStore = AndroidSecureTokenStore(applicationContext)
         val apiClient = LiveFinanceApiClient(apiConfig, tokenStore)
+        val syncManager = SyncManager(
+            database = FinanceLocalDatabase.getInstance(applicationContext),
+            apiClient = FinanceSyncApiClientAdapter(apiClient),
+            deviceIdStore = AndroidDeviceIdStore(applicationContext),
+        )
         if (shouldOpenPlanning(intent)) {
             openPlanningRequestKey += 1
         }
@@ -41,6 +50,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     FinanceApp(
                         apiClient = apiClient,
+                        syncManager = syncManager,
                         initialOpenPlanning = openPlanningRequestKey > 0,
                         openPlanningRequestKey = openPlanningRequestKey,
                     )

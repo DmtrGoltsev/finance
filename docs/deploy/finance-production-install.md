@@ -4,6 +4,54 @@ Scope: Finance only. Do not change RocketFlow routes, services, databases, or
 nginx locations. Finance is expected under `/finance/` with backend API under
 `/finance-api/`.
 
+## Release deployment
+
+GitHub Actions is the primary production CI/CD path. The workflow is
+`.github/workflows/finance-hexcore-prod-deploy.yml`.
+
+Pushes to branch names containing `release` run CI/package only:
+
+- frontend: Node.js 22, `npm ci`, `npm test`, production PWA build, artifact
+  checksum, and manifest;
+- backend: Python 3.12, `apps/backend[dev]`, `ruff`, `pytest`, wheel build,
+  migration-inclusive artifact, checksum, and manifest.
+
+Production deploys are manual `workflow_dispatch` actions gated by explicit
+inputs and the GitHub `production` environment. Frontend releases deploy to
+`/var/www/finance/releases/<release-id>` and atomically flip
+`/var/www/finance/current`. Backend releases deploy to
+`/opt/finance/releases/<release-id>` and atomically flip `/opt/finance/current`.
+
+Required GitHub secrets are `HEXCORE_PROD_SSH_HOST`, `HEXCORE_PROD_SSH_USER`,
+`HEXCORE_PROD_SSH_PRIVATE_KEY`, and `HEXCORE_PROD_SSH_KNOWN_HOSTS`.
+`HEXCORE_PROD_SSH_PORT` is optional and defaults to `22` when unset. Workflows
+use pinned host-key verification with `StrictHostKeyChecking=yes`; do not use
+`StrictHostKeyChecking=no` or trust-on-first-use host keys for production.
+
+Backend migrations are disabled by default. A production Alembic upgrade runs
+only when `deploy_backend=true`, `run_migrations=true`, exact revision inputs,
+backup proof, production confirmation, and environment approval are all present.
+The workflow sources `/etc/finance/backend.env` on the host; DB secrets are not
+stored in GitHub.
+
+Backend restart is disabled by default and requires `restart_backend=true`,
+`confirm_backend_restart=finance-backend.service`, and environment approval.
+
+Manual rollback is available in
+`.github/workflows/finance-prod-rollback.yml`; it flips frontend/backend
+symlinks to existing release directories and does not perform DB rollback.
+
+Runbooks:
+
+- `docs/production/finance-cicd-runbook.md`
+- `docs/production/finance-db-migrations.md`
+- `docs/production/finance-secrets-and-host-key.md`
+
+Direct SSH/SCP upload to HexCore is retained only as a manual/emergency fallback
+for operators when GitHub Actions is unavailable. It must follow the same
+release-directory, symlink, pinned-host-key, migration-gate, and no-secret-log
+rules.
+
 ## Backend environment
 
 Use `/etc/finance/backend.env` or the service manager equivalent. Keep the
@@ -12,7 +60,7 @@ Use `/etc/finance/backend.env` or the service manager equivalent. Keep the
 ```bash
 FINANCE_BACKEND_ENVIRONMENT=production
 FINANCE_BACKEND_DEBUG=false
-FINANCE_BACKEND_DATABASE_URL=postgresql+asyncpg://finance_app:<secret>@127.0.0.1:5432/finance
+FINANCE_BACKEND_DATABASE_URL='<host-side production DSN from secret manager>'
 FINANCE_BACKEND_DATABASE_MIGRATION_POLICY=external
 FINANCE_BACKEND_ACCOUNTS_CATEGORIES_REPOSITORY_MODE=db
 FINANCE_BACKEND_CORS_ALLOWED_ORIGINS='["https://<public-host>"]'
@@ -136,6 +184,8 @@ Browser checks:
 - no request goes to old `/api/` and backend runtime uses only `FINANCE_BACKEND_*`
   configuration names.
 
-Remaining production gate: do not enable/start the service until migrations,
-secret injection, backend health, frontend build inspection, and QA login smoke
-have passed.
+Remaining production gate: do not enable/start/restart the service until
+migrations, secret injection, backend health, frontend build inspection, and QA
+login smoke have passed. In CI/CD, `finance-backend.service` restart is allowed
+only through the explicit restart input, service-name confirmation, and the
+GitHub `production` environment approval.

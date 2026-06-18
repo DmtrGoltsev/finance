@@ -107,6 +107,7 @@ import com.finance.mvp.api.CaptureDraftUpdateRequest
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
+import com.finance.mvp.api.InvestmentMigrationCreateRequest
 import com.finance.mvp.api.MoneyAmount
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.RegistrationResult
@@ -115,7 +116,12 @@ import com.finance.mvp.api.TransactionSummary
 import com.finance.mvp.api.userFacingSeedText
 import com.finance.mvp.capture.AndroidCategoryAggregateMappingStore
 import com.finance.mvp.capture.CategoryAggregateCandidate
+import com.finance.mvp.local.FinanceLocalDatabase
 import com.finance.mvp.notifications.PlanningReminderNotifications
+import com.finance.mvp.sync.PlanningRepository
+import com.finance.mvp.sync.SyncIssueSummary
+import com.finance.mvp.sync.SyncManager
+import com.finance.mvp.sync.TransactionSyncWorker
 import com.finance.mvp.ui.theme.FinanceTheme
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -125,6 +131,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneOffset
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -156,11 +163,21 @@ private const val ASSET_CATEGORY_ORDER_PREFS = "finance_asset_category_order"
 fun FinanceApp(
     apiClient: FinanceApiClient,
     modifier: Modifier = Modifier,
+    syncManager: SyncManager? = null,
     initialOpenPlanning: Boolean = false,
     openPlanningRequestKey: Int = if (initialOpenPlanning) 1 else 0,
 ) {
     val context = LocalContext.current
     val categoryAggregateMappingStore = remember(context) { AndroidCategoryAggregateMappingStore(context) }
+    val planningRepository = remember(context, apiClient, syncManager) {
+        syncManager?.let { manager ->
+            PlanningRepository(
+                database = FinanceLocalDatabase.getInstance(context),
+                apiClient = apiClient,
+                syncManager = manager,
+            )
+        }
+    }
     var selectedSection by rememberSaveable {
         mutableStateOf(if (initialOpenPlanning) AppSection.Analytics else AppSection.Home)
     }
@@ -186,6 +203,10 @@ fun FinanceApp(
     var assetGroupNames by rememberSaveable { mutableStateOf<Map<String, String>>(emptyMap()) }
     var addAccountState by rememberSaveable(stateSaver = AddAccountStateSaver) { mutableStateOf<AddAccountState?>(null) }
     var showAssetCategorySheet by rememberSaveable { mutableStateOf(false) }
+    var syncUiState by remember { mutableStateOf(SyncUiState()) }
+    var syncIssues by remember { mutableStateOf<List<SyncIssueSummary>>(emptyList()) }
+    var showSyncIssuesSheet by rememberSaveable { mutableStateOf(false) }
+    var syncIssuesLoading by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val sections = financeSections()
 
@@ -381,6 +402,198 @@ fun FinanceApp(
         }
     }
 
+    suspend fun refreshSyncUiState(userId: String?, savedOffline: Boolean = syncUiState.savedOffline) {
+        if (syncManager == null || userId.isNullOrBlank()) {
+            syncUiState = SyncUiState()
+            syncIssues = emptyList()
+            showSyncIssuesSheet = false
+            return
+        }
+        val pendingCount = syncManager.pendingAttentionCount(userId)
+        val failedCount = syncManager.failedAttentionCount(userId)
+        syncIssues = if (failedCount > 0) {
+            syncManager.syncIssuesForUser(userId)
+        } else {
+            emptyList()
+        }
+        syncUiState = syncUiState.copy(
+            pendingCount = pendingCount,
+            failedCount = failedCount,
+            savedOffline = savedOffline && pendingCount > 0,
+            isSyncing = false,
+        )
+    }
+
+    suspend fun markSavedOffline(userId: String, message: String) {
+        TransactionSyncWorker.enqueue(context, userId)
+        refreshSyncUiState(userId, savedOffline = true)
+        uiState = uiState.copy(isLoading = false, message = message)
+    }
+
+    suspend fun enqueueOfflineCategoryCreateIfRetriable(
+        failure: ApiResult.Failure,
+        name: String,
+        type: String,
+        mode: FinanceMode,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueCategoryCreate(
+                userId = userId,
+                name = name,
+                categoryType = type,
+                scope = if (mode == FinanceMode.Shared) "household" else "personal",
+                householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
+            )
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем категорию позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineCategoryUpdateIfRetriable(
+        failure: ApiResult.Failure,
+        category: CategorySummary,
+        newName: String,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        val version = category.version ?: return false
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueCategoryUpdate(
+                userId = userId,
+                entityId = category.id,
+                baseVersion = version,
+                name = newName,
+            )
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем категорию позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineCategoryArchiveIfRetriable(
+        failure: ApiResult.Failure,
+        categoryId: String,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        val category = uiState.dashboard?.categories?.firstOrNull { it.id == categoryId }
+        val version = category?.version ?: return false
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueCategoryArchive(userId = userId, entityId = categoryId, baseVersion = version)
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем удаление категории позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineAccountCreateIfRetriable(
+        failure: ApiResult.Failure,
+        name: String,
+        balance: String,
+        currency: String,
+        accountType: String,
+        mode: FinanceMode,
+        assetCategoryId: String?,
+        isPaymentAccount: Boolean,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueAccountCreate(
+                userId = userId,
+                name = name,
+                accountType = accountType,
+                ownershipType = if (mode == FinanceMode.Shared) "shared" else "personal",
+                currency = currency,
+                initialBalance = balance,
+                householdId = if (mode == FinanceMode.Shared) uiState.session?.householdId else null,
+                assetCategoryId = assetCategoryId,
+                isPaymentAccount = isPaymentAccount,
+            )
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем актив позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineAccountArchiveIfRetriable(
+        failure: ApiResult.Failure,
+        accountId: String,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        val account = uiState.dashboard?.accounts?.firstOrNull { it.id == accountId }
+        val version = account?.version ?: return false
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueAccountArchive(userId = userId, entityId = accountId, baseVersion = version)
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем удаление актива позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineAssetCategoryCreateIfRetriable(
+        failure: ApiResult.Failure,
+        request: AssetCategoryCreateRequest,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueAssetCategoryCreate(
+                userId = userId,
+                name = request.name,
+                scopeType = request.scopeType,
+                currency = request.currency,
+                manualAmount = request.manualAmount,
+                isInvestment = request.isInvestment,
+                assetType = request.assetType,
+                householdId = request.householdId,
+                iconKey = request.iconKey,
+            )
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем категорию активов позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineInvestmentMigrationIfRetriable(
+        failure: ApiResult.Failure,
+        request: InvestmentMigrationCreateRequest,
+        accounts: List<AccountSummary>,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueInvestmentMigrationCreate(
+                userId = userId,
+                request = request,
+                accounts = accounts,
+            )
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем инвестиционную миграцию позже.")
+        return true
+    }
+
+    suspend fun enqueueOfflineAssetCategoryArchiveIfRetriable(
+        failure: ApiResult.Failure,
+        categoryId: String,
+    ): Boolean {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        val category = uiState.dashboard?.assetCategories?.firstOrNull { it.id == categoryId }
+        val version = category?.version ?: return false
+        if (!failure.isRetriableForOfflineQueue() || userId == null || manager == null) return false
+        withContext(Dispatchers.IO) {
+            manager.enqueueAssetCategoryArchive(userId = userId, entityId = categoryId, baseVersion = version)
+        }
+        markSavedOffline(userId, "Сохранено на устройстве. Синхронизируем удаление категории активов позже.")
+        return true
+    }
+
     fun loadDashboard(successMessage: String = "Данные обновлены") {
         scope.launch {
             uiState = uiState.copy(isLoading = true, message = "Обновляем данные")
@@ -407,6 +620,58 @@ fun FinanceApp(
                     }
                 }
             }
+            refreshSyncUiState(uiState.session?.syncUserIdOrNull())
+        }
+    }
+
+    fun runManualSync() {
+        val userId = uiState.session?.syncUserIdOrNull()
+        if (syncManager == null || userId == null) {
+            loadDashboard()
+            return
+        }
+        val hadAttention = syncAttention(syncUiState) != null
+        scope.launch {
+            syncUiState = syncUiState.copy(isSyncing = true)
+            uiState = uiState.copy(isLoading = true, message = "Синхронизируем")
+            val result = withContext(Dispatchers.IO) {
+                runCatching { syncManager.retryFailedIssuesAndSyncNow(userId) }
+            }
+            val summary = result.getOrNull()
+            val syncFailed = result.isFailure ||
+                summary?.pullSucceeded == false ||
+                summary?.push?.failed.orZero() > 0 ||
+                summary?.push?.rejected.orZero() > 0
+            refreshSyncUiState(userId, savedOffline = if (syncFailed) syncUiState.savedOffline else false)
+            if (syncFailed) {
+                if (hadAttention) {
+                    uiState = uiState.copy(
+                        isLoading = false,
+                        message = "Не удалось синхронизировать. Попробуйте позже.",
+                    )
+                } else {
+                    loadDashboard()
+                }
+            } else {
+                loadDashboard("Синхронизировано")
+            }
+        }
+    }
+
+    fun openSyncAttention() {
+        val userId = uiState.session?.syncUserIdOrNull()
+        val manager = syncManager
+        if (manager == null || userId == null || syncUiState.failedCount <= 0) {
+            runManualSync()
+            return
+        }
+        showSyncIssuesSheet = true
+        scope.launch {
+            syncIssuesLoading = true
+            syncIssues = runCatching {
+                withContext(Dispatchers.IO) { manager.syncIssuesForUser(userId) }
+            }.getOrElse { emptyList() }
+            syncIssuesLoading = false
         }
     }
 
@@ -543,9 +808,16 @@ fun FinanceApp(
 
     fun logout() {
         scope.launch {
+            val userId = uiState.session?.syncUserIdOrNull()
             uiState = uiState.copy(isLoading = true, message = "Выходим")
             when (val result = withContext(Dispatchers.IO) { apiClient.logout() }) {
-                is ApiResult.Success -> uiState = FinanceUiState(message = "Сессия завершена")
+                is ApiResult.Success -> {
+                    if (syncManager != null && userId != null) {
+                        withContext(Dispatchers.IO) { syncManager.clearUserData(userId) }
+                    }
+                    syncUiState = SyncUiState()
+                    uiState = FinanceUiState(message = "Сессия завершена")
+                }
                 is ApiResult.Failure -> uiState = uiState.copy(
                     isLoading = false,
                     message = result.userFacingMessage(),
@@ -579,8 +851,11 @@ fun FinanceApp(
                         val account = dashboard.accounts
                             .writableOperationAccountsFor(draft.type, draft.visibility)
                             .firstByIdOrFirst(draft.accountId)
-                            ?: return@withContext ApiResult.Failure(
-                                "В режиме ${draft.visibility.title} нет активного счёта. Создайте счёт в «Активы» и повторите сохранение.",
+                            ?: return@withContext QuickAddSubmitResult.Failure(
+                                failure = ApiResult.Failure(
+                                    "В режиме ${draft.visibility.title} нет активного счёта. Создайте счёт в «Активы» и повторите сохранение.",
+                                ),
+                                offlineDraft = null,
                             )
                         val category = dashboard.categories
                             .filter { it.matchesWritableMode(draft.visibility) }
@@ -588,16 +863,34 @@ fun FinanceApp(
                                 categoryId = draft.categoryId,
                                 transactionType = draft.type.apiValue,
                             )
-                            ?: return@withContext ApiResult.Failure(
-                                "В режиме ${draft.visibility.title} нет категории для ${draft.type.title.lowercase(Locale.getDefault())}. Создайте категорию и повторите сохранение.",
+                            ?: return@withContext QuickAddSubmitResult.Failure(
+                                failure = ApiResult.Failure(
+                                    "В режиме ${draft.visibility.title} нет категории для ${draft.type.title.lowercase(Locale.getDefault())}. Создайте категорию и повторите сохранение.",
+                                ),
+                                offlineDraft = null,
                             )
-                        apiClient.createDemoTransaction(
-                            account = account,
-                            category = category,
+                        val offlineDraft = ManualTransactionCreate(
                             transactionType = draft.type.apiValue,
                             amount = amount,
+                            currency = account.currency,
+                            accountId = account.id,
+                            categoryId = category.id,
+                            counterpartyAccountId = null,
                             transactionDate = draft.transactionDate,
+                            note = category.name,
                         )
+                        when (
+                            val apiResult = apiClient.createDemoTransaction(
+                                account = account,
+                                category = category,
+                                transactionType = draft.type.apiValue,
+                                amount = amount,
+                                transactionDate = draft.transactionDate,
+                            )
+                        ) {
+                            is ApiResult.Success -> QuickAddSubmitResult.Success
+                            is ApiResult.Failure -> QuickAddSubmitResult.Failure(apiResult, offlineDraft)
+                        }
                     }
                     QuickEntryType.Transfer -> {
                         val scopedAccounts = dashboard.accounts
@@ -609,33 +902,81 @@ fun FinanceApp(
                             .firstByIdOrFirst(draft.destinationAccountId)
                         val validationMessage = transferPairValidationMessage(source, destination)
                         if (validationMessage != null) {
-                            ApiResult.Failure(validationMessage)
+                            QuickAddSubmitResult.Failure(ApiResult.Failure(validationMessage), offlineDraft = null)
                         } else {
-                            apiClient.createDemoTransfer(source!!, destination!!, amount)
+                            val offlineDraft = ManualTransactionCreate(
+                                transactionType = draft.type.apiValue,
+                                amount = amount,
+                                currency = source!!.currency,
+                                accountId = source.id,
+                                categoryId = null,
+                                counterpartyAccountId = destination!!.id,
+                                transactionDate = draft.transactionDate,
+                                note = "Между счетами",
+                            )
+                            when (val apiResult = apiClient.createDemoTransfer(source, destination, amount)) {
+                                is ApiResult.Success -> QuickAddSubmitResult.Success
+                                is ApiResult.Failure -> QuickAddSubmitResult.Failure(apiResult, offlineDraft)
+                            }
                         }
                     }
                     QuickEntryType.Asset -> {
-                        ApiResult.Failure(
-                            "Актив создаётся из раздела «Активы», чтобы выбрать название, валюту и доступ. Быстрое добавление не создаёт демо-счета.",
+                        QuickAddSubmitResult.Failure(
+                            failure = ApiResult.Failure(
+                                "Актив создаётся из раздела «Активы», чтобы выбрать название, валюту и доступ. Быстрое добавление не создаёт демо-счета.",
+                            ),
+                            offlineDraft = null,
                         )
                     }
                 }
             }
 
             when (result) {
-                is ApiResult.Success -> {
+                is QuickAddSubmitResult.Success -> {
                     quickAddError = null
                     showQuickAdd = false
                     quickAddOpenKey += 1
                     loadDashboard("Сохранено в ${draft.visibility.title.lowercase(Locale("ru", "RU"))}")
                 }
-                is ApiResult.Failure -> {
-                    val message = result.userFacingMessage()
-                    quickAddError = message
-                    uiState = uiState.copy(
-                        isLoading = false,
-                        message = message,
-                    )
+                is QuickAddSubmitResult.Failure -> {
+                    val userId = uiState.session?.syncUserIdOrNull()
+                    val offlineDraft = result.offlineDraft
+                    if (
+                        result.failure.isRetriableForOfflineQueue() &&
+                        offlineDraft != null &&
+                        syncManager != null &&
+                        userId != null
+                    ) {
+                        withContext(Dispatchers.IO) {
+                            syncManager.enqueueManualTransactionCreate(
+                                userId = userId,
+                                transactionType = offlineDraft.transactionType,
+                                amount = offlineDraft.amount,
+                                currency = offlineDraft.currency,
+                                accountId = offlineDraft.accountId,
+                                categoryId = offlineDraft.categoryId,
+                                counterpartyAccountId = offlineDraft.counterpartyAccountId,
+                                transactionDate = offlineDraft.transactionDate,
+                                note = offlineDraft.note,
+                            )
+                        }
+                        TransactionSyncWorker.enqueue(context, userId)
+                        refreshSyncUiState(userId, savedOffline = true)
+                        quickAddError = null
+                        showQuickAdd = false
+                        quickAddOpenKey += 1
+                        uiState = uiState.copy(
+                            isLoading = false,
+                            message = "Сохранено на устройстве. Синхронизируем позже.",
+                        )
+                    } else {
+                        val message = result.failure.userFacingMessage()
+                        quickAddError = message
+                        uiState = uiState.copy(
+                            isLoading = false,
+                            message = message,
+                        )
+                    }
                 }
             }
         }
@@ -643,10 +984,12 @@ fun FinanceApp(
 
     LaunchedEffect(apiClient) {
         uiState = withContext(Dispatchers.IO) { restoredFinanceUiState(apiClient) }
+        refreshSyncUiState(uiState.session?.syncUserIdOrNull())
     }
 
     LaunchedEffect(apiClient, uiState.session?.isAuthenticated) {
         if (uiState.session?.isAuthenticated == true) {
+            refreshSyncUiState(uiState.session?.syncUserIdOrNull())
             captureIsLoading = true
             when (val result = withContext(Dispatchers.IO) { apiClient.listCaptureDrafts(status = "pending") }) {
                 is ApiResult.Success -> {
@@ -677,12 +1020,11 @@ fun FinanceApp(
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { loadDashboard() },
+                    SyncActionButton(
+                        state = syncUiState,
                         enabled = !uiState.isLoading && uiState.session?.isAuthenticated == true,
-                    ) {
-                        Icon(painterResource(R.drawable.ic_refresh_24), contentDescription = "Обновить")
-                    }
+                        onClick = { runManualSync() },
+                    )
                     TextButton(
                         onClick = { logout() },
                         enabled = !uiState.isLoading && uiState.session?.isAuthenticated == true,
@@ -698,8 +1040,9 @@ fun FinanceApp(
                     NavigationBarItem(
                         selected = selectedSection == section,
                         onClick = { selectedSection = section },
-                        icon = { Icon(painterResource(section.icon()), contentDescription = null) },
-                        label = { Text(section.title) },
+                        icon = { Icon(painterResource(section.icon()), contentDescription = section.title) },
+                        label = null,
+                        alwaysShowLabel = false,
                     )
                 }
             }
@@ -772,7 +1115,9 @@ fun FinanceApp(
                 AppSection.Home -> homeContent(
                     dashboard = dashboard,
                     selectedMode = selectedMode,
+                    syncUiState = syncUiState,
                     onModeSelected = { selectedMode = it },
+                    onSyncAttentionClick = { openSyncAttention() },
                     onOpenPlanning = {
                         selectedSection = AppSection.Analytics
                         selectedAnalyticsSubsection = AnalyticsSubsection.Planning
@@ -879,59 +1224,26 @@ fun FinanceApp(
                             onComplete(LegacyGroupMigrationResult.Failure(message))
                             return@migrate
                         }
+                        val requestSelection = legacyInvestmentMigrationCreateRequest(
+                            kind = kind,
+                            nameDraft = newName,
+                            target = target,
+                            accounts = accounts,
+                            assetCategoryId = UUID.randomUUID().toString(),
+                        )
+                        val migrationRequest = when (requestSelection) {
+                            is LegacyInvestmentMigrationRequestSelection.Ready -> requestSelection.request
+                            is LegacyInvestmentMigrationRequestSelection.Blocked -> {
+                                uiState = uiState.copy(message = requestSelection.message)
+                                onComplete(LegacyGroupMigrationResult.Failure(requestSelection.message))
+                                return@migrate
+                            }
+                        }
                         val activeAccounts = accounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
                         scope.launch {
                             uiState = uiState.copy(isLoading = true, message = "Создаём инвестиционную категорию активов")
-                            val result: ApiResult<Unit> = withContext(Dispatchers.IO) {
-                                when (
-                                    val createResult = apiClient.createAssetCategory(
-                                        AssetCategoryCreateRequest(
-                                            name = newName,
-                                            scopeType = target.scopeType,
-                                            householdId = target.householdId,
-                                            currency = target.currency,
-                                            manualAmount = "0",
-                                            isInvestment = true,
-                                            assetType = kind.apiValue,
-                                            iconKey = defaultAssetCategoryIconKey(kind.apiValue),
-                                        ),
-                                    )
-                                ) {
-                                    is ApiResult.Failure -> createResult
-                                    is ApiResult.Success -> {
-                                        val categoryId = createResult.value.id
-                                        val linkedAccounts = mutableListOf<AccountSummary>()
-                                        for (account in activeAccounts) {
-                                            when (val updateResult = apiClient.updateAccount(account.copy(assetCategoryId = categoryId))) {
-                                                is ApiResult.Failure -> {
-                                                    val rollbackFailures = mutableListOf<String>()
-                                                    linkedAccounts.asReversed().forEach { linkedAccount ->
-                                                        when (val rollbackResult = apiClient.updateAccount(linkedAccount.copy(assetCategoryId = null))) {
-                                                            is ApiResult.Success -> Unit
-                                                            is ApiResult.Failure -> rollbackFailures += rollbackResult.userFacingMessage()
-                                                        }
-                                                    }
-                                                    when (val archiveResult = apiClient.archiveAssetCategory(categoryId)) {
-                                                        is ApiResult.Success -> Unit
-                                                        is ApiResult.Failure -> rollbackFailures += archiveResult.userFacingMessage()
-                                                    }
-                                                    val rollbackMessage = if (rollbackFailures.isEmpty()) {
-                                                        "Созданная категория архивирована, уже перенесенные счета возвращены в legacy-группу."
-                                                    } else {
-                                                        "Попытка отката выполнена, но часть действий могла не завершиться: ${rollbackFailures.distinct().joinToString("; ")}"
-                                                    }
-                                                    return@withContext ApiResult.Failure(
-                                                        "Не удалось перенести все счета в инвестиционную категорию. ${updateResult.userFacingMessage()} $rollbackMessage",
-                                                        updateResult.cause,
-                                                        updateResult.statusCode,
-                                                    )
-                                                }
-                                                is ApiResult.Success -> linkedAccounts += updateResult.value
-                                            }
-                                        }
-                                        ApiResult.Success(Unit)
-                                    }
-                                }
+                            val result = withContext(Dispatchers.IO) {
+                                apiClient.createInvestmentMigration(migrationRequest)
                             }
                             when (result) {
                                 is ApiResult.Success -> {
@@ -940,9 +1252,14 @@ fun FinanceApp(
                                     loadDashboard("Legacy-группа «$newName» стала инвестиционной категорией")
                                 }
                                 is ApiResult.Failure -> {
-                                    val message = result.userFacingMessage()
-                                    uiState = uiState.copy(isLoading = false, message = message)
-                                    onComplete(LegacyGroupMigrationResult.Failure(message))
+                                    if (enqueueOfflineInvestmentMigrationIfRetriable(result, migrationRequest, activeAccounts)) {
+                                        assetGroupNames = assetGroupNames - kind.apiValue
+                                        onComplete(LegacyGroupMigrationResult.Success)
+                                    } else {
+                                        val message = result.userFacingMessage()
+                                        uiState = uiState.copy(isLoading = false, message = message)
+                                        onComplete(LegacyGroupMigrationResult.Failure(message))
+                                    }
                                 }
                             }
                         }
@@ -989,9 +1306,14 @@ fun FinanceApp(
                                     loadDashboard("Ручная категория активов «${request.name}» создана")
                                 }
                                 is ApiResult.Failure -> {
-                                    val message = result.userFacingMessage()
-                                    uiState = uiState.copy(isLoading = false, message = message)
-                                    onComplete(LegacyGroupMigrationResult.Failure(message))
+                                    if (enqueueOfflineAssetCategoryCreateIfRetriable(result, request)) {
+                                        assetGroupNames = assetGroupNames - kind.apiValue
+                                        onComplete(LegacyGroupMigrationResult.Success)
+                                    } else {
+                                        val message = result.userFacingMessage()
+                                        uiState = uiState.copy(isLoading = false, message = message)
+                                        onComplete(LegacyGroupMigrationResult.Failure(message))
+                                    }
                                 }
                             }
                         }
@@ -1038,10 +1360,14 @@ fun FinanceApp(
                             val result = withContext(Dispatchers.IO) { apiClient.archiveAccount(accountId) }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Актив удалён")
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                is ApiResult.Failure -> {
+                                    if (!enqueueOfflineAccountArchiveIfRetriable(result, accountId)) {
+                                        uiState = uiState.copy(
+                                            isLoading = false,
+                                            message = result.userFacingMessage(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     },
@@ -1051,10 +1377,14 @@ fun FinanceApp(
                             val result = withContext(Dispatchers.IO) { apiClient.archiveAssetCategory(categoryId) }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Категория активов удалена")
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                is ApiResult.Failure -> {
+                                    if (!enqueueOfflineAssetCategoryArchiveIfRetriable(result, categoryId)) {
+                                        uiState = uiState.copy(
+                                            isLoading = false,
+                                            message = result.userFacingMessage(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     },
@@ -1080,10 +1410,14 @@ fun FinanceApp(
                             }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Категория добавлена")
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                is ApiResult.Failure -> {
+                                    if (!enqueueOfflineCategoryCreateIfRetriable(result, name, type.apiValue, mode)) {
+                                        uiState = uiState.copy(
+                                            isLoading = false,
+                                            message = result.userFacingMessage(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     },
@@ -1095,10 +1429,14 @@ fun FinanceApp(
                             }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Категория обновлена")
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                is ApiResult.Failure -> {
+                                    if (!enqueueOfflineCategoryUpdateIfRetriable(result, category, newName)) {
+                                        uiState = uiState.copy(
+                                            isLoading = false,
+                                            message = result.userFacingMessage(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     },
@@ -1108,10 +1446,14 @@ fun FinanceApp(
                             val result = withContext(Dispatchers.IO) { apiClient.archiveCategory(categoryId) }
                             when (result) {
                                 is ApiResult.Success -> loadDashboard("Категория удалена")
-                                is ApiResult.Failure -> uiState = uiState.copy(
-                                    isLoading = false,
-                                    message = result.userFacingMessage(),
-                                )
+                                is ApiResult.Failure -> {
+                                    if (!enqueueOfflineCategoryArchiveIfRetriable(result, categoryId)) {
+                                        uiState = uiState.copy(
+                                            isLoading = false,
+                                            message = result.userFacingMessage(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     },
@@ -1119,6 +1461,7 @@ fun FinanceApp(
                 AppSection.Analytics -> analyticsContent(
                     apiClient = apiClient,
                     dashboard = dashboard,
+                    planningRepository = planningRepository,
                     selectedMode = selectedMode,
                     selectedSubsection = selectedAnalyticsSubsection,
                     selectedReportMonth = selectedReportMonth,
@@ -1158,6 +1501,12 @@ fun FinanceApp(
                     },
                     onPlanningNotificationCandidate = { candidate ->
                         PlanningReminderNotifications.applyCandidate(context.applicationContext, candidate)
+                    },
+                    onPlanningOfflineMutationQueued = { queuedUserId ->
+                        TransactionSyncWorker.enqueue(context, queuedUserId)
+                        scope.launch {
+                            refreshSyncUiState(queuedUserId, savedOffline = true)
+                        }
                     },
                 )
             }
@@ -1207,10 +1556,26 @@ fun FinanceApp(
                             addAccountState = null
                             loadDashboard("Актив добавлен в ${mode.title.lowercase(Locale("ru", "RU"))}")
                         }
-                        is ApiResult.Failure -> uiState = uiState.copy(
-                            isLoading = false,
-                            message = result.userFacingMessage(),
-                        )
+                        is ApiResult.Failure -> {
+                            if (enqueueOfflineAccountCreateIfRetriable(
+                                    failure = result,
+                                    name = name,
+                                    balance = balance,
+                                    currency = currency,
+                                    accountType = kind.apiValue,
+                                    mode = mode,
+                                    assetCategoryId = state.assetCategoryId,
+                                    isPaymentAccount = isPaymentAccount,
+                                )
+                            ) {
+                                addAccountState = null
+                            } else {
+                                uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
                     }
                 }
             },
@@ -1231,13 +1596,29 @@ fun FinanceApp(
                             showAssetCategorySheet = false
                             loadDashboard("Категория активов добавлена")
                         }
-                        is ApiResult.Failure -> uiState = uiState.copy(
-                            isLoading = false,
-                            message = result.userFacingMessage(),
-                        )
+                        is ApiResult.Failure -> {
+                            if (enqueueOfflineAssetCategoryCreateIfRetriable(result, request)) {
+                                showAssetCategorySheet = false
+                            } else {
+                                uiState = uiState.copy(
+                                    isLoading = false,
+                                    message = result.userFacingMessage(),
+                                )
+                            }
+                        }
                     }
                 }
             },
+        )
+    }
+
+    if (showSyncIssuesSheet) {
+        SyncIssuesSheet(
+            issues = syncIssues,
+            loading = syncIssuesLoading,
+            syncing = syncUiState.isSyncing,
+            onRetry = { runManualSync() },
+            onDismiss = { showSyncIssuesSheet = false },
         )
     }
 }
@@ -1441,7 +1822,9 @@ private fun SignInCard(
 private fun LazyListScope.homeContent(
     dashboard: FinanceDashboard?,
     selectedMode: FinanceMode,
+    syncUiState: SyncUiState,
     onModeSelected: (FinanceMode) -> Unit,
+    onSyncAttentionClick: () -> Unit,
     onOpenPlanning: () -> Unit,
 ) {
     val view = dashboard.viewFor(selectedMode)
@@ -1450,6 +1833,9 @@ private fun LazyListScope.homeContent(
             selectedMode = selectedMode,
             onModeSelected = onModeSelected,
         )
+    }
+    syncAttention(syncUiState)?.let { attention ->
+        item { SyncAttentionChip(attention, onClick = onSyncAttentionClick) }
     }
     item { PlanningEntryCard(selectedMode, onOpenPlanning) }
     item { CapitalCard(view) }
@@ -1978,6 +2364,7 @@ private fun LazyListScope.categoriesContent(
 private fun LazyListScope.analyticsContent(
     apiClient: FinanceApiClient,
     dashboard: FinanceDashboard?,
+    planningRepository: PlanningRepository?,
     selectedMode: FinanceMode,
     selectedSubsection: AnalyticsSubsection,
     selectedReportMonth: String,
@@ -1987,6 +2374,7 @@ private fun LazyListScope.analyticsContent(
     onCreatePlanningCategory: suspend (String, FinanceMode) -> ApiResult<CategorySummary>,
     onCreatePlanningAccount: suspend (String, String, String, FinanceMode) -> ApiResult<AccountSummary>,
     onPlanningNotificationCandidate: (PlanningNotificationCandidate) -> Unit,
+    onPlanningOfflineMutationQueued: (String) -> Unit,
 ) {
     val view = dashboard.viewFor(selectedMode)
     item {
@@ -2009,7 +2397,7 @@ private fun LazyListScope.analyticsContent(
                     onSelected = onReportMonthSelected,
                 )
             }
-            item { AnalyticsSummaryCard(view) }
+            item { AnalyticsSummaryCard(view, dashboard?.investmentsTotal) }
             item { InvestmentsCard(dashboard?.investmentsTotal, dashboard?.investmentsByCurrency.orEmpty(), view.primaryCurrency) }
             item { CategoryBreakdownCard(view.topCategories) }
             item { CapitalBreakdownCard(view.assetSummaries) }
@@ -2024,8 +2412,167 @@ private fun LazyListScope.analyticsContent(
                     onCreateCategory = onCreatePlanningCategory,
                     onCreateAccount = onCreatePlanningAccount,
                     onPlanningNotificationCandidate = onPlanningNotificationCandidate,
+                    planningRepository = planningRepository,
+                    onOfflineMutationQueued = onPlanningOfflineMutationQueued,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SyncActionButton(
+    state: SyncUiState,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val attention = syncAttention(state)
+    IconButton(
+        onClick = onClick,
+        enabled = enabled && !state.isSyncing,
+        modifier = Modifier.testTag("sync-action-button"),
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_refresh_24),
+            contentDescription = attention?.actionDescription ?: "Обновить и синхронизировать",
+            tint = if (attention?.type == SyncAttentionType.Failed) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+    }
+}
+
+@Composable
+private fun SyncAttentionChip(
+    attention: SyncAttention,
+    onClick: () -> Unit,
+) {
+    AssistChip(
+        onClick = onClick,
+        modifier = Modifier.testTag("sync-attention-chip"),
+        leadingIcon = {
+            Icon(
+                painter = painterResource(R.drawable.ic_refresh_24),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+        },
+        label = { Text(attention.label) },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SyncIssuesSheet(
+    issues: List<SyncIssueSummary>,
+    loading: Boolean,
+    syncing: Boolean,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+                .testTag("sync-issues-sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Требует внимания", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "Проблемы синхронизации",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (loading) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (issues.isEmpty()) {
+                Text(
+                    "Нет проблем синхронизации.",
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    issues.forEach { issue ->
+                        SyncIssueRow(issue)
+                    }
+                }
+            }
+            Text(
+                "Для отклонённых изменений: исправьте данные или обновите с сервера.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Закрыть")
+                }
+                Button(
+                    onClick = onRetry,
+                    enabled = !loading && !syncing,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (syncing) "Повторяем" else "Повторить")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncIssueRow(issue: SyncIssueSummary) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (issue.status == SyncManager.MUTATION_STATUS_REJECTED) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "${syncIssueEntityLabel(issue.entityType)} • ${syncIssueOperationLabel(issue.operation)}",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                syncIssueStatusLabel(issue.status),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                syncIssueSafeError(issue.lastError),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                listOf(
+                    "Попыток: ${issue.attempts}",
+                    syncIssueTimestampLabel(issue.updatedAtEpochMillis, issue.createdAtEpochMillis),
+                ).joinToString(" • "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -3235,7 +3782,9 @@ private fun ReportMonthSwitcher(
 }
 
 @Composable
-private fun AnalyticsSummaryCard(view: DashboardView) {
+private fun AnalyticsSummaryCard(view: DashboardView, investmentsTotal: MoneyAmount?) {
+    val investmentAmount = investmentsTotal?.amount?.toMoney() ?: BigDecimal.ZERO
+    val investmentCurrency = investmentsTotal?.currency ?: view.primaryCurrency
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -3244,7 +3793,7 @@ private fun AnalyticsSummaryCard(view: DashboardView) {
             Text("Аналитика", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             MetricLine("Доходы", view.monthIncome.formatMoney(view.primaryCurrency), Color(0xFF2E7D62))
             MetricLine("Расходы", view.monthExpenses.formatMoney(view.primaryCurrency), Color(0xFFE35D4F))
-            MetricLine("Переводы", view.transferTotal.formatMoney(view.primaryCurrency), Color(0xFF5B6EE1))
+            MetricLine("Инвестиции", investmentAmount.formatMoney(investmentCurrency), Color(0xFF5B6EE1))
         }
     }
 }
@@ -4062,6 +4611,98 @@ private fun CategoryPicker(
     }
 }
 
+data class SyncUiState(
+    val pendingCount: Int = 0,
+    val failedCount: Int = 0,
+    val isSyncing: Boolean = false,
+    val savedOffline: Boolean = false,
+)
+
+enum class SyncAttentionType {
+    Pending,
+    Offline,
+    Syncing,
+    Failed,
+}
+
+data class SyncAttention(
+    val type: SyncAttentionType,
+    val label: String,
+    val actionDescription: String,
+)
+
+internal fun syncAttention(state: SyncUiState): SyncAttention? {
+    return when {
+        state.isSyncing -> SyncAttention(
+            type = SyncAttentionType.Syncing,
+            label = "Синхронизируем",
+            actionDescription = "Синхронизация выполняется",
+        )
+        state.failedCount > 0 -> SyncAttention(
+            type = SyncAttentionType.Failed,
+            label = "Синхронизация требует внимания",
+            actionDescription = "Повторить синхронизацию",
+        )
+        state.pendingCount > 0 && state.savedOffline -> SyncAttention(
+            type = SyncAttentionType.Offline,
+            label = "Сохранено на устройстве: ${state.pendingCount}",
+            actionDescription = "Синхронизировать сохраненное на устройстве",
+        )
+        state.pendingCount > 0 -> SyncAttention(
+            type = SyncAttentionType.Pending,
+            label = "Ожидает синхронизации: ${state.pendingCount}",
+            actionDescription = "Синхронизировать ожидающие изменения",
+        )
+        else -> null
+    }
+}
+
+internal fun syncIssueEntityLabel(entityType: String): String = when (entityType) {
+    SyncManager.ENTITY_TRANSACTIONS -> "Операция"
+    SyncManager.ENTITY_ACCOUNTS -> "Актив"
+    SyncManager.ENTITY_CATEGORIES -> "Категория"
+    SyncManager.ENTITY_ASSET_CATEGORIES -> "Категория активов"
+    SyncManager.ENTITY_PLANNING_PLANS -> "План"
+    SyncManager.ENTITY_PLANNING_INCOME_SOURCES -> "Доход плана"
+    SyncManager.ENTITY_PLANNING_ALLOCATIONS -> "Распределение плана"
+    else -> "Изменение"
+}
+
+internal fun syncIssueOperationLabel(operation: String): String = when (operation) {
+    SyncManager.OPERATION_CREATE -> "Создание"
+    SyncManager.OPERATION_UPDATE -> "Изменение"
+    SyncManager.OPERATION_ARCHIVE -> "Архивация"
+    SyncManager.OPERATION_RESTORE -> "Восстановление"
+    SyncManager.OPERATION_DELETE -> "Удаление"
+    else -> "Синхронизация"
+}
+
+internal fun syncIssueStatusLabel(status: String): String = when (status) {
+    SyncManager.MUTATION_STATUS_FAILED -> "Не удалось отправить"
+    SyncManager.MUTATION_STATUS_REJECTED -> "Отклонено сервером"
+    else -> "Требует внимания"
+}
+
+internal fun syncIssueSafeError(lastError: String?): String {
+    val normalized = lastError
+        ?.replace(Regex("\\s+"), " ")
+        ?.trim()
+        .orEmpty()
+    if (normalized.isBlank()) return "Причина не указана."
+    val lower = normalized.lowercase(Locale.ROOT)
+    val looksLikePayload = listOf("{", "}", "[", "]", "payload", "amount", "balance", "note")
+        .any { marker -> lower.contains(marker) }
+    if (looksLikePayload) {
+        return "Подробности скрыты. Проверьте данные изменения и повторите синхронизацию."
+    }
+    return normalized.take(160)
+}
+
+internal fun syncIssueTimestampLabel(updatedAtEpochMillis: Long, createdAtEpochMillis: Long): String {
+    val timestamp = updatedAtEpochMillis.takeIf { it > 0 } ?: createdAtEpochMillis
+    return "Обновлено: ${Instant.ofEpochMilli(timestamp)}"
+}
+
 data class FinanceUiState(
     val session: SessionStatus? = null,
     val dashboard: FinanceDashboard? = null,
@@ -4177,6 +4818,26 @@ data class QuickAddDraft(
     val visibility: FinanceMode,
     val transactionDate: String = currentDateString(),
 )
+
+private data class ManualTransactionCreate(
+    val transactionType: String,
+    val amount: String,
+    val currency: String,
+    val accountId: String,
+    val categoryId: String?,
+    val counterpartyAccountId: String?,
+    val transactionDate: String,
+    val note: String?,
+)
+
+private sealed interface QuickAddSubmitResult {
+    data object Success : QuickAddSubmitResult
+
+    data class Failure(
+        val failure: ApiResult.Failure,
+        val offlineDraft: ManualTransactionCreate?,
+    ) : QuickAddSubmitResult
+}
 
 data class AddAccountState(
     val kind: AssetKind,
@@ -4463,6 +5124,11 @@ internal sealed class LegacyAssetCategoryMigrationTargetSelection {
     data class Blocked(val message: String) : LegacyAssetCategoryMigrationTargetSelection()
 }
 
+internal sealed class LegacyInvestmentMigrationRequestSelection {
+    data class Ready(val request: InvestmentMigrationCreateRequest) : LegacyInvestmentMigrationRequestSelection()
+    data class Blocked(val message: String) : LegacyInvestmentMigrationRequestSelection()
+}
+
 internal sealed class LegacyGroupMigrationResult {
     data object Success : LegacyGroupMigrationResult()
     data class Failure(val message: String) : LegacyGroupMigrationResult()
@@ -4519,6 +5185,53 @@ internal fun legacyManualAssetCategoryCreateRequest(
         isInvestment = isInvestmentChecked,
         assetType = kind.apiValue,
         iconKey = defaultAssetCategoryIconKey(kind.apiValue),
+    )
+}
+
+internal fun legacyInvestmentMigrationCreateRequest(
+    kind: AssetKind,
+    nameDraft: String,
+    target: LegacyAssetCategoryMigrationTarget,
+    accounts: List<AccountSummary>,
+    assetCategoryId: String,
+): LegacyInvestmentMigrationRequestSelection {
+    val cleanName = nameDraft.trim()
+    if (cleanName.isBlank()) {
+        return LegacyInvestmentMigrationRequestSelection.Blocked("Введите название группы")
+    }
+    val activeAccounts = accounts.filter { it.status == "active" && it.assetCategoryId.isNullOrBlank() }
+    if (activeAccounts.isEmpty()) {
+        return LegacyInvestmentMigrationRequestSelection.Blocked(
+            "В legacy-группе нет активных счетов для переноса.",
+        )
+    }
+    val accountIds = activeAccounts.mapNotNull { it.id.takeIf { id -> id.isNotBlank() } }
+    if (accountIds.size != activeAccounts.size) {
+        return LegacyInvestmentMigrationRequestSelection.Blocked(
+            "Обновите данные: у части счетов нет серверного идентификатора.",
+        )
+    }
+    val accountVersions = activeAccounts.mapNotNull { account ->
+        account.version?.takeIf { it > 0 }?.let { account.id to it }
+    }.toMap()
+    if (accountVersions.size != activeAccounts.size) {
+        return LegacyInvestmentMigrationRequestSelection.Blocked(
+            "Обновите данные: у части счетов нет версии для безопасной миграции.",
+        )
+    }
+    return LegacyInvestmentMigrationRequestSelection.Ready(
+        InvestmentMigrationCreateRequest(
+            assetCategoryId = assetCategoryId,
+            name = cleanName,
+            iconKey = defaultAssetCategoryIconKey(kind.apiValue),
+            color = null,
+            assetType = kind.apiValue,
+            currency = target.currency,
+            scope = target.scopeType,
+            householdId = target.householdId,
+            accountIds = accountIds,
+            accountVersions = accountVersions,
+        ),
     )
 }
 
@@ -4915,6 +5628,17 @@ private fun ApiResult.Failure.isAuthenticationFailure(): Boolean {
         "HTTP 403",
     ).any { message.contains(it, ignoreCase = true) }
 }
+
+internal fun ApiResult.Failure.isRetriableForOfflineQueue(): Boolean {
+    val code = statusCode ?: return isNetworkFailure
+    return code == 408 || code == 429 || code >= 500
+}
+
+private fun SessionStatus.syncUserIdOrNull(): String? {
+    return userId?.takeIf { it.isNotBlank() }
+}
+
+private fun Int?.orZero(): Int = this ?: 0
 
 @Preview(showBackground = true, widthDp = 390)
 @Composable

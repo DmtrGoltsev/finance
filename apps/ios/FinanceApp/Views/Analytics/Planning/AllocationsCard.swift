@@ -66,7 +66,7 @@ struct AllocationsCard: View {
             .disabled(!canCreate)
 
             if !canCreate {
-                Text("Чтобы добавить allocation, выберите цель этого scope и укажите сумму или процент.")
+                Text("Чтобы добавить распределение, выберите цель текущего режима и укажите сумму или процент.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

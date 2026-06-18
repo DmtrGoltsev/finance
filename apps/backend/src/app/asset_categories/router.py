@@ -4,11 +4,24 @@ from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi.responses import JSONResponse
 
+from app.accounts.repository import SqlAlchemyAccountRepository
 from app.api.auth_context import CurrentActor
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
 
+from .investment_migration import (
+    InvestmentMigrationService,
+    InvestmentMigrationServiceError,
+    investment_migration_dto,
+    investment_migration_service,
+)
+from .investment_migration_schemas import (
+    InvestmentMigrationCreateRequest,
+    InvestmentMigrationEnvelope,
+)
 from .repository import SqlAlchemyAssetCategoryRepository
 from .schemas import (
     AssetCategoryCreateRequest,
@@ -29,12 +42,34 @@ def asset_category_service_for_request() -> Iterator[AssetCategoryService]:
         return
 
     with sync_session_scope(get_settings()) as session:
-        yield AssetCategoryService(SqlAlchemyAssetCategoryRepository(session))
+        yield AssetCategoryService(
+            SqlAlchemyAssetCategoryRepository(session),
+            SyncChangeRecorder(session),
+        )
 
 
 AssetCategoryServiceDependency = Annotated[
     AssetCategoryService,
     Depends(asset_category_service_for_request),
+]
+
+
+def investment_migration_service_for_request() -> Iterator[InvestmentMigrationService]:
+    if accounts_categories_repository_mode() != "db":
+        yield investment_migration_service
+        return
+
+    with sync_session_scope(get_settings()) as session:
+        yield InvestmentMigrationService(
+            SqlAlchemyAssetCategoryRepository(session),
+            SqlAlchemyAccountRepository(session),
+            SyncChangeRecorder(session),
+        )
+
+
+InvestmentMigrationServiceDependency = Annotated[
+    InvestmentMigrationService,
+    Depends(investment_migration_service_for_request),
 ]
 
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -89,6 +124,34 @@ async def create_asset_category(
     asset_category_service: AssetCategoryServiceDependency,
 ) -> AssetCategoryEnvelope:
     return AssetCategoryEnvelope(data=asset_category_service.create(actor=actor, request=request))
+
+
+@router.post(
+    "/investment-migrations",
+    operation_id="createInvestmentMigration",
+    response_model=InvestmentMigrationEnvelope,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_investment_migration(
+    request: InvestmentMigrationCreateRequest,
+    actor: CurrentActor,
+    investment_migration_service: InvestmentMigrationServiceDependency,
+) -> InvestmentMigrationEnvelope | JSONResponse:
+    try:
+        result = investment_migration_service.create(actor=actor, request=request)
+    except InvestmentMigrationServiceError as error:
+        return JSONResponse(
+            status_code=error.http_status,
+            content={
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                    "requestId": actor.request_id or "request-unavailable",
+                }
+            },
+        )
+    return InvestmentMigrationEnvelope(data=investment_migration_dto(result))
 
 
 @router.get(

@@ -55,7 +55,7 @@ struct AnalyticsTab: View {
 
                 AnalyticsSummaryCard(
                     totals: reportSummary?.totalsByCurrency ?? dashboard?.totals ?? [],
-                    transferCount: dashboard?.reportTransferCount ?? 0,
+                    investmentAmount: investmentAmount(for: currency),
                     currency: currency
                 )
 
@@ -119,6 +119,19 @@ struct AnalyticsTab: View {
 
     private var householdId: String? {
         selectedMode == .shared ? dashboard?.session.householdId : nil
+    }
+
+    private func investmentAmount(for currency: CurrencyCode) -> String {
+        if let amount = dashboard?.investmentsByCurrency.first(where: { $0.currency == currency })?.amount {
+            return amount
+        }
+        if let total = dashboard?.investmentsTotal, total.currency == currency {
+            return total.amount
+        }
+        if let amount = reportSummary?.totalsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
+            return amount
+        }
+        return "0"
     }
 }
 

@@ -655,6 +655,59 @@ class AppSectionTest {
     }
 
     @Test
+    fun legacyInvestmentMigrationRequestCarriesAccountVersions() {
+        val selection = legacyInvestmentMigrationCreateRequest(
+            kind = AssetKind.Brokerage,
+            nameDraft = "  Брокер  ",
+            target = LegacyAssetCategoryMigrationTarget("personal", null, "RUB"),
+            accounts = listOf(
+                AccountSummary(
+                    "Брокер",
+                    "brokerage",
+                    "personal",
+                    "RUB",
+                    "2200.00",
+                    id = "acc-broker",
+                    version = 7,
+                ),
+            ),
+            assetCategoryId = "asset-cat-broker",
+        )
+
+        assertTrue(selection is LegacyInvestmentMigrationRequestSelection.Ready)
+        val request = (selection as LegacyInvestmentMigrationRequestSelection.Ready).request
+        assertEquals("asset-cat-broker", request.assetCategoryId)
+        assertEquals("Брокер", request.name)
+        assertEquals("brokerage", request.assetType)
+        assertEquals(listOf("acc-broker"), request.accountIds)
+        assertEquals(7, request.accountVersions["acc-broker"])
+    }
+
+    @Test
+    fun legacyInvestmentMigrationRequestBlocksAccountsWithoutVersions() {
+        val selection = legacyInvestmentMigrationCreateRequest(
+            kind = AssetKind.Brokerage,
+            nameDraft = "Брокер",
+            target = LegacyAssetCategoryMigrationTarget("personal", null, "RUB"),
+            accounts = listOf(
+                AccountSummary(
+                    "Брокер",
+                    "brokerage",
+                    "personal",
+                    "RUB",
+                    "2200.00",
+                    id = "acc-broker",
+                    version = null,
+                ),
+            ),
+            assetCategoryId = "asset-cat-broker",
+        )
+
+        assertTrue(selection is LegacyInvestmentMigrationRequestSelection.Blocked)
+        assertTrue((selection as LegacyInvestmentMigrationRequestSelection.Blocked).message.contains("версии"))
+    }
+
+    @Test
     fun legacyInvestmentMigrationBlocksMixedScopeOverview() {
         val selection = selectLegacyAssetCategoryMigrationTarget(
             selectedMode = FinanceMode.Overview,

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AnalyticsSummaryCard: View {
     let totals: [MoneyTotal]
-    let transferCount: Int
+    let investmentAmount: String
     let currency: CurrencyCode
 
     var body: some View {
@@ -36,10 +36,10 @@ struct AnalyticsSummaryCard: View {
                     icon: "equal.circle"
                 )
                 SummaryMetricTile(
-                    title: "Переводы",
-                    value: "\(transferCount)",
+                    title: "Инвестиции",
+                    value: MoneyHelpers.format(investmentAmount, currency: currency),
                     color: FinanceColors.transfer,
-                    icon: "arrow.right.arrow.left.circle"
+                    icon: "chart.line.uptrend.xyaxis.circle"
                 )
             }
         }

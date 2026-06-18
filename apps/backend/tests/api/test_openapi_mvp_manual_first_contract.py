@@ -121,6 +121,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/accounts/{accountId}/restore",
         "/accounts/autocomplete",
         "/asset-categories",
+        "/asset-categories/investment-migrations",
         "/asset-categories/{assetCategoryId}",
         "/asset-categories/{assetCategoryId}/archive",
         "/asset-categories/{assetCategoryId}/restore",
@@ -153,6 +154,8 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/planning/income-sources/{incomeSourceId}",
         "/planning/income-sources/{incomeSourceId}/confirm",
         "/planning/allocations/{allocationId}",
+        "/sync/push",
+        "/sync/pull",
     }
 
     assert paths == required_paths
@@ -162,6 +165,11 @@ def test_openapi_sessions_surface_matches_mounted_mvp_subset() -> None:
     assert _contract_methods("/users") == {"POST"}
     assert _contract_methods("/sessions") == {"POST"}
     assert _contract_methods("/sessions/current") == {"GET", "DELETE"}
+
+
+def test_openapi_sync_surface_matches_mounted_mvp_subset() -> None:
+    assert _contract_methods("/sync/push") == {"POST"}
+    assert _contract_methods("/sync/pull") == {"POST"}
 
 
 def test_openapi_excludes_post_mvp_import_bank_sms_push_broker_routes() -> None:

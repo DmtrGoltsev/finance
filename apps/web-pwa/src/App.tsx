@@ -390,11 +390,17 @@ function localizedPlanningStatus(status: string | null | undefined): string {
   if (["active", "planned", "on_track"].includes(status)) return "По плану";
   if (["confirmed", "completed", "done"].includes(status)) return "Выполнено";
   if (["needs_attention", "target_attention", "warning", "attention"].includes(status)) return "Требует внимания";
-  if (status === "no_actuals") return "Нет фактических данных";
+  if (status === "no_actuals") return "Факт";
   if (status === "not_applicable") return "Не применяется";
   if (["under_plan", "underplanned", "behind"].includes(status)) return "Ниже плана";
   if (["over_plan", "overplanned", "ahead"].includes(status)) return "Выше плана";
   return "Ожидает данных";
+}
+
+function localizedAttentionReason(allocation: PlanningAllocation): string {
+  if (allocation.targetType === "investment_asset_category") return "Инвестиции ниже плана";
+  if (allocation.targetType === "expense_category") return "Расходы выше плана";
+  return "Эта цель требует внимания";
 }
 
 function planningTargetOptions(
@@ -750,6 +756,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
             label={section.label}
             onClick={() => setActiveSection(section.id)}
             testId={`mobile-nav-${section.id}`}
+            iconOnly
           />
         ))}
       </nav>
@@ -959,18 +966,27 @@ function NavButton({
   icon: Icon,
   label,
   onClick,
-  testId
+  testId,
+  iconOnly = false
 }: {
   active: boolean;
   icon: typeof WalletCards;
   label: string;
   onClick: () => void;
   testId?: string;
+  iconOnly?: boolean;
 }) {
   return (
-    <button className={active ? "active" : ""} type="button" onClick={onClick} data-testid={testId}>
+    <button
+      className={active ? "active" : ""}
+      type="button"
+      aria-label={iconOnly ? label : undefined}
+      title={label}
+      onClick={onClick}
+      data-testid={testId}
+    >
       <Icon size={18} aria-hidden="true" />
-      <span>{label}</span>
+      <span className={iconOnly ? "visuallyHidden" : undefined}>{label}</span>
     </button>
   );
 }
@@ -2564,11 +2580,7 @@ function AnalyticsPage({
     viewMode === "personal" ? reportFromOperations("personal", operations, currency, range) : report;
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const groups = groupAssets(accounts, currency);
-  const visibleTransfersList = visibleTransfers(snapshot.transfers, accounts);
-  const transfersInPeriod = visibleTransfersList.filter((t) => {
-    const d = dateInputValue(t.date);
-    return d >= range.startDate && d <= range.endDate;
-  });
+  const investmentsTotal = snapshot.investmentsTotal ?? { value: 0, currency };
 
   return (
     <section className="screenStack" aria-labelledby="analytics-title">
@@ -2603,7 +2615,7 @@ function AnalyticsPage({
             <Metric label="Доходы" value={formatMoney(analyticsReport.income)} tone="success" />
             <Metric label="Расходы" value={formatMoney(analyticsReport.expense)} tone="danger" />
             <Metric label="Итог" value={formatMoney(analyticsReport.balanceDelta)} />
-            <Metric label="Переводы" value={String(transfersInPeriod.length)} />
+            <Metric label="Инвестиции" value={formatMoney(investmentsTotal)} />
           </div>
           <div className="dashboardGrid">
             <section className="plainSection" aria-labelledby="analytics-categories-title">
@@ -3340,9 +3352,10 @@ function PlanningAllocationsCard({
   };
 
   return (
-    <div className="planningCard">
+    <>
+      <div className="planningCard">
       <div className="sectionHead compact">
-        <h3>Распределения</h3>
+        <h3>Добавить распределение</h3>
       </div>
 
       <div className="planningChipRow">
@@ -3503,7 +3516,12 @@ function PlanningAllocationsCard({
         <Plus size={18} aria-hidden="true" />
         Добавить распределение
       </button>
+      </div>
 
+      <div className="planningCard">
+      <div className="sectionHead compact">
+        <h3>Распределения</h3>
+      </div>
       {plan.allocations.length === 0 ? (
         <p className="scopeCopy">Распределений пока нет</p>
       ) : (
@@ -3523,7 +3541,8 @@ function PlanningAllocationsCard({
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -3555,7 +3574,7 @@ function PlanningAllocationRow({
   const targetName =
     targetOptions.find((o) => o.id === allocation.targetId)?.title ??
     localizedTargetType(allocation.targetType);
-  const statusText = localizedPlanningStatus(allocation.progressStatus ?? allocation.status);
+  const isInvestmentAllocation = allocation.targetType === "investment_asset_category";
 
   const [draft, setDraft] = useState<AllocationDraft>({
     targetType: allocation.targetType,
@@ -3579,14 +3598,15 @@ function PlanningAllocationRow({
     <div className="planningRow">
       <div className="planningRowHead">
         <div>
-          <strong>{targetName}</strong>
+          <strong className="planningRowTitle">
+            {targetName}
+          </strong>
           <span>
             {localizedTargetType(allocation.targetType)} ·{" "}
             {localizedRecurrenceType(allocation.recurrenceType ?? "regular")} ·{" "}
             {allocation.allocationMode === "percent"
               ? `${localizedAllocationMode(allocation.allocationMode)}: ${allocation.allocationValue} = ${formatMoney(allocation.calculatedAmount)}`
               : formatMoney(allocation.calculatedAmount)}{" "}
-            · {statusText}
           </span>
           {allocation.actualAmount ? (
             <span>
@@ -3594,7 +3614,7 @@ function PlanningAllocationRow({
               {allocation.progressPercent ? ` · ${allocation.progressPercent}%` : ""}
             </span>
           ) : (
-            <span className="scopeCopy">Факт появится после операций в этой категории</span>
+            <span className="scopeCopy">Факт</span>
           )}
           {allocation.isSavingsGoal && (
             <span>
@@ -3612,10 +3632,15 @@ function PlanningAllocationRow({
         >
           {isEditing ? "Закрыть" : "Править"}
         </button>
+        {isInvestmentAllocation && (
+          <span className="planningInvestmentBadge" title="Инвестиции" aria-label="Инвестиции">
+            <TrendingUp size={9} aria-hidden="true" />
+          </span>
+        )}
       </div>
       {allocation.requiresAttention && (
         <div className="planningBanner warning" style={{ marginTop: 6 }}>
-          {allocation.attentionReason ?? "Эта цель требует внимания"}
+          {localizedAttentionReason(allocation)}
         </div>
       )}
       {isEditing && (

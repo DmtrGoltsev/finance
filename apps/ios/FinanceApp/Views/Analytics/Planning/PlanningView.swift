@@ -283,7 +283,7 @@ func localizedPlanningStatus(_ status: String?) -> String {
     case "active", "planned", "on_track": return "по плану"
     case "confirmed", "completed", "done": return "выполнено"
     case "needs_attention", "target_attention", "warning", "attention": return "требует внимания"
-    case "no_actuals": return "нет фактических данных"
+    case "no_actuals": return "Факт"
     case "not_applicable": return "не применяется"
     case "under_plan", "underplanned", "behind": return "ниже плана"
     case "over_plan", "overplanned", "ahead": return "выше плана"

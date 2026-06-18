@@ -31,6 +31,7 @@ from app.authz import (
 )
 from app.categories.repository import CategoryRecord, CategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType, RecordStatus
+from app.sync.domain_changes import SyncChangeRecorder
 from app.transactions.repository import (
     TransactionFilters,
     TransactionRecord,
@@ -128,12 +129,14 @@ class PlanningService:
         categories: CategoryRepository,
         asset_categories: AssetCategoryRepository,
         transactions: TransactionRepository = default_transaction_repository,
+        sync_change_recorder: SyncChangeRecorder | None = None,
     ) -> None:
         self._plans = plans
         self._accounts = accounts
         self._categories = categories
         self._asset_categories = asset_categories
         self._transactions = transactions
+        self._sync_change_recorder = sync_change_recorder
 
     def get_plan_for_scope_month(
         self,
@@ -170,7 +173,13 @@ class PlanningService:
         )
         return [self._view(actor, self._plans.aggregate(plan)) for plan in plans]
 
-    def create_plan(self, *, actor: Actor, request: PlanningPlanCreateRequest) -> PlanningPlanView:
+    def create_plan(
+        self,
+        *,
+        actor: Actor,
+        request: PlanningPlanCreateRequest,
+        plan_id: str | None = None,
+    ) -> PlanningPlanView:
         if actor.user_id is None:
             raise PlanningNotFoundOrInaccessible()
         scope_ref = self._resolve_requested_scope(
@@ -189,6 +198,7 @@ class PlanningService:
             raise PlanningConflictError("PLANNING_PLAN_ALREADY_EXISTS")
 
         plan = self._plans.create_plan(
+            plan_id=plan_id or request.id,
             scope_type=scope_ref.scope_type,
             owner_user_id=scope_ref.owner_user_id,
             household_id=scope_ref.household_id,
@@ -196,6 +206,7 @@ class PlanningService:
             currency=request.currency,
             created_by_user_id=actor.user_id,
         )
+        self._record_plan_sync_change(actor=actor, operation="create", record=plan)
         return self._view(actor, self._plans.aggregate(plan))
 
     def get_plan(self, *, actor: Actor, plan_id: str) -> PlanningPlanView:
@@ -207,17 +218,25 @@ class PlanningService:
         actor: Actor,
         plan_id: str,
         request: PlanningIncomeSourceCreateRequest,
+        income_source_id: str | None = None,
     ) -> PlanningIncomeSourceRecord:
         aggregate = self._require_visible_plan(actor, plan_id)
         if actor.user_id is None:
             raise PlanningNotFoundOrInaccessible()
         record = self._plans.create_income_source(
+            income_source_id=income_source_id or request.id,
             plan_id=aggregate.plan.id,
             amount=money(request.amount),
             source=request.source,
             description=request.description,
             day_of_month=request.day_of_month,
             created_by_user_id=actor.user_id,
+        )
+        self._record_income_sync_change(
+            actor=actor,
+            operation="create",
+            record=record,
+            plan=aggregate.plan,
         )
         return record
 
@@ -229,6 +248,7 @@ class PlanningService:
         request: PlanningIncomeSourceUpdateRequest,
     ) -> PlanningIncomeSourceRecord:
         record = self._require_visible_income_source(actor, income_source_id)
+        plan = self._require_visible_plan(actor, record.plan_id).plan
         if request.version is not None and request.version != record.version:
             raise PlanningConflictError()
         updated = record
@@ -240,20 +260,31 @@ class PlanningService:
             updated = replace(updated, description=request.description)
         if request.day_of_month is not None:
             updated = replace(updated, day_of_month=request.day_of_month)
-        return self._plans.save_income_source(updated)
+        saved = self._plans.save_income_source(updated)
+        self._record_income_sync_change(
+            actor=actor,
+            operation="update",
+            record=saved,
+            plan=plan,
+        )
+        return saved
 
     def confirm_income_source(
         self,
         *,
         actor: Actor,
         income_source_id: str,
+        version: int | None = None,
     ) -> PlanningIncomeSourceRecord:
         record = self._require_visible_income_source(actor, income_source_id)
         if actor.user_id is None:
             raise PlanningNotFoundOrInaccessible()
+        if version is not None and version != record.version:
+            raise PlanningConflictError()
         if record.confirmation_state == "confirmed":
             return record
-        return self._plans.save_income_source(
+        plan = self._require_visible_plan(actor, record.plan_id).plan
+        saved = self._plans.save_income_source(
             replace(
                 record,
                 confirmation_state="confirmed",
@@ -261,10 +292,33 @@ class PlanningService:
                 confirmed_by_user_id=actor.user_id,
             )
         )
+        self._record_income_sync_change(
+            actor=actor,
+            operation="confirm",
+            record=saved,
+            plan=plan,
+        )
+        return saved
 
-    def delete_income_source(self, *, actor: Actor, income_source_id: str) -> None:
+    def delete_income_source(
+        self,
+        *,
+        actor: Actor,
+        income_source_id: str,
+        version: int | None = None,
+    ) -> PlanningIncomeSourceRecord:
         record = self._require_visible_income_source(actor, income_source_id)
-        self._plans.delete_income_source(record)
+        if version is not None and version != record.version:
+            raise PlanningConflictError()
+        plan = self._require_visible_plan(actor, record.plan_id).plan
+        deleted = self._plans.delete_income_source(record)
+        self._record_income_sync_change(
+            actor=actor,
+            operation="delete",
+            record=deleted,
+            plan=plan,
+        )
+        return deleted
 
     def add_allocation(
         self,
@@ -272,6 +326,7 @@ class PlanningService:
         actor: Actor,
         plan_id: str,
         request: PlanningAllocationCreateRequest,
+        allocation_id: str | None = None,
     ) -> PlanningAllocationRecord:
         aggregate = self._require_visible_plan(actor, plan_id)
         if actor.user_id is None:
@@ -284,7 +339,8 @@ class PlanningService:
         )
         if request.is_savings_goal and str(request.target_type) != "investment_asset_category":
             raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
-        return self._plans.create_allocation(
+        record = self._plans.create_allocation(
+            allocation_id=allocation_id or request.id,
             plan_id=aggregate.plan.id,
             target_type=str(request.target_type),
             target_id=request.target_id,
@@ -308,6 +364,13 @@ class PlanningService:
             ),
             created_by_user_id=actor.user_id,
         )
+        self._record_allocation_sync_change(
+            actor=actor,
+            operation="create",
+            record=record,
+            plan=aggregate.plan,
+        )
+        return record
 
     def update_allocation(
         self,
@@ -373,11 +436,33 @@ class PlanningService:
                 ),
             )
         self._validate_savings_goal(updated)
-        return self._plans.save_allocation(updated)
+        saved = self._plans.save_allocation(updated)
+        self._record_allocation_sync_change(
+            actor=actor,
+            operation="update",
+            record=saved,
+            plan=aggregate.plan,
+        )
+        return saved
 
-    def delete_allocation(self, *, actor: Actor, allocation_id: str) -> None:
-        _aggregate, record = self._require_visible_allocation(actor, allocation_id)
-        self._plans.delete_allocation(record)
+    def delete_allocation(
+        self,
+        *,
+        actor: Actor,
+        allocation_id: str,
+        version: int | None = None,
+    ) -> PlanningAllocationRecord:
+        aggregate, record = self._require_visible_allocation(actor, allocation_id)
+        if version is not None and version != record.version:
+            raise PlanningConflictError()
+        deleted = self._plans.delete_allocation(record)
+        self._record_allocation_sync_change(
+            actor=actor,
+            operation="delete",
+            record=deleted,
+            plan=aggregate.plan,
+        )
+        return deleted
 
     def copy_plan(
         self,
@@ -651,6 +736,55 @@ class PlanningService:
     def _validate_savings_goal(self, allocation: PlanningAllocationRecord) -> None:
         if allocation.is_savings_goal and allocation.target_type != "investment_asset_category":
             raise PlanningValidationError(DenialReason.VALIDATION_FAILED)
+
+    def _record_plan_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: PlanningPlanRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_planning_plan_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+        )
+
+    def _record_income_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: PlanningIncomeSourceRecord,
+        plan: PlanningPlanRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_planning_income_source_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+            plan=plan,
+        )
+
+    def _record_allocation_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: PlanningAllocationRecord,
+        plan: PlanningPlanRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_planning_allocation_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+            plan=plan,
+        )
 
     def _active_transactions_for_plan_month(
         self,

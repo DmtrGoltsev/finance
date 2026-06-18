@@ -2,13 +2,16 @@ package com.finance.mvp.api
 
 import com.finance.mvp.session.SecureTokenStore
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 data class ApiConfig(
@@ -53,6 +56,8 @@ interface FinanceApiClient {
     suspend fun restoreAccount(accountId: String): ApiResult<AccountSummary>
     suspend fun createAssetCategory(request: AssetCategoryCreateRequest): ApiResult<AssetCategory> =
         ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
+    suspend fun createInvestmentMigration(request: InvestmentMigrationCreateRequest): ApiResult<InvestmentMigrationResult> =
+        ApiResult.Failure("Миграция инвестиционных групп не поддерживается этим клиентом")
     suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> =
         ApiResult.Failure("Категории активов не поддерживаются этим клиентом")
     suspend fun archiveAssetCategory(categoryId: String): ApiResult<AssetCategory> =
@@ -137,6 +142,10 @@ interface FinanceApiClient {
         ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun copyPlanningPlan(planId: String, request: PlanningPlanCopyRequest): ApiResult<PlanningPlan> =
         ApiResult.Failure("Планирование не поддерживается этим клиентом")
+    suspend fun syncPush(request: SyncPushRequest): ApiResult<SyncPushResponse> =
+        ApiResult.Failure("Sync push is not supported by this client")
+    suspend fun syncPull(request: SyncPullRequest): ApiResult<SyncPullResponse> =
+        ApiResult.Failure("Sync pull is not supported by this client")
     suspend fun logout(): ApiResult<Unit>
 }
 
@@ -144,6 +153,7 @@ data class SessionStatus(
     val isAuthenticated: Boolean,
     val displayName: String?,
     val householdId: String?,
+    val userId: String? = null,
 )
 
 sealed interface RegistrationResult {
@@ -222,6 +232,24 @@ data class AssetCategoryCreateRequest(
     val isInvestment: Boolean = false,
     val assetType: String = "bank",
     val iconKey: String = "",
+)
+
+data class InvestmentMigrationCreateRequest(
+    val assetCategoryId: String,
+    val name: String,
+    val iconKey: String? = null,
+    val color: String? = null,
+    val assetType: String,
+    val currency: String,
+    val scope: String,
+    val householdId: String? = null,
+    val accountIds: List<String>,
+    val accountVersions: Map<String, Int>,
+)
+
+data class InvestmentMigrationResult(
+    val assetCategory: AssetCategory,
+    val accounts: List<AccountSummary>,
 )
 
 data class CategorySummary(
@@ -440,13 +468,100 @@ data class PlanningAllocationUpdateRequest(
     val version: Int? = null,
 )
 
+data class SyncMutationRequest(
+    val clientMutationId: String,
+    val entityType: String,
+    val entityId: String,
+    val operation: String,
+    val baseVersion: Int? = null,
+    val payload: JSONObject? = null,
+)
+
+data class SyncPushRequest(
+    val deviceId: String,
+    val clientSchemaVersion: Int = ANDROID_SYNC_SCHEMA_VERSION,
+    val mutations: List<SyncMutationRequest>,
+)
+
+data class SyncMutationResult(
+    val clientMutationId: String,
+    val entityType: String,
+    val entityId: String,
+    val operation: String,
+    val status: String,
+    val serverVersion: Int? = null,
+    val changeSeq: Long? = null,
+    val errorCode: String? = null,
+    val message: String? = null,
+    val data: JSONObject? = null,
+)
+
+data class SyncPushResponse(
+    val deviceId: String,
+    val serverTime: String,
+    val results: List<SyncMutationResult>,
+)
+
+data class SyncPullRequest(
+    val deviceId: String,
+    val clientSchemaVersion: Int = ANDROID_SYNC_SCHEMA_VERSION,
+    val cursor: Long = 0,
+    val limit: Int = 100,
+    val entityTypes: List<String>? = null,
+)
+
+data class SyncChange(
+    val seq: Long,
+    val entityType: String,
+    val entityId: String,
+    val changeType: String,
+    val entityVersion: Int? = null,
+    val entityUpdatedAt: String? = null,
+    val changedByUserId: String? = null,
+    val clientMutationId: String? = null,
+    val payload: JSONObject? = null,
+    val tombstonePayload: JSONObject? = null,
+    val createdAt: String,
+)
+
+data class SyncPullResponse(
+    val changes: List<SyncChange>,
+    val nextCursor: Long,
+    val hasMore: Boolean,
+    val serverTime: String,
+)
+
+const val ANDROID_SYNC_SCHEMA_VERSION: Int = 1
+
+enum class ApiFailureKind {
+    HTTP,
+    NETWORK,
+    CONTRACT,
+    UNKNOWN,
+}
+
 sealed interface ApiResult<out T> {
     data class Success<T>(val value: T) : ApiResult<T>
     data class Failure(
         val message: String,
         val cause: Throwable? = null,
         val statusCode: Int? = null,
-    ) : ApiResult<Nothing>
+        val kind: ApiFailureKind = defaultApiFailureKind(statusCode, cause),
+    ) : ApiResult<Nothing> {
+        val isNetworkFailure: Boolean
+            get() = kind == ApiFailureKind.NETWORK
+    }
+}
+
+private fun defaultApiFailureKind(statusCode: Int?, cause: Throwable?): ApiFailureKind {
+    return when {
+        statusCode != null -> ApiFailureKind.HTTP
+        cause is IOException -> ApiFailureKind.NETWORK
+        cause is JSONException || cause is IllegalArgumentException || cause is IllegalStateException ->
+            ApiFailureKind.CONTRACT
+        cause != null -> ApiFailureKind.UNKNOWN
+        else -> ApiFailureKind.UNKNOWN
+    }
 }
 
 class LiveFinanceApiClient(
@@ -677,6 +792,17 @@ class LiveFinanceApiClient(
             body = request.toJson().toString(),
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_OK),
         ).dataObject().let(::parseAssetCategory)
+    }
+
+    override suspend fun createInvestmentMigration(
+        request: InvestmentMigrationCreateRequest,
+    ): ApiResult<InvestmentMigrationResult> = safeCall {
+        request(
+            path = "/api/v1/asset-categories/investment-migrations",
+            method = "POST",
+            body = request.toJsonForApi().toString(),
+            expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
+        ).dataObject().let(::parseInvestmentMigrationResult)
     }
 
     override suspend fun updateAssetCategory(category: AssetCategory): ApiResult<AssetCategory> = safeCall {
@@ -1048,6 +1174,22 @@ class LiveFinanceApiClient(
         ).planningPlanObject().let(::parsePlanningPlan)
     }
 
+    override suspend fun syncPush(request: SyncPushRequest): ApiResult<SyncPushResponse> = safeCall {
+        this.request(
+            path = "/api/v1/sync/push",
+            method = "POST",
+            body = request.toJsonForApi().toString(),
+        ).let(::parseSyncPushResponse)
+    }
+
+    override suspend fun syncPull(request: SyncPullRequest): ApiResult<SyncPullResponse> = safeCall {
+        this.request(
+            path = "/api/v1/sync/pull",
+            method = "POST",
+            body = request.toJsonForApi().toString(),
+        ).let(::parseSyncPullResponse)
+    }
+
     override suspend fun logout(): ApiResult<Unit> = safeCall {
         request(
             path = "/api/v1/sessions/current",
@@ -1060,10 +1202,40 @@ class LiveFinanceApiClient(
     private inline fun <T> safeCall(block: () -> T): ApiResult<T> {
         return try {
             ApiResult.Success(block())
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: ApiException) {
-            ApiResult.Failure(error.message ?: "Ошибка API", error, error.statusCode)
+            ApiResult.Failure(error.message ?: "Ошибка API", error, error.statusCode, ApiFailureKind.HTTP)
+        } catch (error: IOException) {
+            ApiResult.Failure(
+                "Не удалось подключиться к API: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.NETWORK,
+            )
+        } catch (error: JSONException) {
+            ApiResult.Failure(
+                "API response did not match expected contract: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.CONTRACT,
+            )
+        } catch (error: IllegalArgumentException) {
+            ApiResult.Failure(
+                "API response did not match expected contract: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.CONTRACT,
+            )
+        } catch (error: IllegalStateException) {
+            ApiResult.Failure(
+                "API response did not match expected contract: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.CONTRACT,
+            )
         } catch (error: Exception) {
-            ApiResult.Failure("Не удалось подключиться к API: ${error.message ?: error::class.java.simpleName}", error)
+            ApiResult.Failure(
+                "API request failed: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.UNKNOWN,
+            )
         }
     }
 
@@ -1152,6 +1324,7 @@ private fun parseSession(json: JSONObject): SessionStatus {
         displayName = actor?.optString("displayName")?.takeIf { it.isNotBlank() }
             ?: userId?.take(8)?.let { "Пользователь $it" },
         householdId = householdId,
+        userId = userId,
     )
 }
 
@@ -1185,6 +1358,13 @@ private fun parseAssetCategory(json: JSONObject): AssetCategory {
         iconKey = json.optString("iconKey", ""),
         recordStatus = json.optString("recordStatus", json.optString("status", "active")),
         version = json.optIntOrNull("version"),
+    )
+}
+
+private fun parseInvestmentMigrationResult(json: JSONObject): InvestmentMigrationResult {
+    return InvestmentMigrationResult(
+        assetCategory = parseAssetCategory(json.getJSONObject("assetCategory")),
+        accounts = json.optJSONArray("accounts")?.toObjectList()?.map(::parseAccount).orEmpty(),
     )
 }
 
@@ -1422,6 +1602,56 @@ private fun JSONObject.investmentTotalsByCurrency(): List<MoneyAmount> {
         ?: emptyList()
 }
 
+private fun parseSyncPushResponse(json: JSONObject): SyncPushResponse {
+    val data = json.optJSONObject("data") ?: json
+    return SyncPushResponse(
+        deviceId = data.optString("deviceId"),
+        serverTime = data.optString("serverTime"),
+        results = data.optJSONArray("results")?.toObjectList()?.map(::parseSyncMutationResult).orEmpty(),
+    )
+}
+
+private fun parseSyncMutationResult(json: JSONObject): SyncMutationResult {
+    return SyncMutationResult(
+        clientMutationId = json.optString("clientMutationId"),
+        entityType = json.optString("entityType"),
+        entityId = json.optString("entityId"),
+        operation = json.optString("operation"),
+        status = json.optString("status"),
+        serverVersion = json.optIntOrNull("serverVersion"),
+        changeSeq = json.optLongOrNull("changeSeq"),
+        errorCode = json.optNullableString("errorCode"),
+        message = json.optNullableString("message"),
+        data = json.optJSONObject("data"),
+    )
+}
+
+private fun parseSyncPullResponse(json: JSONObject): SyncPullResponse {
+    val data = json.optJSONObject("data") ?: json
+    return SyncPullResponse(
+        changes = data.optJSONArray("changes")?.toObjectList()?.map(::parseSyncChange).orEmpty(),
+        nextCursor = data.optLong("nextCursor", 0),
+        hasMore = data.optBoolean("hasMore", false),
+        serverTime = data.optString("serverTime"),
+    )
+}
+
+private fun parseSyncChange(json: JSONObject): SyncChange {
+    return SyncChange(
+        seq = json.optLong("seq"),
+        entityType = json.optString("entityType"),
+        entityId = json.optString("entityId"),
+        changeType = json.optString("changeType"),
+        entityVersion = json.optIntOrNull("entityVersion"),
+        entityUpdatedAt = json.optNullableString("entityUpdatedAt"),
+        changedByUserId = json.optNullableString("changedByUserId"),
+        clientMutationId = json.optNullableString("clientMutationId"),
+        payload = json.optJSONObject("payload"),
+        tombstonePayload = json.optJSONObject("tombstonePayload"),
+        createdAt = json.optString("createdAt"),
+    )
+}
+
 private fun CaptureDraftCreateRequest.toJson(): JSONObject {
     return JSONObject()
         .put("amount", amount)
@@ -1465,6 +1695,38 @@ private fun AssetCategoryCreateRequest.toJson(): JSONObject {
         }
 }
 
+internal fun InvestmentMigrationCreateRequest.toJsonForApi(): JSONObject {
+    return JSONObject()
+        .put("assetCategoryId", assetCategoryId)
+        .put("name", name.trim().take(120))
+        .apply {
+            iconKey?.takeIf { it.isNotBlank() }?.let { put("icon", it) }
+            color?.takeIf { it.isNotBlank() }?.let { put("color", it) }
+        }
+        .put("assetType", assetType)
+        .put("currency", currency)
+        .put("scope", if (scope == "household" || scope == "shared") "household" else "personal")
+        .apply { householdId?.takeIf { it.isNotBlank() }?.let { put("householdId", it) } }
+        .put(
+            "accountIds",
+            JSONArray().apply {
+                accountIds.forEach { put(it) }
+            },
+        )
+        .put(
+            "accountVersions",
+            JSONObject().apply {
+                accountIds.forEach { accountId ->
+                    accountVersions[accountId]?.let { put(accountId, it) }
+                }
+                accountVersions.keys
+                    .filterNot { it in accountIds }
+                    .sorted()
+                    .forEach { accountId -> put(accountId, accountVersions.getValue(accountId)) }
+            },
+        )
+}
+
 internal fun AssetCategory.toUpdateJsonForApi(): JSONObject {
     return JSONObject()
         .put("name", name.take(80))
@@ -1474,6 +1736,48 @@ internal fun AssetCategory.toUpdateJsonForApi(): JSONObject {
         .apply {
             iconKey.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
             version?.let { put("version", it) }
+        }
+}
+
+internal fun SyncPushRequest.toJsonForApi(): JSONObject {
+    return JSONObject()
+        .put("deviceId", deviceId)
+        .put("clientSchemaVersion", clientSchemaVersion)
+        .put(
+            "mutations",
+            JSONArray().apply {
+                mutations.forEach { put(it.toJsonForApi()) }
+            },
+        )
+}
+
+internal fun SyncPullRequest.toJsonForApi(): JSONObject {
+    return JSONObject()
+        .put("deviceId", deviceId)
+        .put("clientSchemaVersion", clientSchemaVersion)
+        .put("cursor", cursor)
+        .put("limit", limit)
+        .apply {
+            entityTypes?.let { types ->
+                put(
+                    "entityTypes",
+                    JSONArray().apply {
+                        types.forEach { put(it) }
+                    },
+                )
+            }
+        }
+}
+
+internal fun SyncMutationRequest.toJsonForApi(): JSONObject {
+    return JSONObject()
+        .put("clientMutationId", clientMutationId)
+        .put("entityType", entityType)
+        .put("entityId", entityId)
+        .put("operation", operation)
+        .apply {
+            baseVersion?.let { put("baseVersion", it) }
+            payload?.let { put("payload", it) }
         }
 }
 
@@ -1658,6 +1962,8 @@ private fun JSONObject.planningAllocationObject(): JSONObject {
 }
 
 private fun JSONObject.optIntOrNull(name: String): Int? = if (has(name) && !isNull(name)) optInt(name) else null
+
+private fun JSONObject.optLongOrNull(name: String): Long? = if (has(name) && !isNull(name)) optLong(name) else null
 
 private fun JSONObject.optNullableString(name: String): String? {
     return optString(name).takeIf { has(name) && !isNull(name) && it.isNotBlank() && it != "null" }

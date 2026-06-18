@@ -25,18 +25,14 @@ struct PlanningAllocationRow: View {
         return localizedTargetType(allocation.targetType)
     }
 
-    private var statusText: String {
-        if let progress = allocation.progressStatus?.rawValue, !progress.isEmpty {
-            return localizedPlanningStatus(progress)
-        }
-        if allocation.targetType == .investment_asset_category && allocation.requiresAttention {
+    private var attentionText: String {
+        if allocation.targetType == .investment_asset_category {
             return "Инвестиции ниже плана"
         }
-        if allocation.targetType == .expense_category && allocation.requiresAttention {
+        if allocation.targetType == .expense_category {
             return "Расходы выше плана"
         }
-        if allocation.requiresAttention { return "Нужно внимание" }
-        return "Статус allocation ожидает факта"
+        return "Эта цель требует внимания"
     }
 
     var body: some View {
@@ -58,7 +54,7 @@ struct PlanningAllocationRow: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        Text("Факт появится после операций в этой категории")
+                        Text("Факт")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -79,29 +75,39 @@ struct PlanningAllocationRow: View {
                     }
                 }
                 Spacer()
-                Button(isEditing ? "Закрыть" : "Править") {
-                    if !isEditing {
-                        draft = PlanningAllocationDraft(
-                            targetType: allocation.targetType,
-                            targetId: allocation.targetId ?? "",
-                            allocationMode: allocation.allocationMode,
-                            allocationValue: allocation.allocationValue,
-                            recurrenceType: allocation.recurrenceType ?? .regular,
-                            isSavingsGoal: allocation.isSavingsGoal && allocation.targetType == .investment_asset_category,
-                            goalTargetAmount: allocation.goalTargetAmount ?? "",
-                            goalDueMonth: allocation.goalDueMonth ?? nextPlanningMonth(),
-                            comment: allocation.comment ?? ""
+                HStack(alignment: .center, spacing: 6) {
+                    if allocation.targetType == .investment_asset_category {
+                        IconBubble(
+                            systemName: "chart.line.uptrend.xyaxis",
+                            color: FinanceColors.investment,
+                            size: 16
                         )
+                        .accessibilityLabel("Инвестиции")
                     }
-                    isEditing.toggle()
+                    Button(isEditing ? "Закрыть" : "Править") {
+                        if !isEditing {
+                            draft = PlanningAllocationDraft(
+                                targetType: allocation.targetType,
+                                targetId: allocation.targetId ?? "",
+                                allocationMode: allocation.allocationMode,
+                                allocationValue: allocation.allocationValue,
+                                recurrenceType: allocation.recurrenceType ?? .regular,
+                                isSavingsGoal: allocation.isSavingsGoal && allocation.targetType == .investment_asset_category,
+                                goalTargetAmount: allocation.goalTargetAmount ?? "",
+                                goalDueMonth: allocation.goalDueMonth ?? nextPlanningMonth(),
+                                comment: allocation.comment ?? ""
+                            )
+                        }
+                        isEditing.toggle()
+                    }
+                    .font(.caption)
+                    .foregroundColor(FinanceColors.planningPrimary)
                 }
-                .font(.caption)
-                .foregroundColor(FinanceColors.planningPrimary)
             }
 
             if allocation.requiresAttention {
                 PlanningBanner(
-                    text: allocation.attentionReason ?? "Эта цель требует внимания",
+                    text: attentionText,
                     color: FinanceColors.warning
                 )
             }
@@ -152,6 +158,6 @@ struct PlanningAllocationRow: View {
         } else {
             valuePart = MoneyHelpers.format(allocation.calculatedAmount, currency: currency)
         }
-        return "\(typeLabel) • \(recurrenceLabel) • \(valuePart) • \(statusText)"
+        return "\(typeLabel) • \(recurrenceLabel) • \(valuePart)"
     }
 }

@@ -19,10 +19,14 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    PrimaryKeyConstraint,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -642,7 +646,17 @@ class PlanningIncomeSource(TimestampMixin, VersionedMixin, Base):
             enum_check("confirmation_state", PLANNING_INCOME_CONFIRMATION_STATES),
             name="confirmation_state_valid",
         ),
+        CheckConstraint(
+            enum_check("record_status", ACTIVE_DELETED_STATUSES),
+            name="record_status_valid",
+        ),
+        CheckConstraint(
+            "(record_status = 'active' AND deleted_at IS NULL) "
+            "OR (record_status = 'deleted' AND deleted_at IS NOT NULL)",
+            name="record_status_deleted_at_shape",
+        ),
         Index("ix_planning_income_sources_plan_id", "plan_id"),
+        Index("ix_planning_income_sources_plan_status", "plan_id", "record_status"),
         Index(
             "ix_planning_income_sources_plan_state",
             "plan_id",
@@ -664,6 +678,12 @@ class PlanningIncomeSource(TimestampMixin, VersionedMixin, Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
@@ -695,7 +715,17 @@ class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
             "OR (target_id IS NULL AND requires_attention = true)",
             name="target_attention_shape",
         ),
+        CheckConstraint(
+            enum_check("record_status", ACTIVE_DELETED_STATUSES),
+            name="record_status_valid",
+        ),
+        CheckConstraint(
+            "(record_status = 'active' AND deleted_at IS NULL) "
+            "OR (record_status = 'deleted' AND deleted_at IS NOT NULL)",
+            name="record_status_deleted_at_shape",
+        ),
         Index("ix_planning_allocations_plan_id", "plan_id"),
+        Index("ix_planning_allocations_plan_status", "plan_id", "record_status"),
         Index(
             "ix_planning_allocations_plan_attention",
             "plan_id",
@@ -735,6 +765,12 @@ class PlanningAllocation(TimestampMixin, VersionedMixin, Base):
     goal_target_amount: Mapped[Decimal | None] = mapped_column(MONEY_NUMERIC)
     goal_due_month: Mapped[date | None] = mapped_column(Date)
     created_by_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    record_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'active'"),
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Session(TimestampMixin, VersionedMixin, Base):
@@ -951,3 +987,142 @@ class OutboxEvent(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
+class SyncClient(Base):
+    __tablename__ = "sync_clients"
+    __table_args__ = (
+        PrimaryKeyConstraint("actor_user_id", "device_id", name="pk_sync_clients"),
+        CheckConstraint("length(device_id) > 0", name="device_id_not_empty"),
+        CheckConstraint("client_schema_version > 0", name="positive_client_schema_version"),
+        CheckConstraint("server_cursor >= 0", name="non_negative_server_cursor"),
+        Index("ix_sync_clients_actor_last_seen", "actor_user_id", text("last_seen_at DESC")),
+    )
+
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    device_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    server_cursor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default=text("0"),
+    )
+
+
+class SyncChange(Base):
+    __tablename__ = "sync_changes"
+    __table_args__ = (
+        CheckConstraint("seq > 0", name="positive_seq"),
+        CheckConstraint("length(entity_type) > 0", name="entity_type_not_empty"),
+        CheckConstraint("length(change_type) > 0", name="change_type_not_empty"),
+        CheckConstraint(
+            "scope_type IN ('personal', 'household', 'system')",
+            name="scope_type_valid",
+        ),
+        CheckConstraint(
+            "(scope_type = 'personal' AND owner_user_id IS NOT NULL AND household_id IS NULL) "
+            "OR (scope_type = 'household' AND household_id IS NOT NULL AND owner_user_id IS NULL) "
+            "OR (scope_type = 'system' AND owner_user_id IS NULL AND household_id IS NULL)",
+            name="sync_scope_shape",
+        ),
+        Index("ix_sync_changes_seq", "seq"),
+        Index("ix_sync_changes_entity", "entity_type", "entity_id", "seq"),
+        Index(
+            "ix_sync_changes_owner_visibility",
+            "owner_user_id",
+            "scope_type",
+            "seq",
+            postgresql_where=text("owner_user_id IS NOT NULL"),
+            sqlite_where=text("owner_user_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_sync_changes_household_visibility",
+            "household_id",
+            "scope_type",
+            "seq",
+            postgresql_where=text("household_id IS NOT NULL"),
+            sqlite_where=text("household_id IS NOT NULL"),
+        ),
+    )
+
+    seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    change_type: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_type: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
+    household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
+    entity_version: Mapped[int | None] = mapped_column(BigInteger)
+    entity_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    changed_by_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.id", nullable=True)
+    client_mutation_id: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    tombstone_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = created_timestamp()
+
+
+class SyncClientMutation(TimestampMixin, Base):
+    __tablename__ = "sync_client_mutations"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_user_id",
+            "device_id",
+            "client_mutation_id",
+            name="uq_sync_client_mutations_actor_device_client_mutation",
+        ),
+        CheckConstraint("length(device_id) > 0", name="device_id_not_empty"),
+        CheckConstraint("length(client_mutation_id) > 0", name="client_mutation_id_not_empty"),
+        CheckConstraint("length(request_hash) > 0", name="request_hash_not_empty"),
+        CheckConstraint("length(entity_type) > 0", name="entity_type_not_empty"),
+        CheckConstraint("length(operation) > 0", name="operation_not_empty"),
+        CheckConstraint("status IN ('pending', 'applied', 'failed')", name="status_valid"),
+        CheckConstraint("change_seq IS NULL OR change_seq > 0", name="positive_change_seq"),
+        ForeignKeyConstraint(
+            ["actor_user_id", "device_id"],
+            ["sync_clients.actor_user_id", "sync_clients.device_id"],
+            name="fk_sync_client_mutations_actor_device_sync_clients",
+        ),
+        Index(
+            "ix_sync_client_mutations_actor_status_created",
+            "actor_user_id",
+            "status",
+            text("created_at DESC"),
+        ),
+        Index("ix_sync_client_mutations_entity", "entity_type", "entity_id"),
+        Index(
+            "ix_sync_client_mutations_change_seq",
+            "change_seq",
+            postgresql_where=text("change_seq IS NOT NULL"),
+            sqlite_where=text("change_seq IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    actor_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    device_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_mutation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'pending'"),
+    )
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    change_seq: Mapped[int | None] = mapped_column(BigInteger)

@@ -59,6 +59,7 @@ class AccountRepository(Protocol):
     def create(
         self,
         *,
+        account_id: str | None = None,
         name: str,
         account_type: str,
         ownership_type: AccountOwnershipType,
@@ -122,6 +123,7 @@ class InMemoryAccountRepository:
     def create(
         self,
         *,
+        account_id: str | None = None,
         name: str,
         account_type: str,
         ownership_type: AccountOwnershipType,
@@ -134,8 +136,9 @@ class InMemoryAccountRepository:
         is_payment_account: bool = True,
     ) -> AccountRecord:
         now = datetime.now(UTC)
+        record_id = account_id or f"acct_{uuid4().hex}"
         record = AccountRecord(
-            id=f"acct_{uuid4().hex}",
+            id=record_id,
             name=name,
             account_type=account_type,
             ownership_type=ownership_type,
@@ -266,6 +269,7 @@ class SqlAlchemyAccountRepository:
     def create(
         self,
         *,
+        account_id: str | None = None,
         name: str,
         account_type: str,
         ownership_type: AccountOwnershipType,
@@ -279,7 +283,7 @@ class SqlAlchemyAccountRepository:
     ) -> AccountRecord:
         now = datetime.now(UTC)
         model = AccountModel(
-            id=uuid4(),
+            id=_required_uuid(account_id, "account_id") if account_id else uuid4(),
             name=name,
             account_type=account_type,
             ownership_type=ownership_type.value,

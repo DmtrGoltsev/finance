@@ -32,6 +32,7 @@ from app.db.models import (
     PlanningAllocation,
     PlanningIncomeSource,
     PlanningPlan,
+    SyncChange,
     Transaction,
     User,
 )
@@ -52,6 +53,7 @@ TABLES = [
     PlanningPlan.__table__,
     PlanningIncomeSource.__table__,
     PlanningAllocation.__table__,
+    SyncChange.__table__,
 ]
 
 
@@ -842,6 +844,66 @@ def test_income_source_rejects_non_positive_amount_before_db_flush(
 
     assert rejected_create.status_code == 422, rejected_create.text
     assert rejected_update.status_code == 422, rejected_update.text
+
+
+def test_planning_child_delete_soft_deletes_and_hides_from_plan_view(
+    planning_graph: dict[str, Any],
+) -> None:
+    owner = planning_graph["owner"]
+
+    with _client_for_actor(owner) as client:
+        created_plan = client.post(
+            "/api/v1/planning/plans",
+            json={"scope": "personal", "month": "2026-12", "currency": "RUB"},
+        )
+        assert created_plan.status_code == 201, created_plan.text
+        plan_id = created_plan.json()["data"]["id"]
+
+        created_income = client.post(
+            f"/api/v1/planning/plans/{plan_id}/income-sources",
+            json={
+                "amount": "1000.0000",
+                "source": "Salary",
+                "dayOfMonth": 15,
+            },
+        )
+        created_allocation = client.post(
+            f"/api/v1/planning/plans/{plan_id}/allocations",
+            json={
+                "targetType": "expense_category",
+                "targetId": planning_graph["owner_category_id"],
+                "allocationMode": "amount",
+                "allocationValue": "250.0000",
+            },
+        )
+        assert created_income.status_code == 201, created_income.text
+        assert created_allocation.status_code == 201, created_allocation.text
+        income_id = created_income.json()["data"]["id"]
+        allocation_id = created_allocation.json()["data"]["id"]
+
+        deleted_income = client.delete(f"/api/v1/planning/income-sources/{income_id}")
+        deleted_allocation = client.delete(f"/api/v1/planning/allocations/{allocation_id}")
+        fetched = client.get(f"/api/v1/planning/plans/{plan_id}")
+
+    assert deleted_income.status_code == 204, deleted_income.text
+    assert deleted_allocation.status_code == 204, deleted_allocation.text
+    assert fetched.status_code == 200, fetched.text
+    data = fetched.json()["data"]
+    assert data["incomeSources"] == []
+    assert data["allocations"] == []
+    assert data["summary"]["totalPlannedIncome"] == "0.0000"
+
+    with Session(planning_graph["engine"], expire_on_commit=False, future=True) as session:
+        income = session.get(PlanningIncomeSource, UUID(income_id))
+        allocation = session.get(PlanningAllocation, UUID(allocation_id))
+        assert income is not None
+        assert allocation is not None
+        assert income.record_status == "deleted"
+        assert allocation.record_status == "deleted"
+        assert income.deleted_at is not None
+        assert allocation.deleted_at is not None
+        assert int(income.version) == 2
+        assert int(allocation.version) == 2
 
 
 def test_shared_plan_authz_and_inactive_member_denials(planning_graph: dict[str, Any]) -> None:
