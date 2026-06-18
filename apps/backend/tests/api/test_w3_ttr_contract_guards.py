@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi.routing import APIRoute
-
 from app.authz import ReportMode, SourceType, TransferScopeKind
 from app.db.model_enums import SOURCE_TYPES, TRANSFER_SCOPES
 from app.main import create_app
+from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 OPENAPI_CONTRACT_PATH = REPO_ROOT / "api" / "openapi" / "openapi.yaml"
@@ -67,8 +66,8 @@ def _route_operations() -> set[tuple[str, str]]:
     application = create_app()
     operations: set[tuple[str, str]] = set()
 
-    for route in application.routes:
-        if not isinstance(route, APIRoute) or route.path_format == API_CATCH_ALL:
+    for route in iter_api_routes(application.routes):
+        if route.path_format == API_CATCH_ALL:
             continue
         for method in sorted(route.methods or ()):
             if method not in IGNORED_RUNTIME_METHODS:

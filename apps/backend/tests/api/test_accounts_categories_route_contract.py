@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.routing import APIRoute
-
 from app.main import create_app
+from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 OPENAPI_CONTRACT_PATH = REPO_ROOT / "api" / "openapi" / "openapi.yaml"
@@ -185,9 +184,7 @@ def _route_operations(*, include_schema_only: bool) -> set[tuple[str, str]]:
     application = create_app()
     operations: set[tuple[str, str]] = set()
 
-    for route in application.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in iter_api_routes(application.routes):
         if include_schema_only and not route.include_in_schema:
             continue
 
