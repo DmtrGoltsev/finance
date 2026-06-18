@@ -7,9 +7,12 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from app.api.auth_context import CurrentActor
+from app.asset_categories.repository import SqlAlchemyAssetCategoryRepository
 from app.authz import AccountOwnershipType, DenialReason, ResourceStatus
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
+from app.transactions.repository import SqlAlchemyTransactionRepository
 
 from .repository import AccountRecord, SqlAlchemyAccountRepository
 from .schemas import (
@@ -23,6 +26,7 @@ from .schemas import (
     PageInfo,
 )
 from .service import (
+    AccountConflictError,
     AccountNotFoundOrInaccessible,
     AccountService,
     AccountServiceError,
@@ -39,7 +43,12 @@ def account_service_for_request() -> Iterator[AccountService]:
         return
 
     with sync_session_scope(get_settings()) as session:
-        yield AccountService(SqlAlchemyAccountRepository(session))
+        yield AccountService(
+            SqlAlchemyAccountRepository(session),
+            SqlAlchemyTransactionRepository(session),
+            SqlAlchemyAssetCategoryRepository(session),
+            SyncChangeRecorder(session),
+        )
 
 
 AccountServiceDependency = Annotated[AccountService, Depends(account_service_for_request)]
@@ -53,6 +62,8 @@ def _account_dto(record: AccountRecord) -> AccountDto:
         ownership_type=record.ownership_type.value,
         owner_user_id=record.owner_user_id,
         household_id=record.household_id,
+        asset_category_id=record.asset_category_id,
+        is_payment_account=record.is_payment_account,
         currency=record.currency,
         initial_balance=record.initial_balance,
         current_balance=record.current_balance,
@@ -73,6 +84,7 @@ def _autocomplete_dto(record: AccountRecord) -> AccountAutocompleteDto:
         account_type=record.account_type,
         ownership_type=record.ownership_type.value,
         household_id=record.household_id,
+        is_payment_account=record.is_payment_account,
         currency=record.currency,
     )
 
@@ -110,6 +122,13 @@ def _account_error_response(error: AccountServiceError, request_id: str | None) 
             error.reason.value.upper(),
             request_id=request_id,
             message="Invalid account request.",
+        )
+    if isinstance(error, AccountConflictError):
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            error.code,
+            request_id=request_id,
+            message=error.message,
         )
 
     status_code = (

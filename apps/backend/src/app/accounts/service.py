@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
+from app.asset_categories.repository import AssetCategoryRepository
+from app.asset_categories.repository import repository as asset_category_repository
+from app.asset_categories.service import (
+    asset_category_in_account_scope,
+    can_read_asset_category,
+)
 from app.authz import (
     Account as AuthzAccount,
 )
@@ -14,6 +20,9 @@ from app.authz import (
     canMutateAccount,
     canReadAccount,
 )
+from app.sync.domain_changes import SyncChangeRecorder
+from app.transactions.repository import TransactionRepository
+from app.transactions.repository import repository as transaction_repository
 
 from .repository import AccountRecord, AccountRepository, account_repository
 from .schemas import AccountCreateRequest, AccountUpdateRequest
@@ -31,6 +40,13 @@ class AccountNotFoundOrInaccessible(AccountServiceError):
 
 class AccountValidationError(AccountServiceError):
     pass
+
+
+class AccountConflictError(AccountServiceError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(DenialReason.ACTION_NOT_ALLOWED)
+        self.code = code
+        self.message = message
 
 
 def _authz_account(record: AccountRecord) -> AuthzAccount:
@@ -58,9 +74,22 @@ def _is_visible(actor: Actor, record: AccountRecord) -> bool:
     return canReadAccount(actor, _authz_account(record)).allowed
 
 
+CONFLICTING_UPDATE_CODE = "CONFLICTING_UPDATE"
+CURRENCY_IMMUTABLE_CODE = "ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS"
+
+
 class AccountService:
-    def __init__(self, repository: AccountRepository = account_repository) -> None:
+    def __init__(
+        self,
+        repository: AccountRepository = account_repository,
+        transactions: TransactionRepository = transaction_repository,
+        asset_categories: AssetCategoryRepository = asset_category_repository,
+        sync_change_recorder: SyncChangeRecorder | None = None,
+    ) -> None:
         self._repository = repository
+        self._transactions = transactions
+        self._asset_categories = asset_categories
+        self._sync_change_recorder = sync_change_recorder
 
     def list_accounts(
         self,
@@ -118,7 +147,13 @@ class AccountService:
         )
         return records
 
-    def create_account(self, *, actor: Actor, request: AccountCreateRequest) -> AccountRecord:
+    def create_account(
+        self,
+        *,
+        actor: Actor,
+        request: AccountCreateRequest,
+        account_id: str | None = None,
+    ) -> AccountRecord:
         if actor.user_id is None:
             raise AccountValidationError(DenialReason.UNAUTHENTICATED)
 
@@ -134,7 +169,17 @@ class AccountService:
             owner_user_id = None
             household_id = request.household_id
 
-        return self._repository.create(
+        asset_category_id = self._validated_asset_category_id(
+            actor=actor,
+            asset_category_id=request.asset_category_id,
+            ownership_type=ownership_type.value,
+            owner_user_id=owner_user_id,
+            household_id=household_id,
+            currency=request.currency,
+        )
+
+        record = self._repository.create(
+            account_id=account_id,
             name=request.name,
             account_type=str(request.account_type),
             ownership_type=ownership_type,
@@ -143,7 +188,11 @@ class AccountService:
             created_by_user_id=actor.user_id,
             owner_user_id=owner_user_id,
             household_id=household_id,
+            asset_category_id=asset_category_id,
+            is_payment_account=request.is_payment_account,
         )
+        self._record_sync_change(actor=actor, operation="create", record=record)
+        return record
 
     def get_account(self, *, actor: Actor, account_id: str) -> AccountRecord:
         record = self._repository.get(account_id)
@@ -162,36 +211,106 @@ class AccountService:
         decision = canMutateAccount(actor, _authz_account(record))
         if not decision.allowed:
             raise AccountServiceError(decision.reason or DenialReason.ACTION_NOT_ALLOWED)
+        if request.version is not None and request.version != record.version:
+            raise AccountConflictError(CONFLICTING_UPDATE_CODE, "Conflicting update.")
 
         next_record = record
         if request.name is not None:
             next_record = replace(next_record, name=request.name)
+        if request.current_balance is not None:
+            next_record = replace(next_record, current_balance=Decimal(request.current_balance))
+        if request.currency is not None and request.currency != record.currency:
+            if self._transactions.has_for_account(record.id):
+                raise AccountConflictError(
+                    CURRENCY_IMMUTABLE_CODE,
+                    "Account currency cannot be changed after transactions exist.",
+                )
+            next_record = replace(next_record, currency=request.currency)
         if request.account_type is not None:
             next_record = replace(next_record, account_type=str(request.account_type))
+        if request.is_payment_account is not None:
+            next_record = replace(next_record, is_payment_account=request.is_payment_account)
+        if "asset_category_id" in request.model_fields_set:
+            asset_category_id = self._validated_asset_category_id(
+                actor=actor,
+                asset_category_id=request.asset_category_id,
+                ownership_type=record.ownership_type.value,
+                owner_user_id=record.owner_user_id,
+                household_id=record.household_id,
+                currency=next_record.currency,
+            )
+            next_record = replace(next_record, asset_category_id=asset_category_id)
         if request.status is not None:
             next_record = _with_status(next_record, ResourceStatus(request.status))
 
-        return self._repository.save(next_record)
+        saved = self._repository.save(next_record)
+        self._record_sync_change(actor=actor, operation="update", record=saved)
+        return saved
 
     def delete_account(self, *, actor: Actor, account_id: str) -> None:
         record = self.get_account(actor=actor, account_id=account_id)
         decision = canMutateAccount(actor, _authz_account(record))
         if not decision.allowed:
             raise AccountServiceError(decision.reason or DenialReason.ACTION_NOT_ALLOWED)
-        self._repository.save(_with_status(record, ResourceStatus.DELETED))
+        deleted = self._repository.save(_with_status(record, ResourceStatus.DELETED))
+        self._record_sync_change(actor=actor, operation="delete", record=deleted)
 
     def archive_account(self, *, actor: Actor, account_id: str) -> AccountRecord:
         record = self.get_account(actor=actor, account_id=account_id)
         decision = canMutateAccount(actor, _authz_account(record))
         if not decision.allowed:
             raise AccountServiceError(decision.reason or DenialReason.ACTION_NOT_ALLOWED)
-        return self._repository.save(_with_status(record, ResourceStatus.ARCHIVED))
+        archived = self._repository.save(_with_status(record, ResourceStatus.ARCHIVED))
+        self._record_sync_change(actor=actor, operation="archive", record=archived)
+        return archived
 
     def restore_account(self, *, actor: Actor, account_id: str) -> AccountRecord:
         record = self.get_account(actor=actor, account_id=account_id)
         if record.status != ResourceStatus.ARCHIVED:
             raise AccountServiceError(DenialReason.ACTION_NOT_ALLOWED)
-        return self._repository.save(_with_status(record, ResourceStatus.ACTIVE))
+        restored = self._repository.save(_with_status(record, ResourceStatus.ACTIVE))
+        self._record_sync_change(actor=actor, operation="restore", record=restored)
+        return restored
+
+    def _record_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: AccountRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_account_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+        )
+
+    def _validated_asset_category_id(
+        self,
+        *,
+        actor: Actor,
+        asset_category_id: str | None,
+        ownership_type: str,
+        owner_user_id: str | None,
+        household_id: str | None,
+        currency: str,
+    ) -> str | None:
+        if asset_category_id is None:
+            return None
+        asset_category = self._asset_categories.get(asset_category_id)
+        if asset_category is None or not can_read_asset_category(actor, asset_category):
+            raise AccountNotFoundOrInaccessible()
+        if not asset_category_in_account_scope(
+            asset_category,
+            ownership_type=ownership_type,
+            owner_user_id=owner_user_id,
+            household_id=household_id,
+            currency=currency,
+        ):
+            raise AccountNotFoundOrInaccessible()
+        return asset_category.id
 
 
 def _decode_cursor(cursor: str | None) -> int:

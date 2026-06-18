@@ -7,15 +7,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Protocol
+from uuid import uuid4
 
 from app.authz import Actor, Membership, MembershipStatus
 from app.config import get_settings
 from app.db.session import sync_session_factory_for_settings
 
-from .db_stores import SqlAlchemyCredentialStore, SqlAlchemySessionTokenStore
+from .db_stores import (
+    DuplicateUserEmailError,
+    SqlAlchemyCredentialStore,
+    SqlAlchemySessionTokenStore,
+)
 from .identifiers import canonical_membership, canonical_uuid_text, normalize_email
 from .models import AuthClientKind, AuthUserRecord, SessionStorageRecord, TokenRecordStatus
-from .schemas import AuthTransport, LoginRequest, NeutralPublicResponse
+from .schemas import AuthTransport, LoginRequest, NeutralPublicResponse, RegistrationRequest
 from .security import (
     AuthSecurityConfigurationError,
     HmacSha256TokenHashingBackend,
@@ -33,6 +38,16 @@ ACTIVE_RECORD_STATUS = "active"
 
 class CredentialStore(Protocol):
     """Storage interface for credential records and actor memberships."""
+
+    def create_user(
+        self,
+        *,
+        email_normalized: str,
+        password_hash: str,
+        display_name: str | None,
+        created_at: datetime,
+    ) -> AuthUserRecord:
+        """Create an active user with a pre-hashed password."""
 
     def get_user_by_email_normalized(self, email_normalized: str) -> AuthUserRecord | None:
         """Return one active-or-inactive user record for a normalized email."""
@@ -70,6 +85,31 @@ class InMemoryCredentialStore:
         self._by_email[canonical_user.email_normalized] = canonical_user
         return canonical_user
 
+    def create_user(
+        self,
+        *,
+        email_normalized: str,
+        password_hash: str,
+        display_name: str | None,
+        created_at: datetime,
+    ) -> AuthUserRecord:
+        del display_name, created_at
+        normalized_email = normalize_email(email_normalized)
+        if normalized_email in self._by_email:
+            raise DuplicateUserEmailError("registration email is already in use")
+
+        return self.upsert_user(
+            AuthUserRecord(
+                id=canonical_uuid_text(uuid4()),
+                email_normalized=normalized_email,
+                password_hash=password_hash,
+                auth_status=ACTIVE_AUTH_STATUS,
+                record_status=ACTIVE_RECORD_STATUS,
+                session_version=1,
+                memberships=(),
+            )
+        )
+
     def get_user_by_email_normalized(self, email_normalized: str) -> AuthUserRecord | None:
         return self._by_email.get(normalize_email(email_normalized))
 
@@ -91,6 +131,20 @@ class AuthLoginResult:
 
     @property
     def authenticated(self) -> bool:
+        return self.issued_session is not None and self.actor is not None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthRegistrationResult:
+    """Registration outcome that carries plaintext tokens only at the response boundary."""
+
+    issued_session: IssuedSession | None = None
+    actor: Actor | None = None
+    conflict: bool = False
+    unavailable: bool = False
+
+    @property
+    def registered(self) -> bool:
         return self.issued_session is not None and self.actor is not None
 
 
@@ -157,6 +211,49 @@ class AuthSessionService:
             request_id=request_id,
         )
         return AuthLoginResult(issued_session=issued, actor=actor)
+
+    def register(
+        self,
+        request: RegistrationRequest,
+        *,
+        request_id: str | None = None,
+    ) -> AuthRegistrationResult:
+        if not self.configured:
+            return AuthRegistrationResult(unavailable=True)
+
+        assert self.credentials is not None
+        assert self.password_hasher is not None
+        try:
+            user = self.credentials.create_user(
+                email_normalized=normalize_email(request.email),
+                password_hash=self.password_hasher.hash_password(request.password),
+                display_name=request.display_name,
+                created_at=datetime.now(UTC),
+            )
+        except DuplicateUserEmailError:
+            return AuthRegistrationResult(conflict=True)
+
+        token_service = self._token_service()
+        match request.transport:
+            case AuthTransport.ANDROID_BEARER:
+                issued = token_service.issue_android_tokens(
+                    user_id=user.id,
+                    session_version=user.session_version,
+                )
+            case AuthTransport.PWA_COOKIE:
+                issued = token_service.issue_pwa_cookie_session(
+                    user_id=user.id,
+                    session_version=user.session_version,
+                )
+            case _:
+                return AuthRegistrationResult(unavailable=True)
+
+        actor = actor_from_user_record(
+            user,
+            session_id=issued.storage_record.id,
+            request_id=request_id,
+        )
+        return AuthRegistrationResult(issued_session=issued, actor=actor)
 
     def actor_for_bearer_token(
         self,

@@ -1,0 +1,631 @@
+name: Finance HexCore Production CI/CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Optional release id. Defaults to UTC timestamp plus commit SHA."
+        required: false
+        type: string
+      deploy_frontend:
+        description: "Deploy frontend artifact to /var/www/finance/releases and flip /var/www/finance/current."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      deploy_backend:
+        description: "Deploy backend artifact to /opt/finance/releases and flip /opt/finance/current."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      run_migrations:
+        description: "Run Alembic upgrade from the staged backend release using /etc/finance/backend.env."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      expected_current_revision:
+        description: "Required when run_migrations=true. Use an exact revision, or base for an empty DB."
+        required: false
+        type: string
+      target_revision:
+        description: "Required when run_migrations=true. Use the exact target revision, not head."
+        required: false
+        type: string
+      backup_proof:
+        description: "Required when run_migrations=true. Operator backup evidence id or ticket."
+        required: false
+        type: string
+      restart_backend:
+        description: "Restart finance-backend.service after backend symlink flip."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      confirm_production_deploy:
+        description: "Required for any prod deploy or migration. Enter finance-production."
+        required: false
+        type: string
+      confirm_backend_restart:
+        description: "Required when restart_backend=true. Enter finance-backend.service."
+        required: false
+        type: string
+  push:
+    branches:
+      - "**release**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finance-hexcore-prod-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  FINANCE_PWA_WORKDIR: apps/web-pwa
+  FINANCE_PWA_BASE_PATH: /finance/
+  FINANCE_PWA_API_BASE_URL: /finance-api
+  FINANCE_FRONTEND_BASE: /var/www/finance
+  FINANCE_BACKEND_BASE: /opt/finance
+  FINANCE_BACKEND_SERVICE: finance-backend.service
+  FINANCE_BACKEND_ENV_FILE: /etc/finance/backend.env
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+
+    steps:
+      - name: Resolve release id
+        id: release
+        shell: bash
+        env:
+          FINANCE_INPUT_RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          raw_release_id="${FINANCE_INPUT_RELEASE_ID}"
+          if [ -n "${raw_release_id}" ]; then
+            release_id="${raw_release_id}"
+          else
+            release_id="$(date -u +'%Y%m%dT%H%M%SZ')-${GITHUB_SHA::8}"
+          fi
+
+          if [[ ! "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::release_id must be 1-128 chars and contain only letters, numbers, dot, underscore, and dash"
+            exit 1
+          fi
+
+          echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release id ${release_id}"
+
+  validate-prod-inputs:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      run_migrations: ${{ steps.validate.outputs.run_migrations }}
+      expected_current_revision: ${{ steps.validate.outputs.expected_current_revision }}
+      target_revision: ${{ steps.validate.outputs.target_revision }}
+      restart_backend: ${{ steps.validate.outputs.restart_backend }}
+
+    steps:
+      - name: Validate production gates
+        id: validate
+        shell: bash
+        env:
+          FINANCE_INPUT_DEPLOY_FRONTEND: ${{ inputs.deploy_frontend }}
+          FINANCE_INPUT_DEPLOY_BACKEND: ${{ inputs.deploy_backend }}
+          FINANCE_INPUT_RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+          FINANCE_INPUT_RESTART_BACKEND: ${{ inputs.restart_backend }}
+          FINANCE_INPUT_CONFIRM_PRODUCTION_DEPLOY: ${{ inputs.confirm_production_deploy }}
+          FINANCE_INPUT_CONFIRM_BACKEND_RESTART: ${{ inputs.confirm_backend_restart }}
+          FINANCE_INPUT_EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+          FINANCE_INPUT_TARGET_REVISION: ${{ inputs.target_revision }}
+          FINANCE_INPUT_BACKUP_PROOF: ${{ inputs.backup_proof }}
+        run: |
+          set -euo pipefail
+          deploy_frontend="${FINANCE_INPUT_DEPLOY_FRONTEND}"
+          deploy_backend="${FINANCE_INPUT_DEPLOY_BACKEND}"
+          run_migrations="${FINANCE_INPUT_RUN_MIGRATIONS}"
+          restart_backend="${FINANCE_INPUT_RESTART_BACKEND}"
+          confirm_production_deploy="${FINANCE_INPUT_CONFIRM_PRODUCTION_DEPLOY}"
+          confirm_backend_restart="${FINANCE_INPUT_CONFIRM_BACKEND_RESTART}"
+          expected_current_revision="${FINANCE_INPUT_EXPECTED_CURRENT_REVISION}"
+          target_revision="${FINANCE_INPUT_TARGET_REVISION}"
+          backup_proof="${FINANCE_INPUT_BACKUP_PROOF}"
+
+          for value_name in deploy_frontend deploy_backend run_migrations restart_backend; do
+            value="${!value_name}"
+            if [ "${value}" != "true" ] && [ "${value}" != "false" ]; then
+              echo "::error::${value_name} must be either true or false"
+              exit 1
+            fi
+          done
+
+          if [ -n "${confirm_production_deploy}" ] && [[ ! "${confirm_production_deploy}" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo "::error::confirm_production_deploy contains unsafe characters"
+            exit 1
+          fi
+
+          if [ -n "${confirm_backend_restart}" ] && [[ ! "${confirm_backend_restart}" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo "::error::confirm_backend_restart contains unsafe characters"
+            exit 1
+          fi
+
+          if [ -n "${expected_current_revision}" ] && [[ ! "${expected_current_revision}" =~ ^(base|[A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]; then
+            echo "::error::expected_current_revision must be base or an exact safe revision token"
+            exit 1
+          fi
+
+          if [ -n "${target_revision}" ] && [[ ! "${target_revision}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::target_revision must be an exact safe revision token"
+            exit 1
+          fi
+
+          if [ -n "${backup_proof}" ] && [[ ! "${backup_proof}" =~ ^[A-Za-z0-9][A-Za-z0-9._:@/+,=-]{7,127}$ ]]; then
+            echo "::error::backup_proof must be 8-128 safe chars: letters, numbers, dot, underscore, colon, at, slash, plus, comma, equals, and dash"
+            exit 1
+          fi
+
+          if [ "${restart_backend}" = "true" ] && [ "${deploy_backend}" != "true" ]; then
+            echo "::error::restart_backend=true requires deploy_backend=true"
+            exit 1
+          fi
+
+          if [ "${run_migrations}" = "true" ] && [ "${deploy_backend}" != "true" ]; then
+            echo "::error::run_migrations=true requires deploy_backend=true"
+            exit 1
+          fi
+
+          if [ "${deploy_frontend}" = "true" ] || [ "${deploy_backend}" = "true" ] || [ "${run_migrations}" = "true" ]; then
+            if [ "${confirm_production_deploy}" != "finance-production" ]; then
+              echo "::error::confirm_production_deploy must be finance-production"
+              exit 1
+            fi
+          fi
+
+          if [ "${restart_backend}" = "true" ] && [ "${confirm_backend_restart}" != "${FINANCE_BACKEND_SERVICE}" ]; then
+            echo "::error::confirm_backend_restart must be ${FINANCE_BACKEND_SERVICE}"
+            exit 1
+          fi
+
+          if [ "${run_migrations}" = "true" ]; then
+            for value_name in expected_current_revision target_revision backup_proof; do
+              value="${!value_name}"
+              if [ -z "${value}" ]; then
+                echo "::error::${value_name} is required when run_migrations=true"
+                exit 1
+              fi
+            done
+
+            target_revision_lower="${target_revision,,}"
+            if [ "${target_revision_lower}" = "head" ] || [ "${target_revision_lower}" = "heads" ]; then
+              echo "::error::target_revision must be an exact safe revision, not head"
+              exit 1
+            fi
+
+            if [ "${backup_proof}" = "none" ] || [ "${backup_proof}" = "n/a" ] || [ ${#backup_proof} -lt 8 ]; then
+              echo "::error::backup_proof must identify a real backup artifact or ticket"
+              exit 1
+            fi
+          fi
+
+          {
+            echo "run_migrations=${run_migrations}"
+            echo "expected_current_revision=${expected_current_revision}"
+            echo "target_revision=${target_revision}"
+            echo "restart_backend=${restart_backend}"
+          } >> "${GITHUB_OUTPUT}"
+
+  frontend-ci-package:
+    runs-on: ubuntu-latest
+    needs: prepare-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-pwa/package-lock.json
+
+      - name: Install PWA dependencies
+        working-directory: ${{ env.FINANCE_PWA_WORKDIR }}
+        run: npm ci
+
+      - name: Run PWA tests
+        working-directory: ${{ env.FINANCE_PWA_WORKDIR }}
+        run: npm test
+
+      - name: Build production PWA
+        working-directory: ${{ env.FINANCE_PWA_WORKDIR }}
+        env:
+          VITE_BASE_PATH: ${{ env.FINANCE_PWA_BASE_PATH }}
+          VITE_API_BASE_URL: ${{ env.FINANCE_PWA_API_BASE_URL }}
+        run: npm run build
+
+      - name: Verify production PWA output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f apps/web-pwa/dist/index.html
+          test -f apps/web-pwa/dist/manifest.webmanifest
+          grep -R "/finance/" apps/web-pwa/dist/index.html apps/web-pwa/dist/manifest.webmanifest
+          grep -R "/finance-api" apps/web-pwa/dist/assets
+
+      - name: Package frontend artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="${{ needs.prepare-release.outputs.release_id }}"
+          package_dir="finance-frontend-${release_id}"
+          mkdir -p "${package_dir}/dist"
+          cp -a apps/web-pwa/dist/. "${package_dir}/dist/"
+
+          {
+            echo "component=frontend"
+            echo "release_id=${release_id}"
+            echo "commit_sha=${GITHUB_SHA}"
+            echo "source_ref=${GITHUB_REF_NAME}"
+            echo "base_path=${FINANCE_PWA_BASE_PATH}"
+            echo "api_base_url=${FINANCE_PWA_API_BASE_URL}"
+            echo "created_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > "${package_dir}/release-manifest.txt"
+
+          find "${package_dir}/dist" -type f -print0 | sort -z | xargs -0 sha256sum > "${package_dir}/frontend.sha256"
+          tar -czf "${package_dir}.tar.gz" "${package_dir}"
+          sha256sum "${package_dir}.tar.gz" > "${package_dir}.tar.gz.sha256"
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-frontend-${{ needs.prepare-release.outputs.release_id }}
+          path: |
+            finance-frontend-${{ needs.prepare-release.outputs.release_id }}.tar.gz
+            finance-frontend-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
+          retention-days: 14
+
+  backend-ci-package:
+    runs-on: ubuntu-latest
+    needs: prepare-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dev dependencies
+        run: |
+          python -m pip install --upgrade pip build
+          python -m pip install -e "apps/backend[dev]"
+
+      - name: Run backend lint
+        working-directory: apps/backend
+        run: python -m ruff check src tests ../../db/migrations
+
+      - name: Run backend tests
+        working-directory: apps/backend
+        run: python -m pytest
+
+      - name: Build backend wheel
+        working-directory: apps/backend
+        run: python -m build --wheel
+
+      - name: Package backend artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="${{ needs.prepare-release.outputs.release_id }}"
+          package_dir="finance-backend-${release_id}"
+          mkdir -p "${package_dir}/apps/backend" "${package_dir}/db"
+          cp -a apps/backend/dist "${package_dir}/apps/backend/dist"
+          cp -a apps/backend/src "${package_dir}/apps/backend/src"
+          cp apps/backend/pyproject.toml apps/backend/alembic.ini apps/backend/README.md "${package_dir}/apps/backend/"
+          cp -a db/migrations "${package_dir}/db/migrations"
+
+          {
+            echo "component=backend"
+            echo "release_id=${release_id}"
+            echo "commit_sha=${GITHUB_SHA}"
+            echo "source_ref=${GITHUB_REF_NAME}"
+            echo "service=${FINANCE_BACKEND_SERVICE}"
+            echo "host_env_file=${FINANCE_BACKEND_ENV_FILE}"
+            echo "created_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > "${package_dir}/release-manifest.txt"
+
+          find "${package_dir}" -type f ! -name "backend.sha256" -print0 | sort -z | xargs -0 sha256sum > "${package_dir}/backend.sha256"
+          tar -czf "${package_dir}.tar.gz" "${package_dir}"
+          sha256sum "${package_dir}.tar.gz" > "${package_dir}.tar.gz.sha256"
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-backend-${{ needs.prepare-release.outputs.release_id }}
+          path: |
+            finance-backend-${{ needs.prepare-release.outputs.release_id }}.tar.gz
+            finance-backend-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
+          retention-days: 14
+
+  deploy-frontend:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_frontend == 'true'
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - validate-prod-inputs
+      - frontend-ci-package
+    environment: production
+
+    steps:
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: finance-frontend-${{ needs.prepare-release.outputs.release_id }}
+
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Deploy frontend artifact to HexCore
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          artifact="finance-frontend-${FINANCE_RELEASE_ID}.tar.gz"
+          remote_tmp="/tmp/${artifact}"
+          ssh_opts=(
+            -p "${HEXCORE_PROD_SSH_PORT}"
+            -i "${ssh_key}"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="${known_hosts}"
+            -o StrictHostKeyChecking=yes
+          )
+
+          sha256sum -c "${artifact}.sha256"
+          scp -P "${HEXCORE_PROD_SSH_PORT}" \
+            -i "${ssh_key}" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="${known_hosts}" \
+            -o StrictHostKeyChecking=yes \
+            "${artifact}" \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}:${remote_tmp}"
+
+          ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_FRONTEND_BASE='${FINANCE_FRONTEND_BASE}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "${FINANCE_RELEASE_ID}" in
+            ""|*[!A-Za-z0-9._-]*)
+              echo "Unsafe FINANCE_RELEASE_ID"
+              exit 1
+              ;;
+          esac
+
+          base="${FINANCE_FRONTEND_BASE}"
+          releases="${base}/releases"
+          current="${base}/current"
+          release_dir="${releases}/${FINANCE_RELEASE_ID}"
+          tmp_extract="$(mktemp -d /tmp/finance-frontend.XXXXXX)"
+          cleanup() {
+            rm -rf "${tmp_extract}" "${FINANCE_REMOTE_TMP}"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${releases}"
+          tar -xzf "${FINANCE_REMOTE_TMP}" -C "${tmp_extract}"
+          artifact_root="${tmp_extract}/finance-frontend-${FINANCE_RELEASE_ID}"
+          test -f "${artifact_root}/dist/index.html"
+          test -f "${artifact_root}/dist/manifest.webmanifest"
+
+          if [ -e "${current}" ] && [ ! -L "${current}" ]; then
+            echo "${current} exists and is not a symlink; perform one-time cutover before CI/CD deploy"
+            exit 1
+          fi
+
+          if [ -e "${release_dir}" ]; then
+            echo "${release_dir} already exists"
+            exit 1
+          fi
+
+          mkdir -p "${release_dir}"
+          cp -a "${artifact_root}/dist/." "${release_dir}/"
+          cp "${artifact_root}/frontend.sha256" "${release_dir}/.frontend.sha256"
+          cp "${artifact_root}/release-manifest.txt" "${release_dir}/.release-manifest.txt"
+
+          ln -sfnT "${release_dir}" "${current}.next"
+          mv -Tf "${current}.next" "${current}"
+          test "$(readlink -f "${current}")" = "${release_dir}"
+
+          curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null
+          curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null
+          REMOTE
+
+  deploy-backend:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_backend == 'true'
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - validate-prod-inputs
+      - backend-ci-package
+    environment: production
+
+    steps:
+      - name: Download backend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: finance-backend-${{ needs.prepare-release.outputs.release_id }}
+
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Deploy backend artifact to HexCore
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+          FINANCE_RUN_MIGRATIONS: ${{ needs.validate-prod-inputs.outputs.run_migrations }}
+          FINANCE_EXPECTED_CURRENT_REVISION: ${{ needs.validate-prod-inputs.outputs.expected_current_revision }}
+          FINANCE_TARGET_REVISION: ${{ needs.validate-prod-inputs.outputs.target_revision }}
+          FINANCE_RESTART_BACKEND: ${{ needs.validate-prod-inputs.outputs.restart_backend }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          artifact="finance-backend-${FINANCE_RELEASE_ID}.tar.gz"
+          remote_tmp="/tmp/${artifact}"
+          ssh_opts=(
+            -p "${HEXCORE_PROD_SSH_PORT}"
+            -i "${ssh_key}"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="${known_hosts}"
+            -o StrictHostKeyChecking=yes
+          )
+
+          sha256sum -c "${artifact}.sha256"
+          scp -P "${HEXCORE_PROD_SSH_PORT}" \
+            -i "${ssh_key}" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="${known_hosts}" \
+            -o StrictHostKeyChecking=yes \
+            "${artifact}" \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}:${remote_tmp}"
+
+          ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_RUN_MIGRATIONS='${FINANCE_RUN_MIGRATIONS}' FINANCE_EXPECTED_CURRENT_REVISION='${FINANCE_EXPECTED_CURRENT_REVISION}' FINANCE_TARGET_REVISION='${FINANCE_TARGET_REVISION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "${FINANCE_RELEASE_ID}" in
+            ""|*[!A-Za-z0-9._-]*)
+              echo "Unsafe FINANCE_RELEASE_ID"
+              exit 1
+              ;;
+          esac
+
+          base="${FINANCE_BACKEND_BASE}"
+          releases="${base}/releases"
+          current="${base}/current"
+          release_dir="${releases}/${FINANCE_RELEASE_ID}"
+          tmp_extract="$(mktemp -d /tmp/finance-backend.XXXXXX)"
+          cleanup() {
+            rm -rf "${tmp_extract}" "${FINANCE_REMOTE_TMP}"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${releases}"
+          tar -xzf "${FINANCE_REMOTE_TMP}" -C "${tmp_extract}"
+          artifact_root="${tmp_extract}/finance-backend-${FINANCE_RELEASE_ID}"
+          test -d "${artifact_root}/apps/backend/dist"
+          test -d "${artifact_root}/db/migrations"
+
+          if [ -e "${current}" ] && [ ! -L "${current}" ]; then
+            echo "${current} exists and is not a symlink; perform one-time cutover before CI/CD deploy"
+            exit 1
+          fi
+
+          if [ -e "${release_dir}" ]; then
+            echo "${release_dir} already exists"
+            exit 1
+          fi
+
+          mkdir -p "${release_dir}/package"
+          cp -a "${artifact_root}/." "${release_dir}/package/"
+          cp "${artifact_root}/backend.sha256" "${release_dir}/.backend.sha256"
+          cp "${artifact_root}/release-manifest.txt" "${release_dir}/.release-manifest.txt"
+
+          python3.12 -m venv "${release_dir}/venv"
+          "${release_dir}/venv/bin/python" -m pip install --upgrade pip
+          "${release_dir}/venv/bin/python" -m pip install "${release_dir}"/package/apps/backend/dist/*.whl
+
+          if [ "${FINANCE_RUN_MIGRATIONS}" = "true" ]; then
+            test -f "${FINANCE_BACKEND_ENV_FILE}"
+            set -a
+            . "${FINANCE_BACKEND_ENV_FILE}"
+            set +a
+
+            cd "${release_dir}/package/apps/backend"
+            current_revision="$("${release_dir}/venv/bin/python" -m alembic -c alembic.ini current | awk '/^[A-Za-z0-9_]+/ {print $1}' | tail -n 1)"
+            if [ -z "${current_revision}" ]; then
+              current_revision="base"
+            fi
+
+            if [ "${current_revision}" != "${FINANCE_EXPECTED_CURRENT_REVISION}" ]; then
+              echo "Alembic current revision mismatch"
+              exit 1
+            fi
+
+            "${release_dir}/venv/bin/python" -m alembic -c alembic.ini upgrade "${FINANCE_TARGET_REVISION}"
+            after_revision="$("${release_dir}/venv/bin/python" -m alembic -c alembic.ini current | awk '/^[A-Za-z0-9_]+/ {print $1}' | tail -n 1)"
+            if [ "${after_revision}" != "${FINANCE_TARGET_REVISION}" ]; then
+              echo "Alembic target revision mismatch after upgrade"
+              exit 1
+            fi
+          fi
+
+          ln -sfnT "${release_dir}" "${current}.next"
+          mv -Tf "${current}.next" "${current}"
+          test "$(readlink -f "${current}")" = "${release_dir}"
+
+          if [ "${FINANCE_RESTART_BACKEND}" = "true" ]; then
+            systemctl restart "${FINANCE_BACKEND_SERVICE}"
+          else
+            echo "Backend release staged and symlinked; service restart skipped by input."
+          fi
+
+          curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null
+          curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null
+          REMOTE

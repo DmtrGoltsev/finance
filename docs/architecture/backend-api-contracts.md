@@ -4,7 +4,7 @@
 
 Документ фиксирует контракт backend API для Wave 1 MVP. Он не заменяет `access-model.md`, `security-baseline.md` и `privacy-baseline.md`: здесь описаны routes, DTO, ошибки и authz-предикаты, а детальная реализация проверок остается задачей W1-03.
 
-MVP поддерживает только ручной ввод: `sourceType = manual`. Импорт файлов, банковские API, SMS/push, банковские и брокерские credentials, внешние платежи и автоматическая синхронизация не входят в API surface MVP.
+MVP поддерживает ручной ввод: `sourceType = manual`. Импорт файлов, банковские API, SMS/push-интеграции, перехват SMS/push/notifications, банковские и брокерские credentials, внешние платежи и автоматическая синхронизация не входят в API surface MVP. Capture drafts являются отдельной draft-only surface: user-initiated OCR из выбранного скриншота, Android on-device без screenshot upload, PWA/iOS browser temporary self-hosted backend OCR, no persistent screenshot/raw OCR/raw SMS/push/notification body server-side, structured draft with `idempotencyKey`/`evidenceHash`, transaction только после user confirm/edit.
 
 Канонические правила wire contract:
 
@@ -27,7 +27,7 @@ MVP поддерживает только ручной ввод: `sourceType = m
 5. **Нейтральные ошибки доступа.** API не подтверждает существование недоступного объекта, чужого email, invite token, reset token, account, category, transaction или household.
 6. **No hidden counts.** Ответы не возвращают `hiddenCount`, `filteredOutCount`, global `totalCount` до access filter или сообщения вида "найдено N, доступно M".
 7. **Sensitive data minimization.** Errors, logs, audit и telemetry не содержат суммы, остатки, описания операций, названия счетов/категорий, email, invite/reset/session tokens.
-8. **Manual source only.** Создание `Transaction` в MVP принимает только `sourceType = manual`; post-MVP enum values зарезервированы, но endpoints для них отсутствуют.
+8. **Manual or confirmed draft only.** Создание `Transaction` в MVP принимает `sourceType = manual`; post-MVP capture draft не создает transaction напрямую и становится manual-equivalent transaction только после user confirm/edit.
 
 ## 3. Общие DTO и ошибки
 

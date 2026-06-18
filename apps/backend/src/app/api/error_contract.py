@@ -16,6 +16,7 @@ ERROR_CODE_BY_STATUS = {
     status.HTTP_401_UNAUTHORIZED: "AUTHENTICATION_REQUIRED",
     status.HTTP_403_FORBIDDEN: "FORBIDDEN",
     status.HTTP_404_NOT_FOUND: "RESOURCE_NOT_FOUND_OR_NOT_ACCESSIBLE",
+    status.HTTP_429_TOO_MANY_REQUESTS: "TOO_MANY_REQUESTS",
     422: "VALIDATION_FAILED",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "INTERNAL_ERROR",
 }
@@ -25,6 +26,7 @@ ERROR_MESSAGE_BY_STATUS = {
     status.HTTP_401_UNAUTHORIZED: "Authentication required.",
     status.HTTP_403_FORBIDDEN: "Forbidden.",
     status.HTTP_404_NOT_FOUND: "Resource not found or not accessible.",
+    status.HTTP_429_TOO_MANY_REQUESTS: "Too many requests.",
     422: "Validation failed.",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal server error.",
 }
@@ -61,6 +63,7 @@ def error_response(
     code: str | None = None,
     message: str | None = None,
     details: list[dict[str, str]] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -70,6 +73,7 @@ def error_response(
             request_id=request_id,
             details=details,
         ),
+        headers=headers,
     )
 
 

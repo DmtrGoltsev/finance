@@ -23,7 +23,7 @@ from app.categories.schemas import CategoryScope, CategoryType
 from app.categories.schemas import RecordStatus as CategoryRecordStatus
 from app.categories.service import CategoryService
 from app.db.base import Base
-from app.db.models import Account, Category, Household, User
+from app.db.models import Account, AccountBalanceSnapshot, Category, Household, User
 from app.db.models import Membership as DbMembership
 
 BASE_TIME = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
@@ -32,6 +32,7 @@ SLICE_TABLES = [
     Household.__table__,
     DbMembership.__table__,
     Account.__table__,
+    AccountBalanceSnapshot.__table__,
     Category.__table__,
 ]
 

@@ -42,7 +42,11 @@ class InviteTokenStore(Protocol):
 class InviteTokenService:
     store: InviteTokenStore | None = None
 
-    def request_invite(self, request: InviteRequest, request_id: str | None = None) -> NeutralPublicResponse:
+    def request_invite(
+        self,
+        request: InviteRequest,
+        request_id: str | None = None,
+    ) -> NeutralPublicResponse:
         """Return a neutral invite request response.
 
         The eventual implementation may create/resend an invite only after

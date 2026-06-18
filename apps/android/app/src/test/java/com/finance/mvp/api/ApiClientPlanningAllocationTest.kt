@@ -1,0 +1,410 @@
+package com.finance.mvp.api
+
+import com.finance.mvp.session.InMemorySecureTokenStore
+import java.net.ServerSocket
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ApiClientPlanningAllocationTest {
+    @Test
+    fun listPlanningPlansTreatsMissingMonthAsEmptyPlan() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 404,
+            body = """
+                {
+                  "error": {
+                    "message": "Resource not found or not accessible."
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.listPlanningPlans(scope = "personal", month = "2026-06")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            assertEquals(null, (result as ApiResult.Success).value)
+            val requestLine = capturedRequest.get().lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("GET "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/planning/plans"))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("month=2026-06"))
+        }
+    }
+
+    @Test
+    fun updateAssetCategoryPayloadPersistsInvestmentAndIconKey() {
+        val json = AssetCategory(
+            id = "asset-cat-broker",
+            name = "Broker",
+            scopeType = "personal",
+            currency = "RUB",
+            manualAmount = "0",
+            isInvestment = true,
+            assetType = "brokerage",
+            iconKey = "chart",
+            version = 1,
+        ).toUpdateJsonForApi()
+
+        assertEquals(true, json.getBoolean("isInvestment"))
+        assertEquals("chart", json.getString("iconKey"))
+        assertEquals("brokerage", json.getString("assetType"))
+        assertEquals(1, json.getInt("version"))
+    }
+
+    @Test
+    fun createAssetCategoryOmitsIconKeyForStrictCreateContract() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "id": "asset-cat-broker",
+                    "name": "Broker",
+                    "scopeType": "personal",
+                    "ownerUserId": "user-1",
+                    "householdId": null,
+                    "currency": "RUB",
+                    "assetType": "brokerage",
+                    "manualAmount": "0.0000",
+                    "isInvestment": true,
+                    "recordStatus": "active",
+                    "createdByUserId": "user-1",
+                    "createdAt": "2026-06-12T00:00:00Z",
+                    "updatedAt": "2026-06-12T00:00:00Z",
+                    "version": 1
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createAssetCategory(
+                AssetCategoryCreateRequest(
+                    name = "Broker",
+                    scopeType = "personal",
+                    currency = "RUB",
+                    manualAmount = "0",
+                    isInvestment = true,
+                    assetType = "brokerage",
+                    iconKey = "brokerage",
+                ),
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val request = capturedRequest.get()
+            val requestLine = request.lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/asset-categories"))
+            val json = JSONObject(request.substringAfter("\r\n\r\n"))
+            assertEquals("Broker", json.getString("name"))
+            assertEquals("personal", json.getString("scopeType"))
+            assertEquals("RUB", json.getString("currency"))
+            assertEquals("0", json.getString("manualAmount"))
+            assertEquals(true, json.getBoolean("isInvestment"))
+            assertEquals("brokerage", json.getString("assetType"))
+            assertFalse("Strict create schema rejects iconKey", json.has("iconKey"))
+            assertFalse("Personal create must not include householdId", json.has("householdId"))
+        }
+    }
+
+    @Test
+    fun createInvestmentMigrationPostsCommandAndParsesNestedResult() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "assetCategory": {
+                      "id": "asset-cat-broker",
+                      "name": "Broker",
+                      "scopeType": "personal",
+                      "ownerUserId": "user-1",
+                      "householdId": null,
+                      "currency": "RUB",
+                      "assetType": "brokerage",
+                      "manualAmount": "0.0000",
+                      "isInvestment": true,
+                      "iconKey": "briefcase",
+                      "recordStatus": "active",
+                      "version": 1
+                    },
+                    "accounts": [
+                      {
+                        "id": "acc-broker",
+                        "name": "Broker account",
+                        "accountType": "brokerage",
+                        "ownershipType": "personal",
+                        "currency": "RUB",
+                        "currentBalance": "1200.0000",
+                        "assetCategoryId": "asset-cat-broker",
+                        "status": "active",
+                        "version": 4
+                      }
+                    ]
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createInvestmentMigration(
+                InvestmentMigrationCreateRequest(
+                    assetCategoryId = "asset-cat-broker",
+                    name = "Broker",
+                    iconKey = "briefcase",
+                    color = "#336699",
+                    assetType = "brokerage",
+                    currency = "RUB",
+                    scope = "personal",
+                    accountIds = listOf("acc-broker"),
+                    accountVersions = mapOf("acc-broker" to 3),
+                ),
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val request = capturedRequest.get()
+            val requestLine = request.lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/asset-categories/investment-migrations"))
+            val json = JSONObject(request.substringAfter("\r\n\r\n"))
+            assertEquals("asset-cat-broker", json.getString("assetCategoryId"))
+            assertEquals("Broker", json.getString("name"))
+            assertEquals("briefcase", json.getString("icon"))
+            assertEquals("#336699", json.getString("color"))
+            assertEquals("brokerage", json.getString("assetType"))
+            assertEquals("personal", json.getString("scope"))
+            assertEquals("acc-broker", json.getJSONArray("accountIds").getString(0))
+            assertEquals(3, json.getJSONObject("accountVersions").getInt("acc-broker"))
+            val migration = (result as ApiResult.Success).value
+            assertEquals("asset-cat-broker", migration.assetCategory.id)
+            assertEquals("briefcase", migration.assetCategory.iconKey)
+            assertEquals("acc-broker", migration.accounts.single().id)
+            assertEquals("asset-cat-broker", migration.accounts.single().assetCategoryId)
+        }
+    }
+
+    @Test
+    fun createPlanningAllocationPostsInvestmentAssetCategoryTargetTypeAndParsesAssetCategoryFallback() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 201,
+            body = """
+                {
+                  "data": {
+                    "id": "alloc-1",
+                    "planId": "plan-1",
+                    "targetType": "investment_asset_category",
+                    "assetCategoryId": "asset-cat-broker",
+                    "targetSnapshot": "Brokerage",
+                    "requiresAttention": false,
+                    "comment": "Invest",
+                    "allocationMode": "amount",
+                    "allocationValue": "100.00",
+                    "calculatedAmount": "100.00",
+                    "recurrenceType": "regular",
+                    "isSavingsGoal": false,
+                    "actualAmount": "0.00",
+                    "varianceAmount": "-100.00",
+                    "status": "no_actuals",
+                    "version": 1
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, capturedRequest ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.createPlanningAllocation(
+                planId = "plan-1",
+                request = PlanningAllocationCreateRequest(
+                    targetType = "investment_asset_category",
+                    targetId = "asset-cat-broker",
+                    comment = "Invest",
+                    allocationMode = "amount",
+                    allocationValue = "100.00",
+                    recurrenceType = "regular",
+                ),
+            )
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val allocation = (result as ApiResult.Success).value
+            assertEquals("investment_asset_category", allocation.targetType)
+            assertEquals("asset-cat-broker", allocation.targetId)
+
+            val request = capturedRequest.get()
+            val requestLine = request.lineSequence().first()
+            assertTrue("Unexpected request line: $requestLine", requestLine.startsWith("POST "))
+            assertTrue("Unexpected request line: $requestLine", requestLine.contains("/api/v1/planning/plans/plan-1/allocations"))
+            val json = JSONObject(request.substringAfter("\r\n\r\n"))
+            assertEquals("investment_asset_category", json.getString("targetType"))
+            assertEquals("asset-cat-broker", json.getString("targetId"))
+            assertEquals("regular", json.getString("recurrenceType"))
+            assertEquals(false, json.getBoolean("isSavingsGoal"))
+        }
+    }
+
+    @Test
+    fun getPlanningPlanParsesPreviousMonthSurplusAndAllocationVariance() = runBlocking {
+        withJsonPlanningServer(
+            statusCode = 200,
+            body = """
+                {
+                  "data": {
+                    "id": "plan-1",
+                    "scope": "personal",
+                    "month": "2026-06",
+                    "currency": "RUB",
+                    "summary": {
+                      "totalPlannedIncome": "1000.0000",
+                      "totalConfirmedIncome": "1000.0000",
+                      "totalAllocatedAmount": "850.0000",
+                      "unallocatedAmount": "150.0000",
+                      "previousMonthSurplus": "75.0000",
+                      "underallocated": true,
+                      "overallocated": false
+                    },
+                    "incomeSources": [],
+                    "allocations": [
+                      {
+                        "id": "alloc-1",
+                        "planId": "plan-1",
+                        "targetType": "expense_category",
+                        "targetId": "cat-food",
+                        "targetSnapshot": {"name": "Food"},
+                        "requiresAttention": false,
+                        "allocationMode": "amount",
+                        "allocationValue": "250.0000",
+                        "calculatedAmount": "250.0000",
+                        "recurrenceType": "regular",
+                        "isSavingsGoal": false,
+                        "actualAmount": "270.0000",
+                        "varianceAmount": "20.0000",
+                        "status": "needs_attention",
+                        "version": 3
+                      }
+                    ],
+                    "version": 4
+                  }
+                }
+            """.trimIndent(),
+        ) { baseUrl, _ ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.getPlanningPlan("plan-1")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val plan = (result as ApiResult.Success).value
+            assertEquals("75.0000", plan.previousMonthSurplus)
+            val allocation = plan.allocations.single()
+            assertEquals("20.0000", allocation.varianceAmount)
+        }
+    }
+
+    @Test
+    fun updatePlanningAllocationPayloadAllowsInvestmentAssetCategoryRecurrenceAndGoalFields() {
+        val json = PlanningAllocationUpdateRequest(
+            targetType = "investment_asset_category",
+            targetId = "asset-cat-metal",
+            allocationMode = "percent",
+            allocationValue = "15.00",
+            recurrenceType = "one_off",
+            isSavingsGoal = true,
+            goalTargetAmount = "5000.00",
+            goalDueMonth = "2026-12",
+            version = 2,
+        ).toJsonForApi()
+
+        assertEquals("investment_asset_category", json.getString("targetType"))
+        assertEquals("asset-cat-metal", json.getString("targetId"))
+        assertEquals("percent", json.getString("allocationMode"))
+        assertEquals("15.00", json.getString("allocationValue"))
+        assertEquals("one_off", json.getString("recurrenceType"))
+        assertEquals(true, json.getBoolean("isSavingsGoal"))
+        assertEquals("5000.00", json.getString("goalTargetAmount"))
+        assertEquals("2026-12", json.getString("goalDueMonth"))
+        assertEquals(2, json.getInt("version"))
+    }
+
+    @Test
+    fun updatePlanningAllocationPayloadClearsGoalFieldsWhenSavingsGoalDisabled() {
+        val json = PlanningAllocationUpdateRequest(
+            isSavingsGoal = false,
+            version = 3,
+        ).toJsonForApi()
+
+        assertEquals(false, json.getBoolean("isSavingsGoal"))
+        assertTrue(json.has("goalTargetAmount"))
+        assertTrue(json.isNull("goalTargetAmount"))
+        assertTrue(json.has("goalDueMonth"))
+        assertTrue(json.isNull("goalDueMonth"))
+        assertEquals(3, json.getInt("version"))
+    }
+
+    private suspend fun withJsonPlanningServer(
+        statusCode: Int,
+        body: String,
+        block: suspend (String, AtomicReference<String>) -> Unit,
+    ) {
+        val capturedRequest = AtomicReference("")
+        val server = ServerSocket(0)
+        val serverThread = Thread {
+            runCatching {
+                server.accept().use { socket ->
+                    val input = socket.getInputStream()
+                    val headerBytes = mutableListOf<Byte>()
+                    var previous = 0
+                    var current = input.read()
+                    while (current != -1) {
+                        headerBytes.add(current.toByte())
+                        if (previous == '\r'.code && current == '\n'.code) {
+                            val headerText = headerBytes.toByteArray().toString(Charsets.ISO_8859_1)
+                            if (headerText.endsWith("\r\n\r\n")) {
+                                break
+                            }
+                        }
+                        previous = current
+                        current = input.read()
+                    }
+                    val headerText = headerBytes.toByteArray().toString(Charsets.ISO_8859_1)
+                    val contentLength = headerText
+                        .lineSequence()
+                        .firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
+                        ?.substringAfter(":")
+                        ?.trim()
+                        ?.toIntOrNull()
+                        ?: 0
+                    val bodyBytes = ByteArray(contentLength)
+                    var read = 0
+                    while (read < contentLength) {
+                        val count = input.read(bodyBytes, read, contentLength - read)
+                        if (count == -1) break
+                        read += count
+                    }
+                    capturedRequest.set(headerText + bodyBytes.toString(Charsets.UTF_8))
+
+                    val response = body.toByteArray(Charsets.UTF_8)
+                    val headers = buildString {
+                        append("HTTP/1.1 $statusCode Test\r\n")
+                        append("Content-Type: application/json\r\n")
+                        append("Content-Length: ${response.size}\r\n")
+                        append("Connection: close\r\n")
+                        append("\r\n")
+                    }.toByteArray(Charsets.US_ASCII)
+                    socket.getOutputStream().use { output ->
+                        output.write(headers)
+                        output.write(response)
+                    }
+                }
+            }
+        }.apply { start() }
+        try {
+            block("http://127.0.0.1:${server.localPort}", capturedRequest)
+        } finally {
+            server.close()
+            serverThread.join(1_000)
+        }
+    }
+}

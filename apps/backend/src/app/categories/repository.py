@@ -46,6 +46,7 @@ class CategoryRepository(Protocol):
     def create(
         self,
         *,
+        category_id: str | None = None,
         name: str,
         type: CategoryType,
         scope: CategoryScope,
@@ -84,6 +85,7 @@ class InMemoryCategoryRepository:
     def create(
         self,
         *,
+        category_id: str | None = None,
         name: str,
         type: CategoryType,
         scope: CategoryScope,
@@ -95,12 +97,12 @@ class InMemoryCategoryRepository:
     ) -> CategoryRecord:
         now = datetime.now(UTC)
         with self._lock:
-            category_id = f"cat_{next(self._counter)}"
-            while category_id in self._records:
-                category_id = f"cat_{next(self._counter)}"
+            record_id = category_id or f"cat_{next(self._counter)}"
+            while record_id in self._records:
+                record_id = f"cat_{next(self._counter)}"
 
             record = CategoryRecord(
-                id=category_id,
+                id=record_id,
                 name=name,
                 type=type,
                 scope=scope,
@@ -151,6 +153,7 @@ class SqlAlchemyCategoryRepository:
     def create(
         self,
         *,
+        category_id: str | None = None,
         name: str,
         type: CategoryType,
         scope: CategoryScope,
@@ -162,7 +165,7 @@ class SqlAlchemyCategoryRepository:
     ) -> CategoryRecord:
         now = datetime.now(UTC)
         model = CategoryModel(
-            id=uuid4(),
+            id=_required_uuid(category_id, "category_id") if category_id else uuid4(),
             name=name,
             category_type=type.value,
             category_scope=scope.value,

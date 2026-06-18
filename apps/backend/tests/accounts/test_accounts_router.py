@@ -17,6 +17,10 @@ from app.authz import (
     ResourceStatus,
 )
 from app.main import create_app
+from app.transactions.repository import (
+    TransactionRecord,
+    reset_transactions_for_tests,
+)
 
 OWNER_A = "owner-a"
 MEMBER_B = "member-b"
@@ -72,9 +76,40 @@ def account_record(
     )
 
 
+def transaction_record(
+    transaction_id: str,
+    *,
+    account_id: str,
+    counterparty_account_id: str | None = None,
+) -> TransactionRecord:
+    now = datetime(2026, 5, 17, 9, 0, tzinfo=UTC)
+    return TransactionRecord(
+        id=transaction_id,
+        transaction_type="expense",
+        account_id=account_id,
+        counterparty_account_id=counterparty_account_id,
+        category_id="cat-food",
+        amount=Decimal("1.00"),
+        currency="RUB",
+        occurred_at=now,
+        description="seeded transaction",
+        source_type="manual",
+        transfer_scope=None,
+        transfer_status=None,
+        record_status="active",
+        created_by_user_id=OWNER_A,
+        last_edited_by_user_id=OWNER_A,
+        created_at=now,
+        updated_at=now,
+        deleted_at=None,
+        version=1,
+    )
+
+
 @pytest.fixture(autouse=True)
 def seeded_accounts() -> Iterator[None]:
     reset_accounts_for_tests()
+    reset_transactions_for_tests()
     seed_accounts_for_tests(
         [
             account_record(
@@ -112,6 +147,7 @@ def seeded_accounts() -> Iterator[None]:
     )
     yield
     reset_accounts_for_tests()
+    reset_transactions_for_tests()
 
 
 @pytest.fixture
@@ -267,6 +303,33 @@ def test_new_financial_account_types_are_accepted_without_weakening_personal_sco
         assert data["householdId"] is None
 
 
+def test_payment_account_flag_defaults_to_true_and_is_mutable(client_for_actor) -> None:
+    client = client_for_actor(ACTOR_A)
+
+    listed = client.get("/api/v1/accounts")
+    assert listed.status_code == 200
+    assert {item["isPaymentAccount"] for item in listed.json()["items"]} == {True}
+
+    created = client.post(
+        "/api/v1/accounts",
+        json={
+            "name": "Investment Display Only",
+            "accountType": "brokerage",
+            "ownershipType": "personal",
+            "currency": "RUB",
+            "initialBalance": "1.00",
+            "isPaymentAccount": False,
+        },
+    )
+    assert created.status_code == 201, created.text
+    data = created.json()["data"]
+    assert data["isPaymentAccount"] is False
+
+    updated = client.patch(f"/api/v1/accounts/{data['id']}", json={"isPaymentAccount": True})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["isPaymentAccount"] is True
+
+
 def test_update_blocks_ownership_fields_and_foreign_personal_mutation(client_for_actor) -> None:
     owner_client = client_for_actor(ACTOR_A)
     updated = owner_client.patch("/api/v1/accounts/acct-personal-a", json={"name": "Renamed"})
@@ -286,6 +349,73 @@ def test_update_blocks_ownership_fields_and_foreign_personal_mutation(client_for
     )
     assert foreign_response.status_code == 404
     assert "Renamed" not in foreign_response.text
+
+
+def test_update_snapshot_balance_and_currency_without_transactions_preserves_initial_balance(
+    client_for_actor,
+) -> None:
+    client = client_for_actor(ACTOR_A)
+
+    response = client.patch(
+        "/api/v1/accounts/acct-personal-a",
+        json={
+            "name": "Snapshot Updated",
+            "currentBalance": "250.50",
+            "currency": "USD",
+            "version": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["name"] == "Snapshot Updated"
+    assert Decimal(data["currentBalance"]) == Decimal("250.50")
+    assert data["currency"] == "USD"
+    assert Decimal(data["initialBalance"]) == Decimal("100.00")
+    assert data["version"] == 2
+
+    fetched = client.get("/api/v1/accounts/acct-personal-a")
+    assert fetched.status_code == 200
+    assert Decimal(fetched.json()["data"]["initialBalance"]) == Decimal("100.00")
+
+
+def test_update_account_stale_version_returns_conflict(client_for_actor) -> None:
+    client = client_for_actor(ACTOR_A)
+    first = client.patch("/api/v1/accounts/acct-personal-a", json={"name": "Fresh", "version": 1})
+    assert first.status_code == 200
+
+    stale = client.patch(
+        "/api/v1/accounts/acct-personal-a",
+        json={"name": "Stale", "version": 1},
+    )
+
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "CONFLICTING_UPDATE"
+    assert stale.json()["error"]["message"] == "Conflicting update."
+
+
+def test_update_account_currency_with_transactions_returns_conflict(client_for_actor) -> None:
+    reset_transactions_for_tests(
+        [
+            transaction_record(
+                "txn-account-currency-lock",
+                account_id="acct-personal-a",
+            )
+        ]
+    )
+    client = client_for_actor(ACTOR_A)
+
+    response = client.patch(
+        "/api/v1/accounts/acct-personal-a",
+        json={"currency": "USD", "version": 1},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS"
+    assert (
+        response.json()["error"]["message"]
+        == "Account currency cannot be changed after transactions exist."
+    )
 
 
 def test_archive_restore_and_delete_preserve_visibility_boundary(client_for_actor) -> None:

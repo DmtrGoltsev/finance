@@ -10,10 +10,8 @@ const { chromium, devices } = require(
 const pwaUrl = process.env.PWA_URL || "http://127.0.0.1:63518/";
 const outputDir = path.resolve("evidence/test-runs");
 const outputPath = path.join(outputDir, "iphone-flow-smoke.json");
-const fixturePath = path.join(outputDir, "iphone-flow-import-sample.csv");
 
 const checks = [];
-const requests = [];
 
 function record(name, ok, details = "") {
   checks.push({ name, ok, details });
@@ -117,18 +115,8 @@ const context = await browser.newContext({
 const page = await context.newPage();
 page.setDefaultTimeout(10000);
 
-page.on("request", (request) => {
-  if (request.method() === "POST" && request.url().includes("/api/v1/imports/report-preview")) {
-    requests.push({
-      url: request.url(),
-      postData: request.postData()
-    });
-  }
-});
-
 try {
   await fs.mkdir(outputDir, { recursive: true });
-  await fs.writeFile(fixturePath, "account,amount\nsecret,999\n", "utf8");
 
   await page.goto(pwaUrl, { waitUntil: "networkidle", timeout: 30000 });
   await page.getByRole("heading", { name: "Деньги" }).waitFor({ state: "visible" });
@@ -159,29 +147,11 @@ try {
     record(`heading ${heading} visible`, true);
   }
 
-  await selectIndex("select import report type", page.getByLabel("Тип отчета"), 1);
-  await page.getByLabel("Файл отчета").setInputFiles(fixturePath);
-  record("set import fixture file", true);
-  await tap("tap import preview submit", page.getByRole("button", { name: /Показать сводку/i }));
-  await page.getByLabel("Предварительный просмотр импорта").waitFor({
-    state: "visible",
-    timeout: 15000
-  });
-
-  const latestImport = requests.at(-1);
-  const importBody = latestImport?.postData ? JSON.parse(latestImport.postData) : null;
-  const fixtureContent = await fs.readFile(fixturePath, "utf8");
+  const fileInputCount = await page.locator('input[type="file"]').count();
   record(
-    "import preview metadata only",
-    Boolean(
-      importBody &&
-        importBody.sourceType === "file_metadata_only" &&
-        latestImport?.postData?.includes("fileSizeBytes") &&
-        !latestImport.postData.includes("secret") &&
-        !latestImport.postData.includes("999") &&
-        !latestImport.postData.includes(fixtureContent.trim())
-    ),
-    latestImport?.postData ?? "no import request"
+    "removed file import preview UI is absent",
+    fileInputCount === 0,
+    `fileInputs=${fileInputCount}`
   );
 } catch (error) {
   record("flow exception", false, error instanceof Error ? error.message : String(error));
@@ -189,8 +159,7 @@ try {
   const result = {
     ok: checks.every((check) => check.ok),
     pwaUrl,
-    checks,
-    importRequest: requests.at(-1)?.postData ? JSON.parse(requests.at(-1).postData) : null
+    checks
   };
   await fs.mkdir(outputDir, { recursive: true });
   await fs.writeFile(outputPath, JSON.stringify(result, null, 2), "utf8");

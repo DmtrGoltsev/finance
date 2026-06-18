@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.models import AuthClientKind, AuthMembershipRecord, AuthUserRecord, TokenRecordStatus
+from app.auth.rate_limits import InMemoryRateLimiter, RateLimitConfig, RateLimitKey
 from app.auth.runtime import (
     AuthSessionService,
     InMemoryCredentialStore,
@@ -165,6 +166,37 @@ def test_login_failure_is_neutral_and_does_not_issue_session() -> None:
     assert response.json()["flow"] == "login_failure"
     assert response.json()["status"] == "denied"
     assert "missing@example.test" not in response.text
+    assert harness.sessions.records_for_tests() == ()
+
+
+def test_login_rate_limit_returns_429_after_threshold() -> None:
+    harness = _auth_harness()
+    app = create_app()
+    app.dependency_overrides[get_auth_session_service] = lambda: harness.service
+    app.state.auth_rate_limiter = InMemoryRateLimiter(
+        RateLimitConfig.default().with_overrides(
+            {
+                RateLimitKey.LOGIN_IP_15M: 2,
+                RateLimitKey.LOGIN_ACCOUNT_15M: 2,
+            }
+        )
+    )
+
+    with TestClient(app) as client:
+        payload = {
+            "email": "missing@example.test",
+            "password": "wrong",
+            "transport": "android_bearer",
+        }
+        first = client.post("/api/v1/sessions", json=payload)
+        second = client.post("/api/v1/sessions", json=payload)
+        third = client.post("/api/v1/sessions", json=payload)
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429
+    assert third.json()["error"]["code"] == "TOO_MANY_REQUESTS"
+    assert "missing@example.test" not in third.text
     assert harness.sessions.records_for_tests() == ()
 
 

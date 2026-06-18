@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.routing import APIRoute
-
 from app.main import create_app
+from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 OPENAPI_CONTRACT_PATH = REPO_ROOT / "api" / "openapi" / "openapi.yaml"
@@ -20,6 +19,14 @@ EXPECTED_APPROVED_SCHEMA_OPERATIONS = {
     ("DELETE", "/api/v1/accounts/{accountId}"): "deleteAccount",
     ("POST", "/api/v1/accounts/{accountId}/archive"): "archiveAccount",
     ("POST", "/api/v1/accounts/{accountId}/restore"): "restoreAccount",
+    ("GET", "/api/v1/asset-categories"): "listAssetCategories",
+    ("POST", "/api/v1/asset-categories"): "createAssetCategory",
+    ("POST", "/api/v1/asset-categories/investment-migrations"): "createInvestmentMigration",
+    ("GET", "/api/v1/asset-categories/{assetCategoryId}"): "getAssetCategory",
+    ("PATCH", "/api/v1/asset-categories/{assetCategoryId}"): "updateAssetCategory",
+    ("DELETE", "/api/v1/asset-categories/{assetCategoryId}"): "deleteAssetCategory",
+    ("POST", "/api/v1/asset-categories/{assetCategoryId}/archive"): "archiveAssetCategory",
+    ("POST", "/api/v1/asset-categories/{assetCategoryId}/restore"): "restoreAssetCategory",
     ("GET", "/api/v1/categories"): "listCategories",
     ("POST", "/api/v1/categories"): "createCategory",
     ("GET", "/api/v1/categories/autocomplete"): "autocompleteCategories",
@@ -31,6 +38,7 @@ EXPECTED_APPROVED_SCHEMA_OPERATIONS = {
 }
 
 EXPECTED_APPROVED_SESSION_OPERATIONS = {
+    ("POST", "/api/v1/users"): "createUser",
     ("POST", "/api/v1/sessions"): "createSession",
     ("GET", "/api/v1/sessions/current"): "getCurrentSession",
     ("DELETE", "/api/v1/sessions/current"): "deleteCurrentSession",
@@ -44,6 +52,19 @@ EXPECTED_APPROVED_TRANSACTION_OPERATIONS = {
     ("DELETE", "/api/v1/transactions/{transactionId}"): "deleteTransaction",
     ("POST", "/api/v1/transactions/{transactionId}/restore"): "restoreTransaction",
 }
+EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS = {
+    ("GET", "/api/v1/capture-drafts"): "listCaptureDrafts",
+    ("POST", "/api/v1/capture-drafts"): "createCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/screenshot-ocr"): (
+        "recognizeCaptureDraftScreenshotOcr"
+    ),
+    ("PUT", "/api/v1/capture-drafts/category-mappings"): (
+        "putCaptureDraftCategoryMapping"
+    ),
+    ("PATCH", "/api/v1/capture-drafts/{draftId}"): "updateCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/{draftId}/confirm"): "confirmCaptureDraft",
+    ("POST", "/api/v1/capture-drafts/{draftId}/discard"): "discardCaptureDraft",
+}
 EXPECTED_APPROVED_REPORT_OPERATIONS = {
     ("GET", "/api/v1/reports/summary"): "getReportSummary",
     ("GET", "/api/v1/reports/category-breakdown"): "getReportCategoryBreakdown",
@@ -51,8 +72,31 @@ EXPECTED_APPROVED_REPORT_OPERATIONS = {
     ("GET", "/api/v1/reports/cash-flow"): "getReportCashFlow",
     ("GET", "/api/v1/reports/transactions"): "getReportTransactions",
 }
-EXPECTED_APPROVED_IMPORT_OPERATIONS = {
-    ("POST", "/api/v1/imports/report-preview"): "previewImportReport",
+EXPECTED_APPROVED_PLANNING_OPERATIONS = {
+    ("GET", "/api/v1/planning/plans"): "getPlanningPlanForScopeMonth",
+    ("POST", "/api/v1/planning/plans"): "createPlanningPlan",
+    ("GET", "/api/v1/planning/plans/history"): "listPlanningPlanHistory",
+    ("GET", "/api/v1/planning/plans/{planId}"): "getPlanningPlan",
+    ("POST", "/api/v1/planning/plans/{planId}/income-sources"): (
+        "createPlanningIncomeSource"
+    ),
+    ("POST", "/api/v1/planning/plans/{planId}/allocations"): "createPlanningAllocation",
+    ("POST", "/api/v1/planning/plans/{planId}/copy"): "copyPlanningPlan",
+    ("PATCH", "/api/v1/planning/income-sources/{incomeSourceId}"): (
+        "updatePlanningIncomeSource"
+    ),
+    ("POST", "/api/v1/planning/income-sources/{incomeSourceId}/confirm"): (
+        "confirmPlanningIncomeSource"
+    ),
+    ("DELETE", "/api/v1/planning/income-sources/{incomeSourceId}"): (
+        "deletePlanningIncomeSource"
+    ),
+    ("PATCH", "/api/v1/planning/allocations/{allocationId}"): "updatePlanningAllocation",
+    ("DELETE", "/api/v1/planning/allocations/{allocationId}"): "deletePlanningAllocation",
+}
+EXPECTED_APPROVED_SYNC_OPERATIONS = {
+    ("POST", "/api/v1/sync/push"): "syncPush",
+    ("POST", "/api/v1/sync/pull"): "syncPull",
 }
 EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
     {
@@ -65,8 +109,10 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
-        *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_SYNC_OPERATIONS.keys(),
     }
 )
 EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
@@ -75,14 +121,15 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SESSION_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
-        *EXPECTED_APPROVED_IMPORT_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_SYNC_OPERATIONS.keys(),
     }
 )
 
 EXCLUDED_CONCRETE_OPERATIONS = frozenset(
     {
-        ("POST", "/api/v1/users"),
         ("DELETE", "/api/v1/sessions"),
         ("POST", "/api/v1/password-resets"),
         ("POST", "/api/v1/password-resets/confirmations"),
@@ -117,6 +164,7 @@ EXCLUDED_CONCRETE_OPERATIONS = frozenset(
 )
 
 EXCLUDED_ROUTE_PREFIXES = (
+    "/api/v1/imports",
     "/api/v1/import-jobs",
     "/api/v1/files/imports",
     "/api/v1/bank-connections",
@@ -136,9 +184,7 @@ def _route_operations(*, include_schema_only: bool) -> set[tuple[str, str]]:
     application = create_app()
     operations: set[tuple[str, str]] = set()
 
-    for route in application.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in iter_api_routes(application.routes):
         if include_schema_only and not route.include_in_schema:
             continue
 
@@ -227,16 +273,20 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
         for operation in {
             **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+            **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
-            **EXPECTED_APPROVED_IMPORT_OPERATIONS,
+            **EXPECTED_APPROVED_PLANNING_OPERATIONS,
+            **EXPECTED_APPROVED_SYNC_OPERATIONS,
         }
     }
 
     assert approved_runtime_operation_ids == {
         **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+        **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
-        **EXPECTED_APPROVED_IMPORT_OPERATIONS,
+        **EXPECTED_APPROVED_PLANNING_OPERATIONS,
+        **EXPECTED_APPROVED_SYNC_OPERATIONS,
     }
 
 
@@ -247,16 +297,20 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
         for operation in {
             **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
             **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+            **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
-            **EXPECTED_APPROVED_IMPORT_OPERATIONS,
+            **EXPECTED_APPROVED_PLANNING_OPERATIONS,
+            **EXPECTED_APPROVED_SYNC_OPERATIONS,
         }
     }
 
     assert approved_canonical_operation_ids == {
         **EXPECTED_APPROVED_SCHEMA_OPERATIONS,
         **EXPECTED_APPROVED_TRANSACTION_OPERATIONS,
+        **EXPECTED_APPROVED_CAPTURE_DRAFT_OPERATIONS,
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
-        **EXPECTED_APPROVED_IMPORT_OPERATIONS,
+        **EXPECTED_APPROVED_PLANNING_OPERATIONS,
+        **EXPECTED_APPROVED_SYNC_OPERATIONS,
     }
 
 

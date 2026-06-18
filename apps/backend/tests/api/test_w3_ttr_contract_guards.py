@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi.routing import APIRoute
-
 from app.authz import ReportMode, SourceType, TransferScopeKind
 from app.db.model_enums import SOURCE_TYPES, TRANSFER_SCOPES
 from app.main import create_app
+from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 OPENAPI_CONTRACT_PATH = REPO_ROOT / "api" / "openapi" / "openapi.yaml"
@@ -42,6 +41,18 @@ EXPECTED_MOUNTED_REPORT_OPERATIONS = frozenset(
     }
 )
 
+EXPECTED_MOUNTED_CAPTURE_DRAFT_OPERATIONS = frozenset(
+    {
+        ("GET", "/api/v1/capture-drafts"),
+        ("POST", "/api/v1/capture-drafts"),
+        ("POST", "/api/v1/capture-drafts/screenshot-ocr"),
+        ("PUT", "/api/v1/capture-drafts/category-mappings"),
+        ("PATCH", "/api/v1/capture-drafts/{draftId}"),
+        ("POST", "/api/v1/capture-drafts/{draftId}/confirm"),
+        ("POST", "/api/v1/capture-drafts/{draftId}/discard"),
+    }
+)
+
 EXPECTED_UNMOUNTED_W3_OPERATIONS = frozenset(
     {
         ("POST", "/api/v1/transactions/{transactionId}/void"),
@@ -55,8 +66,8 @@ def _route_operations() -> set[tuple[str, str]]:
     application = create_app()
     operations: set[tuple[str, str]] = set()
 
-    for route in application.routes:
-        if not isinstance(route, APIRoute) or route.path_format == API_CATCH_ALL:
+    for route in iter_api_routes(application.routes):
+        if route.path_format == API_CATCH_ALL:
             continue
         for method in sorted(route.methods or ()):
             if method not in IGNORED_RUNTIME_METHODS:
@@ -128,6 +139,7 @@ def test_w3_transactions_and_reports_mounted_transfers_remain_gated() -> None:
     mounted_operations = _route_operations()
 
     assert EXPECTED_MOUNTED_TRANSACTION_OPERATIONS <= mounted_operations
+    assert EXPECTED_MOUNTED_CAPTURE_DRAFT_OPERATIONS <= mounted_operations
     assert EXPECTED_MOUNTED_REPORT_OPERATIONS <= mounted_operations
     assert mounted_operations.isdisjoint(EXPECTED_UNMOUNTED_W3_OPERATIONS)
     assert {
@@ -147,6 +159,12 @@ def test_runtime_openapi_exposes_transactions_and_reports_for_w3_runtime_workers
     assert "/api/v1/transactions/autocomplete" in runtime_paths
     assert "/api/v1/transactions/{transactionId}/restore" in runtime_paths
     assert "/api/v1/transactions/{transactionId}/void" not in runtime_paths
+    assert "/api/v1/capture-drafts" in runtime_paths
+    assert "/api/v1/capture-drafts/screenshot-ocr" in runtime_paths
+    assert "/api/v1/capture-drafts/category-mappings" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}/confirm" in runtime_paths
+    assert "/api/v1/capture-drafts/{draftId}/discard" in runtime_paths
     assert "/api/v1/reports/summary" in runtime_paths
     assert "/api/v1/reports/category-breakdown" in runtime_paths
     assert "/api/v1/reports/account-balances" in runtime_paths
@@ -180,6 +198,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
 
     assert _inline_array_value(_schema_block("SourceType"), "enum") == ["manual"]
     assert _inline_array_value(_schema_block("ReportMode"), "enum") == [
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     ]
@@ -190,6 +209,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
 
     assert tuple(item.value for item in SourceType) == ("manual",)
     assert tuple(item.value for item in ReportMode) == (
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     )
@@ -201,6 +221,7 @@ def test_w3_public_and_persistence_enum_boundaries_remain_frozen() -> None:
     assert TRANSFER_SCOPES == ("personal_same_owner", "household_same_household")
     assert graph_contracts["sourceType"] == ["manual"]
     assert graph_contracts["reportModes"] == [
+        "personal",
         "shared_family_report",
         "combined_viewer_overview",
     ]

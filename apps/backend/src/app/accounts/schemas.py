@@ -54,6 +54,13 @@ class AccountDto(ApiModel):
     ownership_type: OwnershipType
     owner_user_id: ResourceId | None = None
     household_id: ResourceId | None = None
+    asset_category_id: ResourceId | None = None
+    is_payment_account: bool = Field(
+        description=(
+            "Controls whether this account can be selected as an expense payment "
+            "source, including capture-confirmed expenses; income is not blocked."
+        )
+    )
     currency: CurrencyCode
     initial_balance: DecimalString
     current_balance: DecimalString
@@ -71,13 +78,32 @@ class AccountCreateRequest(ApiModel):
     account_type: AccountType
     ownership_type: OwnershipType
     household_id: ResourceId | None = None
+    asset_category_id: ResourceId | None = None
+    is_payment_account: bool = Field(
+        default=True,
+        description=(
+            "Defaults to true. Set false for investment/display accounts that "
+            "clients should omit from expense payment-source pickers; income is "
+            "not blocked."
+        ),
+    )
     currency: CurrencyCode
     initial_balance: DecimalString
 
 
 class AccountUpdateRequest(ApiModel):
     name: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
+    current_balance: DecimalString | None = None
+    currency: CurrencyCode | None = None
     account_type: AccountType | None = None
+    asset_category_id: ResourceId | None = None
+    is_payment_account: bool | None = Field(
+        default=None,
+        description=(
+            "When false, clients should omit this account from expense "
+            "payment-source pickers; income transactions remain allowed."
+        ),
+    )
     status: RecordStatus | None = None
     version: Annotated[int, Field(ge=1)] | None = None
 
@@ -88,6 +114,12 @@ class AccountAutocompleteDto(ApiModel):
     account_type: AccountType
     ownership_type: OwnershipType
     household_id: ResourceId | None = None
+    is_payment_account: bool = Field(
+        description=(
+            "True when the account can be offered as an expense payment source; "
+            "income selection is not restricted by this flag."
+        )
+    )
     currency: CurrencyCode
 
 

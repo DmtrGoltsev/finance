@@ -62,6 +62,20 @@ class LoginRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class RegistrationRequest:
+    """Registration boundary contract.
+
+    Password plaintext exists only in the request boundary object and must not
+    be logged or copied into audit details.
+    """
+
+    email: str
+    password: str
+    display_name: str | None
+    transport: AuthTransport
+
+
+@dataclass(frozen=True, slots=True)
 class PasswordResetRequest:
     email: str
     transport: AuthTransport | None = None

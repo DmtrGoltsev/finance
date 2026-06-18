@@ -11,6 +11,7 @@ from app.api.auth_context import (
 )
 from app.authz import Actor, Membership, MembershipStatus
 from app.main import create_app
+from tests.api.route_introspection import iter_api_routes
 
 
 def _service_app() -> FastAPI:
@@ -123,7 +124,7 @@ def test_invited_and_former_actors_can_be_represented_by_override() -> None:
 
 def test_auth_session_routes_are_mounted_but_default_deny_without_runtime() -> None:
     app = create_app()
-    mounted_paths = {route.path for route in app.routes}
+    mounted_paths = {route.path for route in iter_api_routes(app.routes) if hasattr(route, "path")}
 
     assert "/api/v1/sessions" in mounted_paths
     assert "/api/v1/sessions/current" in mounted_paths

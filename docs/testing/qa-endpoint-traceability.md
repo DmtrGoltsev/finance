@@ -26,7 +26,7 @@
 - Transfers: только `transactionType=transfer` через `/api/v1/transactions*`; standalone `/api/v1/transfers*` и explicit `/api/v1/transactions/{transactionId}/void` отсутствуют.
 - Reports: `summary`, `category-breakdown`, `account-balances`, `cash-flow`, `transactions`.
 
-Широкие строки ниже про users/profile, households, invites, memberships, exports, deletion/leave privacy flows, password reset, import/bank/SMS/push/broker integrations и debug/support остаются traceability backlog/post-MVP release gates. Они не являются published OpenAPI/client surface до отдельной runtime реализации и contract sync.
+Широкие строки ниже про users/profile, households, invites, memberships, exports, deletion/leave privacy flows, password reset, import/bank/full SMS/push/broker integrations и debug/support остаются traceability backlog/post-MVP release gates. Capture drafts являются отдельной draft-only surface: OCR запускается пользователем из выбранного скриншота; Android распознает on-device без загрузки скриншота, PWA/iOS browser временно отправляет скриншот на self-hosted backend OCR; SMS/push/notifications не перехватываются, screenshot/raw OCR/raw SMS/push/notification body не хранится server-side, transaction не создается без user confirm/edit.
 
 Базовый QA-инвариант: backend является источником прав. Клиент, route nesting, локальный кэш, search, autocomplete, reports, exports, debug/support output и background jobs не могут расширять видимость. Все финансовые данные фильтруются по access predicate до сортировки, pagination, count, aggregation, export, cache materialization и логирования.
 
@@ -69,7 +69,7 @@
 | SEC-INV | Invites, households, shared financial surfaces | invite token read/accept/decline/revoke/replay, pre-accept app access | invite predicates, `hasActiveMembership` after accept only | RG-05, RG-07, RG-08, RG-10 | Invite token does not grant shared data before active membership; replay rejected |
 | SEC-RATE | Auth/reset/invite | login, registration, reset, invite/resend | rate limit controls plus neutral responses | RG-07, RG-10 | 429 or approved throttling evidence without account/member enumeration |
 | SEC-LOG | All financial/auth/privacy flows | allow, deny, validation failure, report/export/cache, transfer denial | audit/log boundaries | RG-08, RG-12 | Logs/audit contain safe metadata only; no amounts, names, descriptions, tokens, raw bodies |
-| SEC-SECRET | Repo, config, bundles, DB, backups | route inventory, schema/config scan, sourceType rejection | out-of-scope controls | RG-11, RG-12 | No bank/API/SMS/push credentials, no import/bank endpoints, `sourceType = manual` only |
+| SEC-SECRET | Repo, config, bundles, DB, backups | route inventory, schema/config scan, sourceType rejection, capture draft scan if enabled | out-of-scope controls | RG-11, RG-12 | No bank/API/SMS/push credentials, no import/bank endpoints, no raw SMS/notification body server-side; transaction creation remains manual or user-confirmed draft only |
 | SEC-BACKUP | Backup/restore/admin | backup access, encryption, restore, tenant boundaries | operational least privilege, restore validation | RG-07, RG-12 | Encrypted backup evidence, restore report, household/personal separation after restore |
 | PRIV-VIS | Accounts, transactions, categories, reports, search, autocomplete | list, detail, search, report, export, client state | personal owner predicate, shared active membership predicate | RG-09, RG-10 | Personal A hidden from B/C; shared AB visible to A/B only |
 | PRIV-EXP | Exports, reports, lists | export create/status/download, export data diff | `canExportData`, visible rows at generation time | RG-09, PF-RG-01..03, PF-RG-10 | Export equals visible scope; active member export excludes other personal data; former export excludes shared |
@@ -119,7 +119,7 @@
 | P0 | Logs/debug output contains financial values or tokens | all financial/auth/privacy routes, debug-like paths | SEC-LOG, RG-08 | Production-like log/audit scan |
 | P0 | Session/access cache not invalidated after logout/reset/leave/revoke | sessions, membership, reports, exports, cache/offline | SEC-AUTH, PRIV-LEAVE, RG-05, RG-07, PF-RG-06 | Revocation and cache invalidation tests |
 | P0 | Backup/restore unsafe or absent | backups, restore, operational tools | SEC-BACKUP, RG-07 | Encrypted backup proof, restore test, tenant boundary verification |
-| P0 | Out-of-scope import/bank/SMS/push credentials appear | API inventory, schema, config, sourceType | SEC-SECRET, RG-11 | Route/schema/config scan and sourceType rejection tests |
+| P0 | Out-of-scope import/bank/full SMS/push credentials or raw SMS/notification body storage appear | API inventory, schema, config, sourceType, capture draft storage | SEC-SECRET, RG-11 | Route/schema/config scan, sourceType rejection tests, capture draft lifecycle/dedup tests if enabled |
 | P1 | Missing rate limit | auth, registration, reset, invite/resend | SEC-RATE, RG-07 | 429/progressive delay evidence with neutral response |
 | P1 | User enumeration or non-neutral errors | auth/reset/invite/direct ids/referenced ids | SEC-RESET, SEC-INV, NEG-ERR, RG-10 | Missing vs inaccessible golden tests |
 | P1 | Predicates not proven equivalent across surfaces | list/detail/search/autocomplete/report/export/debug | NEG-IDOR, RG-02, RG-10 | Predicate equivalence tests and route inventory |
@@ -203,7 +203,7 @@ No explicit uncovered P0/P1 endpoint surface was found in the reviewed contracts
 Release still has evidence gaps until implementation test artifacts exist. These are expected QA proof obligations, not newly discovered contract conflicts:
 
 - P0/P1 evidence gap: no actual automated test output is attached yet for RG-01..RG-12, TR-RG-01..10 or PF-RG-01..12.
-- P0/P1 evidence gap: no route inventory is attached yet proving absence of debug/support bypass endpoints or out-of-scope import/bank/SMS/push endpoints.
+- P0/P1 evidence gap: no route inventory is attached yet proving absence of debug/support bypass endpoints or out-of-scope import/bank/full SMS/push endpoints; safe capture also needs proof that raw body is not persisted server-side.
 - P0/P1 evidence gap: no log/audit/secret/dependency/backup/restore scan output is attached yet.
 - P1 evidence gap: no concrete rate limit values are fixed in the reviewed contracts; release requires configured limits and test output.
 - P1 evidence gap: exact auth stack, CSRF strategy and token/cookie storage are implementation decisions; release requires config evidence.
@@ -220,7 +220,7 @@ Release still has evidence gaps until implementation test artifacts exist. These
 - Client empty/error copy implies that hidden data exists, for example "часть данных скрыта" or "у другого участника есть личные счета".
 - Debug/support/admin/internal recalculation paths reuse service privileges without visible-scope predicates and redaction.
 - Logs, crash reports or telemetry collect raw query payload, screenshots, transaction descriptions, amounts, account/category names or tokens.
-- Out-of-scope source types or endpoints for imports, bank API, SMS/push, broker credentials or raw bank statements appear in implementation.
+- Out-of-scope source types or endpoints for imports, bank API, full SMS/push import, broker credentials, raw SMS/notification body storage or raw bank statements appear in implementation.
 
 ### Escalation triggers
 

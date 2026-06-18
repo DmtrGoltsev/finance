@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from threading import RLock
 from typing import Protocol
@@ -36,6 +36,7 @@ class TransactionRecord:
     updated_at: datetime
     deleted_at: datetime | None
     version: int
+    transaction_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,13 +45,16 @@ class TransactionFilters:
     category_id: str | None = None
     transaction_type: str | None = None
     status: str | None = None
-    start: datetime | None = None
-    end: datetime | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     q: str | None = None
     sort: str | None = None
 
 
 class TransactionRepository(Protocol):
+    def has_for_account(self, account_id: str) -> bool:
+        """Return whether any transaction references the account."""
+
     def list_by_visible_accounts(
         self,
         visible_account_ids: Iterable[str],
@@ -65,6 +69,7 @@ class TransactionRepository(Protocol):
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -72,6 +77,7 @@ class TransactionRepository(Protocol):
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -92,6 +98,13 @@ class InMemoryTransactionRepository:
     def reset(self, records: Iterable[TransactionRecord] = ()) -> None:
         with self._lock:
             self._records = {record.id: deepcopy(record) for record in records}
+
+    def has_for_account(self, account_id: str) -> bool:
+        with self._lock:
+            return any(
+                row.account_id == account_id or row.counterparty_account_id == account_id
+                for row in self._records.values()
+            )
 
     def list_by_visible_accounts(
         self,
@@ -116,6 +129,7 @@ class InMemoryTransactionRepository:
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -123,6 +137,7 @@ class InMemoryTransactionRepository:
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -130,8 +145,9 @@ class InMemoryTransactionRepository:
         created_by_user_id: str,
     ) -> TransactionRecord:
         now = datetime.now(UTC)
+        record_id = transaction_id or f"txn_{uuid4().hex}"
         record = TransactionRecord(
-            id=f"txn_{uuid4().hex}",
+            id=record_id,
             transaction_type=transaction_type,
             account_id=account_id,
             counterparty_account_id=counterparty_account_id,
@@ -139,6 +155,7 @@ class InMemoryTransactionRepository:
             amount=amount,
             currency=currency,
             occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=description,
             source_type=source_type,
             transfer_scope=transfer_scope,
@@ -165,6 +182,23 @@ class InMemoryTransactionRepository:
 class SqlAlchemyTransactionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def has_for_account(self, account_id: str) -> bool:
+        parsed_id = _optional_uuid(account_id)
+        if parsed_id is None:
+            return False
+
+        statement = (
+            select(TransactionModel.id)
+            .where(
+                or_(
+                    TransactionModel.account_id == parsed_id,
+                    TransactionModel.counterparty_account_id == parsed_id,
+                )
+            )
+            .limit(1)
+        )
+        return self._session.execute(statement).first() is not None
 
     def list_by_visible_accounts(
         self,
@@ -198,13 +232,15 @@ class SqlAlchemyTransactionRepository:
                 return []
             statement = statement.where(TransactionModel.category_id == category_id)
         if filters.transaction_type is not None:
-            statement = statement.where(TransactionModel.transaction_type == filters.transaction_type)
+            statement = statement.where(
+                TransactionModel.transaction_type == filters.transaction_type
+            )
         if filters.status is not None:
             statement = statement.where(TransactionModel.record_status == filters.status)
-        if filters.start is not None:
-            statement = statement.where(TransactionModel.occurred_at >= filters.start)
-        if filters.end is not None:
-            statement = statement.where(TransactionModel.occurred_at <= filters.end)
+        if filters.start_date is not None:
+            statement = statement.where(TransactionModel.transaction_date >= filters.start_date)
+        if filters.end_date is not None:
+            statement = statement.where(TransactionModel.transaction_date <= filters.end_date)
 
         rows = [_record_from_model(row) for row in self._session.execute(statement).scalars()]
         return _filter_and_sort(rows, filters)
@@ -219,6 +255,7 @@ class SqlAlchemyTransactionRepository:
     def create(
         self,
         *,
+        transaction_id: str | None = None,
         transaction_type: str,
         account_id: str,
         counterparty_account_id: str | None,
@@ -226,6 +263,7 @@ class SqlAlchemyTransactionRepository:
         amount: Decimal,
         currency: str,
         occurred_at: datetime,
+        transaction_date: date,
         description: str | None,
         source_type: str,
         transfer_scope: str | None,
@@ -235,14 +273,18 @@ class SqlAlchemyTransactionRepository:
         now = datetime.now(UTC)
         actor_id = _required_uuid(created_by_user_id, "created_by_user_id")
         model = TransactionModel(
-            id=uuid4(),
+            id=_required_uuid(transaction_id, "transaction_id") if transaction_id else uuid4(),
             transaction_type=transaction_type,
             account_id=_required_uuid(account_id, "account_id"),
-            counterparty_account_id=_nullable_uuid(counterparty_account_id, "counterparty_account_id"),
+            counterparty_account_id=_nullable_uuid(
+                counterparty_account_id,
+                "counterparty_account_id",
+            ),
             category_id=_nullable_uuid(category_id, "category_id"),
             amount=amount,
             currency=currency,
             occurred_at=occurred_at,
+            transaction_date=transaction_date,
             description=description,
             source_type=source_type,
             transfer_scope=transfer_scope,
@@ -274,6 +316,7 @@ class SqlAlchemyTransactionRepository:
         model.amount = record.amount
         model.currency = record.currency
         model.occurred_at = record.occurred_at
+        model.transaction_date = transaction_record_date(record)
         model.description = record.description
         model.source_type = record.source_type
         model.transfer_scope = record.transfer_scope
@@ -311,10 +354,14 @@ def _filter_and_sort(
         ]
     if filters.status is not None:
         filtered = [record for record in filtered if record.record_status == filters.status]
-    if filters.start is not None:
-        filtered = [record for record in filtered if record.occurred_at >= filters.start]
-    if filters.end is not None:
-        filtered = [record for record in filtered if record.occurred_at <= filters.end]
+    if filters.start_date is not None:
+        filtered = [
+            record for record in filtered if transaction_record_date(record) >= filters.start_date
+        ]
+    if filters.end_date is not None:
+        filtered = [
+            record for record in filtered if transaction_record_date(record) <= filters.end_date
+        ]
     if filters.q:
         needle = filters.q.casefold()
         filtered = [
@@ -339,12 +386,15 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
         transaction_type=model.transaction_type,
         account_id=str(model.account_id),
         counterparty_account_id=(
-            str(model.counterparty_account_id) if model.counterparty_account_id is not None else None
+            str(model.counterparty_account_id)
+            if model.counterparty_account_id is not None
+            else None
         ),
         category_id=str(model.category_id) if model.category_id is not None else None,
         amount=Decimal(model.amount),
         currency=model.currency,
         occurred_at=model.occurred_at,
+        transaction_date=model.transaction_date,
         description=model.description,
         source_type=model.source_type,
         transfer_scope=model.transfer_scope,
@@ -357,6 +407,15 @@ def _record_from_model(model: TransactionModel) -> TransactionRecord:
         deleted_at=model.deleted_at,
         version=int(model.version or 1),
     )
+
+
+def transaction_record_date(record: TransactionRecord) -> date:
+    if record.transaction_date is not None:
+        return record.transaction_date
+    occurred_at = record.occurred_at
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=UTC)
+    return occurred_at.astimezone(UTC).date()
 
 
 def _optional_uuid(value: str | UUID | None) -> UUID | None:

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
-from app.accounts.repository import AccountRecord, AccountRepository, account_repository
+from app.accounts.repository import (
+    AccountBalanceSnapshotRecord,
+    AccountRecord,
+    AccountRepository,
+    account_repository,
+)
+from app.asset_categories.repository import AssetCategoryRecord, AssetCategoryRepository
+from app.asset_categories.repository import repository as asset_category_repository
+from app.asset_categories.schemas import AssetCategoryScope
+from app.asset_categories.schemas import RecordStatus as AssetCategoryRecordStatus
+from app.asset_categories.service import can_read_asset_category
 from app.authz import (
     Account as AuthzAccount,
 )
@@ -39,7 +49,12 @@ from app.categories.repository import CategoryRecord, CategoryRepository
 from app.categories.repository import repository as category_repository
 from app.categories.schemas import CategoryScope
 from app.categories.schemas import RecordStatus as CategoryRecordStatus
-from app.transactions.repository import TransactionFilters, TransactionRecord, TransactionRepository
+from app.transactions.repository import (
+    TransactionFilters,
+    TransactionRecord,
+    TransactionRepository,
+    transaction_record_date,
+)
 from app.transactions.repository import repository as transaction_repository
 
 from .schemas import ReportBucket
@@ -50,7 +65,7 @@ ZERO = Decimal("0.0000")
 @dataclass(frozen=True, slots=True)
 class ReportQuery:
     report_mode: str
-    household_id: str
+    household_id: str | None
     start: datetime | None = None
     end: datetime | None = None
     start_date: date | None = None
@@ -71,6 +86,7 @@ class ReportContext:
     generated_at: datetime
     visible_accounts: tuple[AccountRecord, ...]
     visible_categories: tuple[CategoryRecord, ...]
+    visible_asset_categories: tuple[AssetCategoryRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +109,20 @@ class CashFlowPoint:
 class AccountBalanceGroup:
     account_type: str
     currency: str
+    current_balance_total: Decimal
+    account_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBalanceReportRow:
+    account: AccountRecord
+    balance_as_of: date
+
+
+@dataclass(frozen=True, slots=True)
+class AssetCategoryBalanceGroup:
+    asset_category: AssetCategoryRecord
+    linked_accounts_total: Decimal
     current_balance_total: Decimal
     account_count: int
 
@@ -123,10 +153,12 @@ class ReportService:
         transactions: TransactionRepository = transaction_repository,
         accounts: AccountRepository = account_repository,
         categories: CategoryRepository = category_repository,
+        asset_categories: AssetCategoryRepository = asset_category_repository,
     ) -> None:
         self._transactions = transactions
         self._accounts = accounts
         self._categories = categories
+        self._asset_categories = asset_categories
 
     def context(self, *, actor: Actor, query: ReportQuery) -> ReportContext:
         try:
@@ -143,6 +175,7 @@ class ReportService:
 
         visible_accounts = self._resolve_visible_accounts(actor=actor, query=query)
         visible_categories = self._resolve_visible_categories(actor=actor, query=query)
+        visible_asset_categories = self._resolve_visible_asset_categories(actor=actor, query=query)
         if query.account_ids and len(visible_accounts) != len(set(query.account_ids)):
             raise ReportReferencedResourceError()
         if query.category_ids and len(visible_categories) != len(set(query.category_ids)):
@@ -154,6 +187,7 @@ class ReportService:
             generated_at=datetime.now(UTC),
             visible_accounts=tuple(visible_accounts),
             visible_categories=tuple(visible_categories),
+            visible_asset_categories=tuple(visible_asset_categories),
         )
 
     def visible_report_transactions(self, context: ReportContext) -> list[TransactionRecord]:
@@ -259,16 +293,30 @@ class ReportService:
         return tuple(rows)
 
     def account_balances(self, context: ReportContext) -> tuple[AccountRecord, ...]:
+        return tuple(row.account for row in self.account_balance_rows(context))
+
+    def account_balance_rows(self, context: ReportContext) -> tuple[AccountBalanceReportRow, ...]:
         return tuple(
             sorted(
-                context.visible_accounts,
-                key=lambda account: (account.currency, account.name.casefold(), account.id),
+                (
+                    AccountBalanceReportRow(
+                        account=replace(account, current_balance=snapshot.balance),
+                        balance_as_of=snapshot.snapshot_date,
+                    )
+                    for account in context.visible_accounts
+                    if (snapshot := self._balance_for_report(account, context)) is not None
+                ),
+                key=lambda row: (
+                    row.account.currency,
+                    row.account.name.casefold(),
+                    row.account.id,
+                ),
             )
         )
 
     def balance_groups(self, context: ReportContext) -> tuple[AccountBalanceGroup, ...]:
         grouped: dict[tuple[str, str], tuple[Decimal, int]] = defaultdict(lambda: (ZERO, 0))
-        for account in context.visible_accounts:
+        for account in self.account_balances(context):
             key = (account.account_type, account.currency)
             amount, count = grouped[key]
             grouped[key] = (amount + account.current_balance, count + 1)
@@ -282,18 +330,88 @@ class ReportService:
             for (account_type, currency), (amount, count) in sorted(grouped.items())
         )
 
+    def legacy_asset_type_groups(self, context: ReportContext) -> tuple[AccountBalanceGroup, ...]:
+        grouped: dict[tuple[str, str], tuple[Decimal, int]] = defaultdict(lambda: (ZERO, 0))
+        for account in self.account_balances(context):
+            if account.asset_category_id is not None:
+                continue
+            key = (account.account_type, account.currency)
+            amount, count = grouped[key]
+            grouped[key] = (amount + account.current_balance, count + 1)
+        return tuple(
+            AccountBalanceGroup(
+                account_type=account_type,
+                currency=currency,
+                current_balance_total=amount,
+                account_count=count,
+            )
+            for (account_type, currency), (amount, count) in sorted(grouped.items())
+        )
+
+    def asset_category_groups(
+        self,
+        context: ReportContext,
+    ) -> tuple[AssetCategoryBalanceGroup, ...]:
+        accounts_by_category: dict[str, tuple[Decimal, int]] = defaultdict(lambda: (ZERO, 0))
+        for account in self.account_balances(context):
+            if account.asset_category_id is None:
+                continue
+            amount, count = accounts_by_category[account.asset_category_id]
+            accounts_by_category[account.asset_category_id] = (
+                amount + account.current_balance,
+                count + 1,
+            )
+
+        rows: list[AssetCategoryBalanceGroup] = []
+        for category in context.visible_asset_categories:
+            linked_total, count = accounts_by_category[category.id]
+            rows.append(
+                AssetCategoryBalanceGroup(
+                    asset_category=category,
+                    linked_accounts_total=linked_total,
+                    current_balance_total=Decimal(category.manual_amount) + linked_total,
+                    account_count=count,
+                )
+            )
+        return tuple(
+            sorted(
+                rows,
+                key=lambda row: (
+                    row.asset_category.currency,
+                    row.asset_category.name.casefold(),
+                    row.asset_category.id,
+                ),
+            )
+        )
+
     def net_worth_totals(self, context: ReportContext) -> tuple[tuple[str, Decimal], ...]:
         grouped: dict[str, Decimal] = defaultdict(lambda: ZERO)
-        for account in context.visible_accounts:
+        for account in self.account_balances(context):
             grouped[account.currency] += account.current_balance
+        for category in context.visible_asset_categories:
+            grouped[category.currency] += Decimal(category.manual_amount)
         return tuple(sorted(grouped.items()))
+
+    def investment_totals(self, context: ReportContext) -> tuple[tuple[str, Decimal], ...]:
+        grouped: dict[str, Decimal] = defaultdict(lambda: ZERO)
+        for row in self.asset_category_groups(context):
+            if row.asset_category.is_investment:
+                grouped[row.asset_category.currency] += row.current_balance_total
+        return tuple(sorted(grouped.items()))
+
+    def _balance_for_report(
+        self,
+        account: AccountRecord,
+        context: ReportContext,
+    ) -> AccountBalanceSnapshotRecord | None:
+        return self._accounts.balance_snapshot_as_of(account.id, context.query.end_date)
 
     def cash_flow(self, context: ReportContext) -> tuple[CashFlowPoint, ...]:
         grouped: dict[tuple[date, date], list[TransactionRecord]] = defaultdict(list)
         for record in self.visible_report_transactions(context):
             if record.transaction_type not in {"income", "expense", "interest", "dividend"}:
                 continue
-            period = _bucket_bounds(record.occurred_at.date(), context.query.bucket)
+            period = _bucket_bounds(transaction_record_date(record), context.query.bucket)
             grouped[period].append(record)
 
         points: list[CashFlowPoint] = []
@@ -361,6 +479,22 @@ class ReportService:
                 records.append(category)
         return records
 
+    def _resolve_visible_asset_categories(
+        self,
+        *,
+        actor: Actor,
+        query: ReportQuery,
+    ) -> list[AssetCategoryRecord]:
+        records: list[AssetCategoryRecord] = []
+        for category in self._asset_categories.list():
+            if category.status != AssetCategoryRecordStatus.ACTIVE:
+                continue
+            if query.currency is not None and category.currency != query.currency:
+                continue
+            if _asset_category_in_report_scope(actor, category, query):
+                records.append(category)
+        return records
+
     def _record_is_inside_visible_report_scope(
         self,
         record: TransactionRecord,
@@ -392,6 +526,11 @@ class ReportService:
 def _account_in_report_scope(actor: Actor, account: AccountRecord, query: ReportQuery) -> bool:
     if not actor.user_id:
         return False
+    if query.report_mode == AuthzReportMode.PERSONAL.value:
+        return (
+            account.ownership_type == AccountOwnershipType.PERSONAL
+            and account.owner_user_id == actor.user_id
+        )
     if query.report_mode == AuthzReportMode.SHARED_FAMILY_REPORT.value:
         return (
             account.ownership_type == AccountOwnershipType.SHARED
@@ -413,6 +552,8 @@ def _account_in_report_scope(actor: Actor, account: AccountRecord, query: Report
 def _category_in_report_scope(actor: Actor, category: CategoryRecord, query: ReportQuery) -> bool:
     if not canReadCategory(actor, _authz_category(category)).allowed:
         return False
+    if query.report_mode == AuthzReportMode.PERSONAL.value:
+        return category.scope == CategoryScope.PERSONAL and category.owner_user_id == actor.user_id
     if query.report_mode == AuthzReportMode.SHARED_FAMILY_REPORT.value:
         return (
             category.scope == CategoryScope.HOUSEHOLD
@@ -425,6 +566,36 @@ def _category_in_report_scope(actor: Actor, category: CategoryRecord, query: Rep
         ):
             return True
         return category.scope == CategoryScope.PERSONAL and category.owner_user_id == actor.user_id
+    return False
+
+
+def _asset_category_in_report_scope(
+    actor: Actor,
+    category: AssetCategoryRecord,
+    query: ReportQuery,
+) -> bool:
+    if not can_read_asset_category(actor, category):
+        return False
+    if query.report_mode == AuthzReportMode.PERSONAL.value:
+        return (
+            category.scope_type == AssetCategoryScope.PERSONAL
+            and category.owner_user_id == actor.user_id
+        )
+    if query.report_mode == AuthzReportMode.SHARED_FAMILY_REPORT.value:
+        return (
+            category.scope_type == AssetCategoryScope.HOUSEHOLD
+            and category.household_id == query.household_id
+        )
+    if query.report_mode == AuthzReportMode.COMBINED_VIEWER_OVERVIEW.value:
+        if (
+            category.scope_type == AssetCategoryScope.HOUSEHOLD
+            and category.household_id == query.household_id
+        ):
+            return True
+        return (
+            category.scope_type == AssetCategoryScope.PERSONAL
+            and category.owner_user_id == actor.user_id
+        )
     return False
 
 
@@ -476,18 +647,12 @@ def _totals_by_currency(
 
 
 def _record_inside_date_range(record: TransactionRecord, query: ReportQuery) -> bool:
-    occurred_at = _as_utc_aware(record.occurred_at)
-    if query.start is not None and occurred_at < query.start:
+    effective_date = transaction_record_date(record)
+    if query.start_date is not None and effective_date < query.start_date:
         return False
-    if query.end is not None and occurred_at > query.end:
+    if query.end_date is not None and effective_date > query.end_date:
         return False
     return True
-
-
-def _as_utc_aware(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _bucket_bounds(value: date, bucket: ReportBucket) -> tuple[date, date]:

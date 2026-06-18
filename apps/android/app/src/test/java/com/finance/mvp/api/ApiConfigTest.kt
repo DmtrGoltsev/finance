@@ -13,10 +13,20 @@ class ApiConfigTest {
     }
 
     @Test
-    fun keepsEmulatorDefaultShape() {
-        val config = ApiConfig("http://10.0.2.2:8000")
+    fun normalizesProdBaseTrailingSlash() {
+        val config = ApiConfig("http://45.10.110.42/finance-api/")
 
-        assertEquals("http://10.0.2.2:8000", config.normalizedBaseUrl)
+        assertEquals("http://45.10.110.42/finance-api", config.normalizedBaseUrl)
+    }
+
+    @Test
+    fun buildsProdSessionLoginUrlWithFinanceApiBase() {
+        val config = ApiConfig("http://45.10.110.42/finance-api/")
+
+        assertEquals(
+            "http://45.10.110.42/finance-api/api/v1/sessions",
+            "${config.normalizedBaseUrl}/api/v1/sessions",
+        )
     }
 
     @Test

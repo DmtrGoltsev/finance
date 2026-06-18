@@ -6,8 +6,6 @@ import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.CategorySummary
 import com.finance.mvp.api.FinanceApiClient
 import com.finance.mvp.api.FinanceDashboard
-import com.finance.mvp.api.ImportReportPreviewRequest
-import com.finance.mvp.api.ImportReportPreviewResponse
 import com.finance.mvp.api.LiveFinanceApiClient
 import com.finance.mvp.api.MoneyTotal
 import com.finance.mvp.api.SessionStatus
@@ -226,7 +224,7 @@ private class FakeFinanceApiClient(
         return sessionResult
     }
 
-    override suspend fun dashboard(): ApiResult<FinanceDashboard> {
+    override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> {
         dashboardCalls += 1
         return dashboardResult
     }
@@ -237,6 +235,19 @@ private class FakeFinanceApiClient(
         initialBalance: String,
         accountType: String,
         ownershipType: String,
+        isPaymentAccount: Boolean,
+    ): ApiResult<AccountSummary> {
+        return ApiResult.Failure("unused")
+    }
+
+    override suspend fun createAccount(
+        name: String,
+        currency: String,
+        initialBalance: String,
+        accountType: String,
+        householdId: String?,
+        assetCategoryId: String?,
+        isPaymentAccount: Boolean,
     ): ApiResult<AccountSummary> {
         return ApiResult.Failure("unused")
     }
@@ -260,6 +271,14 @@ private class FakeFinanceApiClient(
         return ApiResult.Failure("unused")
     }
 
+    override suspend fun createCategory(
+        name: String,
+        householdId: String?,
+        categoryType: String,
+    ): ApiResult<CategorySummary> {
+        return ApiResult.Failure("unused")
+    }
+
     override suspend fun updateCategory(category: CategorySummary): ApiResult<CategorySummary> {
         return ApiResult.Failure("unused")
     }
@@ -277,6 +296,7 @@ private class FakeFinanceApiClient(
         category: CategorySummary?,
         transactionType: String,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
         return ApiResult.Failure("unused")
     }
@@ -298,12 +318,6 @@ private class FakeFinanceApiClient(
         destination: AccountSummary,
         amount: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Failure("unused")
-    }
-
-    override suspend fun previewImportReport(
-        request: ImportReportPreviewRequest,
-    ): ApiResult<ImportReportPreviewResponse> {
         return ApiResult.Failure("unused")
     }
 

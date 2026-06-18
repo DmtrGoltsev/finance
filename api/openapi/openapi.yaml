@@ -11,15 +11,17 @@ info:
     enum values, error codes, pagination envelopes, and auth requirements.
 
     MVP boundaries are intentionally narrow: financial data is manual-entry only,
-    `sourceType` accepts only `manual`, transfers are same-scope only, and the
-    only import surface is a metadata-only report-preview placeholder. There is
-    no real import, parser, file storage, bank API, SMS, push, broker credential,
-    external credential, card, IBAN, raw statement, or notification-token endpoint.
+    `sourceType` accepts only `manual`, and transfers are same-scope only. Safe
+    screenshot OCR capture may create pending drafts from sanitized structured
+    candidates, but raw image bytes and OCR text are rejected and confirmed
+    transactions remain `sourceType=manual`. There is no real import, parser,
+    file storage, bank API, automated ingestion, broker credential, external
+    credential, card, IBAN, raw statement, or device-token endpoint.
 
     Privacy invariants:
     - personal data is owner-only;
     - shared data is visible only to active members of the same Household;
-    - reports use only `shared_family_report` and `combined_viewer_overview`;
+    - reports support `personal`, `shared_family_report`, and `combined_viewer_overview`;
     - every list, report, search, autocomplete, cache, count, and aggregation
       filters visible rows before any aggregation or pagination;
     - responses never expose hidden counts, filtered-out counts, hidden facets,
@@ -34,17 +36,55 @@ tags:
     description: Manual personal and shared financial accounts visible to the caller.
   - name: Transactions
     description: Manual transaction entry, search, autocomplete, and lifecycle operations.
+  - name: CaptureDrafts
+    description: Pending screenshot OCR capture candidates plus transient server-side screenshot recognition. Raw OCR text is never accepted by structured draft endpoints or returned.
   - name: Categories
     description: Personal and household category management for manual finance records.
   - name: Reports
     description: Privacy-filtered MVP reports over visible manual financial data.
-  - name: Imports
-    description: Metadata-only import preview placeholder. It never stores files, parses rows, or changes financial records.
+  - name: Planning
+    description: Monthly personal and household planning; confirmations never create transactions.
+  - name: Sync
+    description: Offline-first sync push/pull for the mounted MVP entity subset.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
   - androidBearerAuth: []
 paths:
+  /users:
+    post:
+      tags: [Auth]
+      operationId: createUser
+      summary: Register user and create current session.
+      description: Public registration endpoint. New users are created without financial bootstrap data and receive the same session runtime shape as login for the selected transport. Non-actionable or repeated registration requests return a neutral accepted response without token material and without confirming whether the email exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistrationRequest'
+      responses:
+        '201':
+          description: Current session for the newly registered user.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/BearerSessionResponse'
+                  - $ref: '#/components/schemas/PwaCookieSessionResponse'
+        '202':
+          description: Neutral accepted registration response. No session or token material is issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationAcceptedResponse'
+        '429':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /sessions:
     post:
       tags: [Auth]
@@ -64,7 +104,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionEnvelope'
+                oneOf:
+                  - $ref: '#/components/schemas/BearerSessionResponse'
+                  - $ref: '#/components/schemas/PwaCookieSessionResponse'
+        '429':
+          $ref: '#/components/responses/Error'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -80,7 +124,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionEnvelope'
+                $ref: '#/components/schemas/CurrentSessionResponse'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -187,6 +231,7 @@ paths:
       tags: [Accounts]
       operationId: updateAccount
       summary: Update account mutable fields.
+      description: Updates the account snapshot fields `name`, `currentBalance`, and `currency` with optional optimistic `version`; `initialBalance` is immutable. Currency cannot be changed after any transaction references the account.
       parameters:
         - $ref: '#/components/parameters/AccountId'
       requestBody:
@@ -202,6 +247,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountEnvelope'
+        '409':
+          description: Conflict. Returned as `CONFLICTING_UPDATE` for stale `version`, or `ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS` when changing currency after transactions exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -251,6 +302,179 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories:
+    get:
+      tags: [Asset Categories]
+      operationId: listAssetCategories
+      summary: List/search visible asset categories.
+      description: Personal asset categories are owner-only; household asset categories require active membership. This is the source of truth for manual asset groups and investment flags.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: scopeType
+          in: query
+          schema:
+            $ref: '#/components/schemas/AssetCategoryScope'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+        - $ref: '#/components/parameters/AssetCategoryRecordStatusFilter'
+        - name: isInvestment
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/SearchQuery'
+      responses:
+        '200':
+          description: Visible asset categories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Asset Categories]
+      operationId: createAssetCategory
+      summary: Create personal or household asset category.
+      description: Defaults `manualAmount` to 0 and `isInvestment` to false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCategoryCreateRequest'
+      responses:
+        '201':
+          description: Created asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/investment-migrations:
+    post:
+      tags: [Asset Categories]
+      operationId: createInvestmentMigration
+      summary: Atomically create an investment category and link accounts.
+      description: |
+        Online immediate command for converting active same-scope, same-currency,
+        unlinked accounts into one investment asset category. The command is
+        atomic within the backend request. Offline retry/idempotency is provided
+        through `/sync/push` with `entityType=investment_migrations` and
+        `operation=create`; this REST endpoint does not store clientMutationId.
+        `color` is accepted for client command parity but is not persisted by the
+        current asset category storage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvestmentMigrationCreateRequest'
+      responses:
+        '201':
+          description: Created investment category and linked accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestmentMigrationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}:
+    get:
+      tags: [Asset Categories]
+      operationId: getAssetCategory
+      summary: Get visible asset category detail.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Asset category detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Asset Categories]
+      operationId: updateAssetCategory
+      summary: Update asset category mutable fields.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCategoryUpdateRequest'
+      responses:
+        '200':
+          description: Updated asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Asset Categories]
+      operationId: deleteAssetCategory
+      summary: Soft delete asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '204':
+          description: Asset category soft-deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}/archive:
+    post:
+      tags: [Asset Categories]
+      operationId: archiveAssetCategory
+      summary: Archive asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Archived asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /asset-categories/{assetCategoryId}/restore:
+    post:
+      tags: [Asset Categories]
+      operationId: restoreAssetCategory
+      summary: Restore archived asset category.
+      parameters:
+        - $ref: '#/components/parameters/AssetCategoryId'
+      responses:
+        '200':
+          description: Restored asset category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCategoryEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -399,6 +623,235 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sync/push:
+    post:
+      tags: [Sync]
+      operationId: syncPush
+      summary: Push ordered offline mutations.
+      description: |
+        Idempotent mutation ingestion for the MVP sync subset. The server stores a
+        canonical request hash per actor, deviceId, and clientMutationId. Reusing
+        the same key with the same hash returns the stored result; reusing it with
+        different content returns `IDEMPOTENCY_KEY_REUSED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncPushRequest'
+      responses:
+        '200':
+          description: Ordered mutation results. Unsupported or invalid mutations are explicit rejected results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncPushResponse'
+        '409':
+          description: Idempotency key reused with a different request hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sync/pull:
+    post:
+      tags: [Sync]
+      operationId: syncPull
+      summary: Pull ordered visible changes after a cursor.
+      description: Returns only changes visible to the authenticated actor by personal owner scope or active household membership.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncPullRequest'
+      responses:
+        '200':
+          description: Visible ordered sync changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncPullResponse'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts:
+    get:
+      tags: [CaptureDrafts]
+      operationId: listCaptureDrafts
+      summary: List current actor capture drafts.
+      description: Returns only drafts owned by the authenticated actor. No hidden counts are returned.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CaptureDraftStatus'
+      responses:
+        '200':
+          description: Current actor capture drafts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftPageEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [CaptureDrafts]
+      operationId: createCaptureDraft
+      summary: Create pending capture draft.
+      description: |
+        Accepts only sanitized structured screenshot OCR candidates. Raw image
+        bytes, raw OCR text, `body`, `text`, and other raw payload/body fields are
+        not part of this schema and must be rejected. Reusing the same
+        owner/idempotencyKey returns the existing draft without creating a
+        duplicate row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureDraftCreateRequest'
+      responses:
+        '201':
+          description: Created or existing idempotent capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/screenshot-ocr:
+    post:
+      tags: [CaptureDrafts]
+      operationId: recognizeCaptureDraftScreenshotOcr
+      summary: Recognize category aggregate rows from a screenshot.
+      description: |
+        Authenticated server-side OCR endpoint for PWA/iOS screenshot capture.
+        The screenshot upload is temporary, accepted only as PNG, JPEG, or WebP,
+        and is not stored. The response contains structured candidates only and
+        never returns raw OCR text, full OCR blocks, image bytes, or image hashes.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ScreenshotOcrRequest'
+      responses:
+        '200':
+          description: Structured screenshot OCR candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenshotOcrEnvelope'
+        '413':
+          $ref: '#/components/responses/Error'
+        '415':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/category-mappings:
+    put:
+      tags: [CaptureDrafts]
+      operationId: putCaptureDraftCategoryMapping
+      summary: Save a hash-only screenshot category mapping.
+      description: |
+        Stores only the authenticated actor, optional household context,
+        selected category, and normalized external label hash. The submitted
+        externalLabel is transient request input and is never stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureCategoryMappingPutRequest'
+      responses:
+        '200':
+          description: Stored category mapping without echoing externalLabel.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureCategoryMappingEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}:
+    patch:
+      tags: [CaptureDrafts]
+      operationId: updateCaptureDraft
+      summary: Update pending capture draft candidate fields.
+      description: Only pending drafts owned by the current actor can be changed.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureDraftUpdateRequest'
+      responses:
+        '200':
+          description: Updated capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}/confirm:
+    post:
+      tags: [CaptureDrafts]
+      operationId: confirmCaptureDraft
+      summary: Confirm capture draft as a manual transaction.
+      description: Requires accountId, categoryId, amount, and description on the draft. Creates an expense transaction with `sourceType=manual`, then marks the draft confirmed with transactionId.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Confirmed capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /capture-drafts/{draftId}/discard:
+    post:
+      tags: [CaptureDrafts]
+      operationId: discardCaptureDraft
+      summary: Discard pending capture draft.
+      description: Only pending drafts owned by the current actor can be discarded.
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Discarded capture draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureDraftEnvelope'
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -567,10 +1020,10 @@ paths:
       tags: [Reports]
       operationId: getReportSummary
       summary: Get summary report for visible rows.
-      description: Computes totals only after resolving visibleAccountIds for the selected report mode.
+      description: Computes totals only after resolving visible accounts for the selected report mode. `personal` uses only the current viewer's personal scope and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -594,10 +1047,10 @@ paths:
       tags: [Reports]
       operationId: getReportCategoryBreakdown
       summary: Get category breakdown for visible rows.
-      description: Category buckets and transactionCount use only visible filtered transactions.
+      description: Category buckets and transactionCount use only visible filtered transactions. `personal` uses only the current viewer's personal scope and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -621,10 +1074,10 @@ paths:
       tags: [Reports]
       operationId: getReportAccountBalances
       summary: Get balances for visible accounts.
-      description: Never includes personal accounts of another household member, including sorting/min/max/cache behavior.
+      description: Never includes personal accounts of another household member, including sorting/min/max/cache behavior. `personal` uses only the current viewer's personal accounts and personal asset categories and does not require householdId.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -648,7 +1101,7 @@ paths:
       summary: Get cash-flow trend for visible rows.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -676,7 +1129,7 @@ paths:
       description: Every returned row must pass regular transaction list/detail predicates for the same actor.
       parameters:
         - $ref: '#/components/parameters/ReportMode'
-        - $ref: '#/components/parameters/HouseholdIdRequired'
+        - $ref: '#/components/parameters/ReportHouseholdId'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - $ref: '#/components/parameters/Timezone'
@@ -698,29 +1151,250 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
-  /imports/report-preview:
+  /planning/plans:
+    get:
+      tags: [Planning]
+      operationId: getPlanningPlanForScopeMonth
+      summary: Get plan for scope and month.
+      description: Resolves personal owner-only or household active-membership scope before loading income sources, allocations, or totals. If month is omitted, the server uses the next calendar month.
+      parameters:
+        - $ref: '#/components/parameters/PlanningScopeRequired'
+        - $ref: '#/components/parameters/PlanningMonth'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Planning plan for the requested scope/month.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
     post:
-      tags: [Imports]
-      operationId: previewImportReport
-      summary: Preview a future report import using metadata only.
-      description: |
-        Placeholder-only endpoint. It accepts selected report metadata, file name,
-        size, and MIME type only. It never accepts file bodies, parsed rows,
-        account ids from file content, amounts, descriptions, credentials, or a
-        confirm/apply action. `canConfirm` and `willChangeData` are always false.
+      tags: [Planning]
+      operationId: createPlanningPlan
+      summary: Create personal or household monthly plan.
+      description: A plan has one currency and one scope. Duplicate scope/month plans return conflict.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ImportReportPreviewRequest'
+              $ref: '#/components/schemas/PlanningPlanCreateRequest'
       responses:
-        '200':
-          description: Safe placeholder preview.
+        '201':
+          description: Created planning plan.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ImportReportPreviewResponse'
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/history:
+    get:
+      tags: [Planning]
+      operationId: listPlanningPlanHistory
+      summary: List historical plans for a scope.
+      description: Returns visible plan summaries sorted by month descending; no hidden counts are exposed.
+      parameters:
+        - $ref: '#/components/parameters/PlanningScopeRequired'
+        - $ref: '#/components/parameters/HouseholdIdFilter'
+      responses:
+        '200':
+          description: Visible planning history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanSummaryListEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}:
+    get:
+      tags: [Planning]
+      operationId: getPlanningPlan
+      summary: Get visible planning plan.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      responses:
+        '200':
+          description: Planning plan detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/income-sources:
+    post:
+      tags: [Planning]
+      operationId: createPlanningIncomeSource
+      summary: Add planned income source.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningIncomeSourceCreateRequest'
+      responses:
+        '201':
+          description: Created income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/allocations:
+    post:
+      tags: [Planning]
+      operationId: createPlanningAllocation
+      summary: Add amount or percent allocation.
+      description: Target must be a visible same-scope expense category, same-currency account, or same-currency account-backed asset/investment. Overallocated plans are allowed and surfaced through derived flags.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningAllocationCreateRequest'
+      responses:
+        '201':
+          description: Created allocation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningAllocationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/plans/{planId}/copy:
+    post:
+      tags: [Planning]
+      operationId: copyPlanningPlan
+      summary: Copy plan to another month.
+      description: Copies income sources and allocations, preserving allocation mode/value. Missing or inaccessible targets become requiresAttention rows with targetSnapshot; no category/account/asset/transaction is auto-created.
+      parameters:
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningPlanCopyRequest'
+      responses:
+        '201':
+          description: Copied planning plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningPlanEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/income-sources/{incomeSourceId}:
+    patch:
+      tags: [Planning]
+      operationId: updatePlanningIncomeSource
+      summary: Update planned income source.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningIncomeSourceUpdateRequest'
+      responses:
+        '200':
+          description: Updated income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Planning]
+      operationId: deletePlanningIncomeSource
+      summary: Delete planned income source.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      responses:
+        '204':
+          description: Income source deleted.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/income-sources/{incomeSourceId}/confirm:
+    post:
+      tags: [Planning]
+      operationId: confirmPlanningIncomeSource
+      summary: Confirm income source in planning only.
+      description: Sets confirmation state and audit-ish actor fields on the planning row only. It does not create transactions or mutate balances.
+      parameters:
+        - $ref: '#/components/parameters/IncomeSourceId'
+      responses:
+        '200':
+          description: Confirmed income source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningIncomeSourceEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /planning/allocations/{allocationId}:
+    patch:
+      tags: [Planning]
+      operationId: updatePlanningAllocation
+      summary: Update allocation.
+      parameters:
+        - $ref: '#/components/parameters/AllocationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningAllocationUpdateRequest'
+      responses:
+        '200':
+          description: Updated allocation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningAllocationEnvelope'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Planning]
+      operationId: deletePlanningAllocation
+      summary: Delete allocation.
+      parameters:
+        - $ref: '#/components/parameters/AllocationId'
+      responses:
+        '204':
+          description: Allocation deleted.
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -755,6 +1429,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/ResourceId' }
+    AssetCategoryId:
+      name: assetCategoryId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
     CategoryId:
       name: categoryId
       in: path
@@ -762,6 +1441,26 @@ components:
       schema: { $ref: '#/components/schemas/ResourceId' }
     TransactionId:
       name: transactionId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    DraftId:
+      name: draftId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    IncomeSourceId:
+      name: incomeSourceId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceId' }
+    AllocationId:
+      name: allocationId
       in: path
       required: true
       schema: { $ref: '#/components/schemas/ResourceId' }
@@ -820,6 +1519,17 @@ components:
       in: query
       required: false
       schema: { $ref: '#/components/schemas/CurrencyCode' }
+    PlanningScopeRequired:
+      name: scope
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/PlanningScope' }
+    PlanningMonth:
+      name: month
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/PlanMonth' }
+      description: Calendar month accepted as YYYY-MM or YYYY-MM-01. Defaults to next month when omitted.
     HouseholdIdRequired:
       name: householdId
       in: query
@@ -832,6 +1542,12 @@ components:
       required: false
       schema: { $ref: '#/components/schemas/ResourceId' }
       description: Optional scope narrowing only; inaccessible ids use neutral behavior.
+    ReportHouseholdId:
+      name: householdId
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/ResourceId' }
+      description: Required for `shared_family_report` and `combined_viewer_overview`; omitted for `personal`.
     AccountIdFilter:
       name: accountId
       in: query
@@ -905,6 +1621,11 @@ components:
       in: query
       required: false
       schema: { $ref: '#/components/schemas/RecordStatus' }
+    AssetCategoryRecordStatusFilter:
+      name: recordStatus
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/RecordStatus' }
   schemas:
     ResourceId:
       type: string
@@ -920,6 +1641,11 @@ components:
       type: string
       format: date
       examples: ['2026-05-17']
+    PlanMonth:
+      type: string
+      pattern: '^[0-9]{4}-[0-9]{2}(-01)?$'
+      examples: ['2026-06', '2026-06-01']
+      description: Calendar month accepted as YYYY-MM or YYYY-MM-01. Responses use YYYY-MM; server stores the first day of the month.
     DecimalString:
       type: string
       pattern: '^-?[0-9]+(\.[0-9]{1,6})?$'
@@ -935,6 +1661,12 @@ components:
     AccountType:
       type: string
       enum: [cash, bank, card, deposit, brokerage, metal, other]
+    AssetCategoryType:
+      type: string
+      enum: [cash, bank, card, deposit, brokerage, metal, other]
+    AssetCategoryScope:
+      type: string
+      enum: [personal, household]
     CategoryScope:
       type: string
       enum: [personal, household]
@@ -942,13 +1674,32 @@ components:
     CategoryType:
       type: string
       enum: [income, expense]
+    PlanningScope:
+      type: string
+      enum: [personal, household]
+    IncomeConfirmationState:
+      type: string
+      enum: [planned, confirmed]
+    AllocationTargetType:
+      type: string
+      enum: [expense_category, account, asset, investment_asset_category]
+      description: "`expense_category` targets expense categories; `investment_asset_category` targets active investment asset categories. `account` and `asset` are legacy-compatible account-backed targets."
+    AllocationMode:
+      type: string
+      enum: [amount, percent]
+    AllocationRecurrenceType:
+      type: string
+      enum: [regular, one_off]
+    AllocationProgressStatus:
+      type: string
+      enum: [on_track, needs_attention, no_actuals, target_attention, not_applicable]
     TransactionType:
       type: string
       enum: [income, expense, transfer, brokerage, asset_buy, asset_sell, interest, dividend, adjustment]
     ReportMode:
       type: string
-      enum: [shared_family_report, combined_viewer_overview]
-      description: The only two report modes in MVP.
+      enum: [personal, shared_family_report, combined_viewer_overview]
+      description: "`personal` includes only the current viewer's personal owner scope; household modes require householdId."
     TransferScope:
       type: string
       enum: [personal_same_owner, household_same_household]
@@ -961,17 +1712,31 @@ components:
       enum: [manual]
       description: MVP accepts only manual source. Reserved post-MVP values are rejected by create/update flows.
       x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
-    ImportReportType:
+    SyncEntityType:
       type: string
-      enum: [generic_finance_report, bank_statement, brokerage_report, deposit_report, metals_report]
-    ImportSourceType:
+      enum:
+        - transactions
+        - accounts
+        - categories
+        - asset_categories
+        - investment_migrations
+        - planning_plans
+        - planning_income_sources
+        - planning_allocations
+      description: MVP sync supports manual transactions, account/category/asset-category CRUD hooks, atomic investment_migrations:create, and offline-first planning CRUD hooks.
+    SyncOperation:
       type: string
-      enum: [file_metadata_only]
-      description: Only file metadata is accepted by the placeholder endpoint.
-      x-reserved-post-mvp-values: [file_import, bank_api, sms, push]
-    ImportTargetScope:
+      enum: [create, update, archive, delete, restore, confirm]
+    SyncMutationStatus:
       type: string
-      enum: [personal, shared]
+      enum: [applied, rejected]
+    CaptureDraftStatus:
+      type: string
+      enum: [pending, confirmed, discarded]
+    CaptureSource:
+      type: string
+      enum: [screenshot]
+      description: Sanitized structured screenshot OCR capture source only; it is not a transaction sourceType.
     RecordStatus:
       type: string
       enum: [active, archived, deleted]
@@ -998,13 +1763,22 @@ components:
         - TRANSACTION_ACCOUNT_MISMATCH
         - ARCHIVED_RECORD_NOT_MUTABLE
         - CONFLICTING_UPDATE
+        - ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS
         - TRANSFER_SCOPE_NOT_SUPPORTED
         - TRANSFER_COUNTERPARTY_REQUIRED
         - TRANSFER_COUNTERPARTY_NOT_ACCESSIBLE
+        - TOO_MANY_REQUESTS
         - RATE_LIMITED
         - LOGIN_RATE_LIMITED
         - RESET_RATE_LIMITED
         - INVITE_RATE_LIMITED
+        - UPLOAD_TOO_LARGE
+        - IMAGE_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
+        - INVALID_IMAGE
+        - OCR_DISABLED
+        - OCR_ENGINE_UNAVAILABLE
+        - OCR_TIMEOUT
         - INVITE_NOT_FOUND_OR_NOT_ACCESSIBLE
         - INVITE_EXPIRED
         - INVITE_ALREADY_USED
@@ -1013,6 +1787,13 @@ components:
         - RESET_TOKEN_NOT_FOUND_OR_EXPIRED
         - RESET_TOKEN_ALREADY_USED
         - PASSWORD_POLICY_FAILED
+        - IDEMPOTENCY_KEY_REUSED
+        - UNSUPPORTED_ENTITY_TYPE
+        - UNSUPPORTED_OPERATION
+        - UNSUPPORTED_TRANSACTION_TYPE
+        - PAYLOAD_REQUIRED
+        - BASE_VERSION_REQUIRED
+        - ENTITY_ALREADY_EXISTS
     ErrorDetail:
       type: object
       description: Field-level details for caller-supplied invalid fields only; never includes hidden object names, amounts, emails, tokens, SQL, stack traces, or raw payloads.
@@ -1086,6 +1867,48 @@ components:
           anyOf:
             - $ref: '#/components/schemas/DateTime'
             - type: 'null'
+    AuthTransport:
+      type: string
+      enum: [pwa_cookie, android_bearer]
+    UserRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 1024
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        transport:
+          $ref: '#/components/schemas/AuthTransport'
+          default: android_bearer
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 120
+    RegistrationAcceptedResponse:
+      type: object
+      additionalProperties: false
+      required: [registrationAccepted, message, requestId]
+      properties:
+        registrationAccepted:
+          type: boolean
+          const: true
+        message:
+          type: string
+          description: Generic registration acceptance message; never confirms whether the email exists.
+        requestId:
+          type: string
     SessionCreateRequest:
       type: object
       additionalProperties: false
@@ -1094,12 +1917,81 @@ components:
         email:
           type: string
           format: email
+          minLength: 3
+          maxLength: 320
         password:
           type: string
           format: password
+          minLength: 1
+          maxLength: 1024
+        transport:
+          $ref: '#/components/schemas/AuthTransport'
+          default: android_bearer
         deviceName:
           type: string
+          minLength: 1
           maxLength: 120
+    ActorMembershipDto:
+      type: object
+      additionalProperties: false
+      required: [householdId, status]
+      properties:
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+        status:
+          type: string
+    ActorContextDto:
+      type: object
+      additionalProperties: false
+      required: [userId, memberships]
+      properties:
+        userId:
+          $ref: '#/components/schemas/ResourceId'
+        sessionId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        memberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActorMembershipDto'
+    BearerSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [tokenType, accessToken, expiresAt, actor]
+      properties:
+        tokenType:
+          type: string
+          const: Bearer
+        accessToken:
+          type: string
+          minLength: 1
+        expiresAt:
+          $ref: '#/components/schemas/DateTime'
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
+    PwaCookieSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [transport, csrfToken, expiresAt, actor]
+      properties:
+        transport:
+          type: string
+          const: pwa_cookie
+        csrfToken:
+          type: string
+          minLength: 1
+        expiresAt:
+          $ref: '#/components/schemas/DateTime'
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
+    CurrentSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor:
+          $ref: '#/components/schemas/ActorContextDto'
     SessionDto:
       type: object
       additionalProperties: false
@@ -1114,7 +2006,7 @@ components:
     AccountDto:
       type: object
       additionalProperties: false
-      required: [id, name, accountType, ownershipType, currency, initialBalance, currentBalance, status, createdByUserId, createdAt, updatedAt, version]
+      required: [id, name, accountType, ownershipType, currency, initialBalance, currentBalance, isPaymentAccount, status, createdByUserId, createdAt, updatedAt, version]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -1135,12 +2027,20 @@ components:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
           description: Required for shared accounts; null for personal accounts.
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Optional link to an active same-scope same-currency asset category.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         initialBalance:
           $ref: '#/components/schemas/DecimalString'
         currentBalance:
           $ref: '#/components/schemas/DecimalString'
+        isPaymentAccount:
+          type: boolean
+          description: True when the account can be selected as an expense payment source, including capture-confirmed expenses. Income transactions are not blocked by this flag.
         status:
           $ref: '#/components/schemas/RecordStatus'
         createdByUserId:
@@ -1176,10 +2076,17 @@ components:
         householdId:
           $ref: '#/components/schemas/ResourceId'
           description: Required when ownershipType is shared; ignored/rejected for personal per backend validation.
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Optional active same-scope same-currency asset category.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         initialBalance:
           $ref: '#/components/schemas/DecimalString'
+        isPaymentAccount:
+          type: boolean
+          default: true
+          description: Defaults to true; set false for investment/display accounts that clients should omit from expense payment-source pickers. Income transactions are not blocked by this flag.
     AccountUpdateRequest:
       type: object
       additionalProperties: false
@@ -1188,8 +2095,22 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        currentBalance:
+          $ref: '#/components/schemas/DecimalString'
+          description: Snapshot balance override. Does not mutate initialBalance.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+          description: Allowed only while no transaction references the account.
         accountType:
           $ref: '#/components/schemas/AccountType'
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Set or clear the optional asset category link.
+        isPaymentAccount:
+          type: boolean
+          description: When false, clients should omit this account from expense payment-source pickers. Income transactions are not blocked by this flag.
         status:
           $ref: '#/components/schemas/RecordStatus'
         version:
@@ -1199,7 +2120,7 @@ components:
     AccountAutocompleteDto:
       type: object
       additionalProperties: false
-      required: [id, name, accountType, ownershipType, currency]
+      required: [id, name, accountType, ownershipType, isPaymentAccount, currency]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -1213,12 +2134,505 @@ components:
           anyOf:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
+        isPaymentAccount:
+          type: boolean
+          description: True when the account can be offered as an expense payment source; income selection is not restricted by this flag.
         currency:
           $ref: '#/components/schemas/CurrencyCode'
+    AssetCategoryDto:
+      type: object
+      additionalProperties: false
+      required: [id, name, scopeType, currency, assetType, manualAmount, isInvestment, recordStatus, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        name:
+          type: string
+          maxLength: 120
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        iconKey:
+          type: [string, 'null']
+          maxLength: 80
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        isInvestment:
+          type: boolean
+        recordStatus:
+          $ref: '#/components/schemas/RecordStatus'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        archivedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        deletedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    AssetCategoryCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, scopeType, currency]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for household scope; forbidden for personal.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+          default: other
+        iconKey:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+          default: '0.0000'
+        isInvestment:
+          type: boolean
+          default: false
+    AssetCategoryUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        iconKey:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
+        isInvestment:
+          type: boolean
+        recordStatus:
+          $ref: '#/components/schemas/RecordStatus'
+        version:
+          type: integer
+          minimum: 1
+    InvestmentMigrationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [assetCategoryId, name, assetType, currency, accountIds, accountVersions]
+      properties:
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Client-provided ID for the asset category to create. For sync this must match mutation.entityId.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        icon:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
+          description: Stored as asset category iconKey. Backend also accepts iconKey.
+        color:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 32
+          description: Accepted for client command parity; not persisted by current asset category storage.
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        scope:
+          $ref: '#/components/schemas/AssetCategoryScope'
+          description: Optional. If omitted, derived from the validated accounts; backend also accepts scopeType.
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required for household scope unless derivable from shared accounts; forbidden for personal.
+        accountIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ResourceId'
+        accountVersions:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 1
+          description: Map of accountId to expected optimistic version. Keys must exactly match accountIds.
+      description: |
+        Creates an investment asset category with manualAmount=0 and isInvestment=true,
+        then links all requested accounts without changing balances. Rejects stale
+        account versions, linked accounts, mixed scope, mixed currency, or account
+        type versus assetType mismatches before writing.
+    PlanningSummaryDto:
+      type: object
+      additionalProperties: false
+      required: [totalPlannedIncome, totalConfirmedIncome, totalAllocatedAmount, unallocatedAmount, previousMonthSurplus, underallocated, overallocated]
+      properties:
+        totalPlannedIncome:
+          $ref: '#/components/schemas/DecimalString'
+        totalConfirmedIncome:
+          $ref: '#/components/schemas/DecimalString'
+        totalAllocatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+        unallocatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+        previousMonthSurplus:
+          $ref: '#/components/schemas/DecimalString'
+          description: "Proposal-only positive surplus from the previous month: planned expense allocations minus actual expense transactions in the previous plan month, floored at zero. No transaction is created."
+        underallocated:
+          type: boolean
+          description: True when totalAllocatedAmount is less than totalPlannedIncome.
+        overallocated:
+          type: boolean
+          description: True when totalAllocatedAmount is greater than totalPlannedIncome. Saving overallocated plans is allowed.
+    PlanningIncomeSourceDto:
+      type: object
+      additionalProperties: false
+      required: [id, planId, amount, source, dayOfMonth, effectiveDate, confirmationState, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        planId:
+          $ref: '#/components/schemas/ResourceId'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+        effectiveDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Date used for this plan month; day 31 falls back to the last day in shorter months.
+        confirmationState:
+          $ref: '#/components/schemas/IncomeConfirmationState'
+        confirmedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        confirmedByUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningAllocationDto:
+      type: object
+      additionalProperties: false
+      required: [id, planId, targetType, targetSnapshot, requiresAttention, allocationMode, allocationValue, calculatedAmount, recurrenceType, isSavingsGoal, actualAmount, varianceAmount, status, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        planId:
+          $ref: '#/components/schemas/ResourceId'
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+          description: Null when a copied allocation target is missing or inaccessible and requiresAttention is true.
+        targetSnapshot:
+          type: object
+          additionalProperties: true
+          description: Non-authoritative display snapshot of the category/account/asset target at allocation creation or copy time.
+        requiresAttention:
+          type: boolean
+        attentionReason:
+          type: [string, 'null']
+          examples: [TARGET_MISSING_OR_INACCESSIBLE]
+        comment:
+          type: [string, 'null']
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+          description: Amount value or percentage value depending on allocationMode.
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+          default: regular
+        isSavingsGoal:
+          type: boolean
+          default: false
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
+        goalMonthlyAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+          description: Computed as goalTargetAmount divided across plan month through goalDueMonth when both are present.
+        calculatedAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: Percent allocations are calculated from total planned income in the current plan response.
+        actualAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: Actual matching transactions in the plan month. Expenses match by category; investment asset categories match active visible accounts linked by assetCategoryId.
+        varianceAmount:
+          $ref: '#/components/schemas/DecimalString'
+          description: actualAmount minus calculatedAmount.
+        status:
+          $ref: '#/components/schemas/AllocationProgressStatus'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanDto:
+      type: object
+      additionalProperties: false
+      required: [id, scope, month, currency, incomeSources, allocations, summary, createdByUserId, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        incomeSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningIncomeSourceDto'
+        allocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningAllocationDto'
+        summary:
+          $ref: '#/components/schemas/PlanningSummaryDto'
+        createdByUserId:
+          $ref: '#/components/schemas/ResourceId'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanSummaryDto:
+      type: object
+      additionalProperties: false
+      required: [id, scope, month, currency, summary, createdAt, updatedAt, version]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        summary:
+          $ref: '#/components/schemas/PlanningSummaryDto'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, month, currency]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          $ref: '#/components/schemas/PlanningScope'
+        month:
+          $ref: '#/components/schemas/PlanMonth'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+          description: Required when scope is household; forbidden for personal.
+    PlanningIncomeSourceCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [amount, source, dayOfMonth]
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+    PlanningIncomeSourceUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        source:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+        version:
+          type: integer
+          minimum: 1
+    PlanningAllocationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [targetType, targetId, allocationMode, allocationValue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          $ref: '#/components/schemas/ResourceId'
+        comment:
+          type: string
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+          default: regular
+        isSavingsGoal:
+          type: boolean
+          default: false
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
+    PlanningAllocationUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        targetType:
+          $ref: '#/components/schemas/AllocationTargetType'
+        targetId:
+          $ref: '#/components/schemas/ResourceId'
+        comment:
+          type: [string, 'null']
+          maxLength: 500
+        allocationMode:
+          $ref: '#/components/schemas/AllocationMode'
+        allocationValue:
+          $ref: '#/components/schemas/DecimalString'
+        recurrenceType:
+          $ref: '#/components/schemas/AllocationRecurrenceType'
+        isSavingsGoal:
+          type: boolean
+          description: When true, targetType must be investment_asset_category.
+        goalTargetAmount:
+          anyOf:
+            - $ref: '#/components/schemas/DecimalString'
+            - type: 'null'
+        goalDueMonth:
+          anyOf:
+            - $ref: '#/components/schemas/PlanMonth'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+    PlanningPlanCopyRequest:
+      type: object
+      additionalProperties: false
+      required: [targetMonth]
+      properties:
+        targetMonth:
+          $ref: '#/components/schemas/PlanMonth'
     TransactionDto:
       type: object
       additionalProperties: false
-      required: [id, transactionType, accountId, amount, currency, occurredAt, sourceType, createdByUserId, createdAt, updatedAt, version]
+      required: [id, transactionType, accountId, amount, currency, occurredAt, transactionDate, sourceType, createdByUserId, createdAt, updatedAt, version]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -1240,6 +2654,10 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. When transactionDate is supplied by the client, the server stores this as stable UTC noon for that date.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Date-only operation date used for reporting and month boundaries.
         description:
           type: [string, 'null']
           maxLength: 500
@@ -1274,7 +2692,7 @@ components:
     TransactionCreateRequest:
       type: object
       additionalProperties: false
-      required: [transactionType, accountId, amount, currency, occurredAt, sourceType]
+      required: [transactionType, accountId, amount, currency, sourceType]
       properties:
         transactionType:
           $ref: '#/components/schemas/TransactionType'
@@ -1292,11 +2710,16 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Required only when transactionDate is omitted.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Preferred date-only operation date. When both fields are supplied, transactionDate wins for reporting and occurredAt is normalized to UTC noon.
         description:
           type: string
           maxLength: 500
         sourceType:
           $ref: '#/components/schemas/SourceType'
+      description: transactionDate is preferred; legacy clients may omit it only when occurredAt is supplied.
     TransactionUpdateRequest:
       type: object
       additionalProperties: false
@@ -1315,6 +2738,9 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Ignored for reporting date when transactionDate is also supplied.
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
         description:
           type: string
           maxLength: 500
@@ -1327,7 +2753,7 @@ components:
     TransactionAutocompleteDto:
       type: object
       additionalProperties: false
-      required: [id, transactionType, accountId, occurredAt, sourceType]
+      required: [id, transactionType, accountId, occurredAt, transactionDate, sourceType]
       properties:
         id:
           $ref: '#/components/schemas/ResourceId'
@@ -1341,8 +2767,457 @@ components:
             - type: 'null'
         occurredAt:
           $ref: '#/components/schemas/DateTime'
+        transactionDate:
+          $ref: '#/components/schemas/DateOnly'
         sourceType:
           $ref: '#/components/schemas/SourceType'
+    SyncMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [clientMutationId, entityType, entityId, operation]
+      properties:
+        clientMutationId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/SyncOperation'
+        baseVersion:
+          type: [integer, 'null']
+          minimum: 1
+          description: Required by sync MVP for update/delete/restore/confirm to avoid unsafe overwrites.
+        payload:
+          type: [object, 'null']
+          additionalProperties: true
+          description: Entity-specific mutation body. Create/update follows the matching online request shape for transactions, accounts, categories, asset_categories, investment_migrations, or planning records. Planning child create payloads also require planId. Offline account currentBalance changes are rejected.
+    SyncPushRequest:
+      type: object
+      additionalProperties: false
+      required: [deviceId, clientSchemaVersion, mutations]
+      properties:
+        deviceId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        clientSchemaVersion:
+          type: integer
+          minimum: 1
+        mutations:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SyncMutationRequest'
+    SyncMutationResult:
+      type: object
+      additionalProperties: false
+      required: [clientMutationId, entityType, entityId, operation, status]
+      properties:
+        clientMutationId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/SyncOperation'
+        status:
+          $ref: '#/components/schemas/SyncMutationStatus'
+        serverVersion:
+          type: [integer, 'null']
+          minimum: 1
+        changeSeq:
+          type: [integer, 'null']
+          minimum: 1
+        errorCode:
+          type: [string, 'null']
+        message:
+          type: [string, 'null']
+        data:
+          type: [object, 'null']
+          additionalProperties: true
+    SyncPushResponse:
+      type: object
+      additionalProperties: false
+      required: [deviceId, serverTime, results]
+      properties:
+        deviceId:
+          type: string
+        serverTime:
+          $ref: '#/components/schemas/DateTime'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncMutationResult'
+    SyncPullRequest:
+      type: object
+      additionalProperties: false
+      required: [deviceId, clientSchemaVersion]
+      properties:
+        deviceId:
+          type: string
+          minLength: 1
+          maxLength: 160
+        clientSchemaVersion:
+          type: integer
+          minimum: 1
+        cursor:
+          type: integer
+          minimum: 0
+          default: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+        entityTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncEntityType'
+    SyncChangeDto:
+      type: object
+      additionalProperties: false
+      required: [seq, entityType, entityId, changeType, createdAt]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        entityType:
+          $ref: '#/components/schemas/SyncEntityType'
+        entityId:
+          type: string
+          format: uuid
+        changeType:
+          $ref: '#/components/schemas/SyncOperation'
+        entityVersion:
+          type: [integer, 'null']
+          minimum: 1
+        entityUpdatedAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        changedByUserId:
+          anyOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        clientMutationId:
+          type: [string, 'null']
+        payload:
+          type: [object, 'null']
+          additionalProperties: true
+        tombstonePayload:
+          type: [object, 'null']
+          additionalProperties: true
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+    SyncPullResponse:
+      type: object
+      additionalProperties: false
+      required: [changes, nextCursor, hasMore, serverTime]
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncChangeDto'
+        nextCursor:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+        serverTime:
+          $ref: '#/components/schemas/DateTime'
+    CaptureDraftDto:
+      type: object
+      additionalProperties: false
+      required: [id, status, idempotencyKey, captureSource, capturedAt, amount, currency, description, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceId'
+        status:
+          $ref: '#/components/schemas/CaptureDraftStatus'
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        occurredAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+          description: Legacy compatible timestamp for the draft candidate.
+        occurredDate:
+          anyOf:
+            - $ref: '#/components/schemas/DateOnly'
+            - type: 'null'
+          description: Date-only operation date carried into confirmed transactionDate.
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          maxLength: 500
+        merchantName:
+          type: [string, 'null']
+          maxLength: 255
+        accountId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        transactionId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        confidence:
+          type: [string, 'null']
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: [string, 'null']
+          maxLength: 255
+        sourceAppLabel:
+          type: [string, 'null']
+          maxLength: 255
+        evidenceHash:
+          type: [string, 'null']
+          maxLength: 128
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+      description: Contains sanitized structured fields only. Raw image bytes and OCR text are never stored or returned.
+    CaptureDraftCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, captureSource, capturedAt, amount, currency, description]
+      properties:
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        occurredAt:
+          $ref: '#/components/schemas/DateTime'
+          description: Legacy compatible timestamp. Ignored for confirmation date when occurredDate is also supplied.
+        occurredDate:
+          $ref: '#/components/schemas/DateOnly'
+          description: Preferred date-only operation date for draft review and confirmation.
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        merchantName:
+          type: string
+          maxLength: 255
+        accountId:
+          $ref: '#/components/schemas/ResourceId'
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        confidence:
+          type: string
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: string
+          maxLength: 255
+        sourceAppLabel:
+          type: string
+          maxLength: 255
+        evidenceHash:
+          type: string
+          maxLength: 128
+      description: Must not include raw image bytes, raw OCR text, body, text, or any raw payload/body field.
+    CaptureDraftUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        occurredAt:
+          anyOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+          description: Legacy compatible timestamp. Ignored for confirmation date when occurredDate is also supplied.
+        occurredDate:
+          anyOf:
+            - $ref: '#/components/schemas/DateOnly'
+            - type: 'null'
+          description: Date-only operation date for edited draft confirmation.
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        merchantName:
+          type: [string, 'null']
+          maxLength: 255
+        accountId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        categoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        confidence:
+          type: [string, 'null']
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        sourceAppPackage:
+          type: [string, 'null']
+          maxLength: 255
+        sourceAppLabel:
+          type: [string, 'null']
+          maxLength: 255
+        evidenceHash:
+          type: [string, 'null']
+          maxLength: 128
+      description: Only pending draft candidate fields are editable. Raw image bytes and OCR text are not accepted.
+    ScreenshotOcrRequest:
+      type: object
+      additionalProperties: false
+      required: [image]
+      properties:
+        image:
+          type: string
+          format: binary
+          description: Temporary PNG, JPEG, or WebP screenshot; max 8 MiB and 16 MP decoded.
+        capturedAt:
+          $ref: '#/components/schemas/DateTime'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+      description: Multipart OCR request. HEIC and all non-image/raw payload formats are rejected.
+    CategoryAggregateDto:
+      type: object
+      additionalProperties: false
+      required: [externalLabel]
+      properties:
+        externalLabel:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Transient visible label for UI mapping only; never stored by the server.
+    ScreenshotOcrCandidateDto:
+      type: object
+      additionalProperties: false
+      required:
+        - candidateType
+        - categoryAggregate
+        - amount
+        - currency
+        - operationCount
+        - description
+        - confidence
+        - idempotencyKey
+        - evidenceHash
+      properties:
+        candidateType:
+          type: string
+          enum: [categoryAggregate]
+        categoryAggregate:
+          $ref: '#/components/schemas/CategoryAggregateDto'
+        amount:
+          $ref: '#/components/schemas/DecimalString'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        operationCount:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        confidence:
+          type: string
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
+        idempotencyKey:
+          $ref: '#/components/schemas/ResourceId'
+        evidenceHash:
+          type: string
+          maxLength: 128
+          description: Hash over sanitized candidate fields, not over the uploaded image.
+        suggestedCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+      description: Structured category aggregate OCR candidate; no raw OCR text or image data.
+    ScreenshotOcrWarningCode:
+      type: string
+      enum: [NO_CATEGORY_AGGREGATES_FOUND]
+    ScreenshotOcrWarningDto:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ScreenshotOcrWarningCode'
+        message:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ScreenshotOcrResponseDto:
+      type: object
+      additionalProperties: false
+      required: [captureSource, parseVersion, recognizedAt, items, warnings]
+      properties:
+        captureSource:
+          $ref: '#/components/schemas/CaptureSource'
+        parseVersion:
+          type: string
+          enum: [category-aggregate-v1]
+        recognizedAt:
+          $ref: '#/components/schemas/DateTime'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScreenshotOcrCandidateDto'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScreenshotOcrWarningDto'
+    CaptureCategoryMappingPutRequest:
+      type: object
+      additionalProperties: false
+      required: [externalLabel, categoryId]
+      properties:
+        externalLabel:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Transient UI label submitted for hashing only; never stored.
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        householdId:
+          $ref: '#/components/schemas/ResourceId'
+    CaptureCategoryMappingDto:
+      type: object
+      additionalProperties: false
+      required: [categoryId]
+      properties:
+        categoryId:
+          $ref: '#/components/schemas/ResourceId'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
     CategoryDto:
       type: object
       additionalProperties: false
@@ -1467,12 +3342,14 @@ components:
     ReportScopeDto:
       type: object
       additionalProperties: false
-      required: [viewerUserId, householdId, reportMode, includedAccountIds, generatedAt]
+      required: [viewerUserId, reportMode, generatedAt]
       properties:
         viewerUserId:
           $ref: '#/components/schemas/ResourceId'
         householdId:
-          $ref: '#/components/schemas/ResourceId'
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
         reportMode:
           $ref: '#/components/schemas/ReportMode'
         includedAccountIds:
@@ -1485,7 +3362,7 @@ components:
     MoneyTotalDto:
       type: object
       additionalProperties: false
-      required: [currency, incomeTotal, expenseTotal, netTotal]
+      required: [currency, incomeTotal, expenseTotal, transferTotal, netCashFlow, netTotal]
       properties:
         currency:
           $ref: '#/components/schemas/CurrencyCode'
@@ -1493,8 +3370,15 @@ components:
           $ref: '#/components/schemas/DecimalString'
         expenseTotal:
           $ref: '#/components/schemas/DecimalString'
+        transferTotal:
+          $ref: '#/components/schemas/DecimalString'
+        netCashFlow:
+          $ref: '#/components/schemas/DecimalString'
         netTotal:
           $ref: '#/components/schemas/DecimalString'
+        investmentsTotal:
+          $ref: '#/components/schemas/DecimalString'
+          default: '0.0000'
     ReportSummaryDto:
       type: object
       additionalProperties: false
@@ -1537,7 +3421,7 @@ components:
           description: Count of visible transactions in this bucket only.
         shareOfVisibleTotal:
           type: string
-          pattern: '^0(\.[0-9]+)?|1(\.0+)?$'
+          pattern: '^(0(\.[0-9]+)?|1(\.0+)?)$'
     ReportCategoryBreakdownDto:
       type: object
       additionalProperties: false
@@ -1572,16 +3456,88 @@ components:
           anyOf:
             - $ref: '#/components/schemas/ResourceId'
             - type: 'null'
+        assetCategoryId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
         currency:
           $ref: '#/components/schemas/CurrencyCode'
         currentBalance:
           $ref: '#/components/schemas/DecimalString'
         balanceAsOf:
-          $ref: '#/components/schemas/DateTime'
+          $ref: '#/components/schemas/DateOnly'
+          description: Date of the durable balance snapshot used for this value, or the current account balance date when no asOfDate filter is supplied.
+    AccountBalanceGroupDto:
+      type: object
+      additionalProperties: false
+      required: [accountType, currency, currentBalanceTotal, accountCount]
+      properties:
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        currentBalanceTotal:
+          $ref: '#/components/schemas/DecimalString'
+        accountCount:
+          type: integer
+          minimum: 0
+    AssetCategoryBalanceGroupDto:
+      type: object
+      additionalProperties: false
+      required: [assetCategoryId, assetCategoryName, assetType, scopeType, currency, manualAmount, linkedAccountsTotal, currentBalanceTotal, accountCount, isInvestment]
+      properties:
+        assetCategoryId:
+          $ref: '#/components/schemas/ResourceId'
+        assetCategoryName:
+          type: string
+          maxLength: 200
+        assetType:
+          $ref: '#/components/schemas/AssetCategoryType'
+        scopeType:
+          $ref: '#/components/schemas/AssetCategoryScope'
+        householdId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        ownerUserId:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceId'
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        manualAmount:
+          $ref: '#/components/schemas/DecimalString'
+        linkedAccountsTotal:
+          $ref: '#/components/schemas/DecimalString'
+        currentBalanceTotal:
+          $ref: '#/components/schemas/DecimalString'
+        accountCount:
+          type: integer
+          minimum: 0
+        isInvestment:
+          type: boolean
+    NetWorthTotalDto:
+      type: object
+      additionalProperties: false
+      required: [currency, netWorthTotal]
+      properties:
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        netWorthTotal:
+          $ref: '#/components/schemas/DecimalString'
+    InvestmentTotalDto:
+      type: object
+      additionalProperties: false
+      required: [currency, investmentsTotal]
+      properties:
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        investmentsTotal:
+          $ref: '#/components/schemas/DecimalString'
     ReportAccountBalancesDto:
       type: object
       additionalProperties: false
-      required: [scope, asOfDate, timezone, items]
+      required: [scope, asOfDate, timezone, items, balanceGroups, assetsByType, assetCategoryGroups, legacyAssetTypeGroups, totalsByCurrency, investmentsByCurrency]
       properties:
         scope:
           $ref: '#/components/schemas/ReportScopeDto'
@@ -1593,6 +3549,30 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountBalanceDto'
+        balanceGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        assetsByType:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        assetCategoryGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetCategoryBalanceGroupDto'
+        legacyAssetTypeGroups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBalanceGroupDto'
+        totalsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetWorthTotalDto'
+        investmentsByCurrency:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvestmentTotalDto'
     CashFlowPointDto:
       type: object
       additionalProperties: false
@@ -1636,128 +3616,6 @@ components:
             $ref: '#/components/schemas/TransactionDto'
         page:
           $ref: '#/components/schemas/PageInfo'
-    ImportReportPreviewRequest:
-      type: object
-      additionalProperties: false
-      required: [reportType, sourceType, targetScope]
-      properties:
-        reportType:
-          $ref: '#/components/schemas/ImportReportType'
-        sourceType:
-          $ref: '#/components/schemas/ImportSourceType'
-        targetScope:
-          $ref: '#/components/schemas/ImportTargetScope'
-        householdId:
-          anyOf:
-            - $ref: '#/components/schemas/ResourceId'
-            - type: 'null'
-          description: Required for shared preview; rejected for personal preview.
-        fileName:
-          type: string
-          maxLength: 255
-          description: Display basename only; path segments and NUL bytes are not echoed.
-        fileSizeBytes:
-          type: integer
-          minimum: 0
-        mimeType:
-          type: string
-          maxLength: 255
-      description: Must not include fileContent, base64, text, rows, parsedData, accountIds, transactionIds, amounts, descriptions, credentials, or file bodies.
-    ImportScopeDto:
-      type: object
-      additionalProperties: false
-      required: [targetScope]
-      properties:
-        targetScope:
-          $ref: '#/components/schemas/ImportTargetScope'
-        householdId:
-          anyOf:
-            - $ref: '#/components/schemas/ResourceId'
-            - type: 'null'
-    ImportFileMetadataDto:
-      type: object
-      additionalProperties: false
-      properties:
-        fileName:
-          type: string
-          maxLength: 255
-        fileSizeBytes:
-          type: integer
-          minimum: 0
-        mimeType:
-          type: string
-          maxLength: 255
-    ImportSummarySectionDto:
-      type: object
-      additionalProperties: false
-      required: [key, title, status, text]
-      properties:
-        key:
-          type: string
-          enum: [accounts_assets, transactions, categories, transfers, brokerage_deposits_metals]
-        title:
-          type: string
-          maxLength: 120
-        status:
-          type: string
-          enum: [not_recognized_yet]
-        text:
-          type: string
-          maxLength: 500
-      description: Placeholder sections do not include counts, amounts, account names, category names, or transaction descriptions.
-    ImportSummaryDto:
-      type: object
-      additionalProperties: false
-      required: [title, statusText, sections]
-      properties:
-        title:
-          type: string
-          maxLength: 120
-        statusText:
-          type: string
-          maxLength: 160
-        sections:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportSummarySectionDto'
-    ImportWarningDto:
-      type: object
-      additionalProperties: false
-      required: [code, text]
-      properties:
-        code:
-          type: string
-          enum: [NO_DATA_CHANGES_WITHOUT_CONFIRMATION, NO_FILE_STORAGE_OR_PARSING, PLACEHOLDER_ONLY]
-        text:
-          type: string
-          maxLength: 300
-    ImportReportPreviewResponse:
-      type: object
-      additionalProperties: false
-      required: [status, canConfirm, willChangeData, message, scope, file, summary, warnings]
-      properties:
-        status:
-          type: string
-          enum: [preview_placeholder]
-        canConfirm:
-          type: boolean
-          enum: [false]
-        willChangeData:
-          type: boolean
-          enum: [false]
-        message:
-          type: string
-          maxLength: 300
-        scope:
-          $ref: '#/components/schemas/ImportScopeDto'
-        file:
-          $ref: '#/components/schemas/ImportFileMetadataDto'
-        summary:
-          $ref: '#/components/schemas/ImportSummaryDto'
-        warnings:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportWarningDto'
     SessionEnvelope:
       type: object
       additionalProperties: false
@@ -1792,6 +3650,42 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountAutocompleteDto'
+    AssetCategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/AssetCategoryDto'
+    AssetCategoryPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetCategoryDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    InvestmentMigrationDto:
+      type: object
+      additionalProperties: false
+      required: [assetCategory, accounts]
+      properties:
+        assetCategory:
+          $ref: '#/components/schemas/AssetCategoryDto'
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountDto'
+    InvestmentMigrationEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/InvestmentMigrationDto'
     TransactionEnvelope:
       type: object
       additionalProperties: false
@@ -1819,6 +3713,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TransactionAutocompleteDto'
+    CaptureDraftEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CaptureDraftDto'
+    CaptureDraftPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaptureDraftDto'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    ScreenshotOcrEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/ScreenshotOcrResponseDto'
+    CaptureCategoryMappingEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CaptureCategoryMappingDto'
     CategoryEnvelope:
       type: object
       additionalProperties: false
@@ -1846,6 +3772,36 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CategoryAutocompleteDto'
+    PlanningPlanEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningPlanDto'
+    PlanningPlanSummaryListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningPlanSummaryDto'
+    PlanningIncomeSourceEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningIncomeSourceDto'
+    PlanningAllocationEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/PlanningAllocationDto'
     ReportSummaryEnvelope:
       type: object
       additionalProperties: false

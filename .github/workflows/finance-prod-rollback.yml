@@ -1,0 +1,354 @@
+name: Finance Production Manual Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Release pointer to roll back."
+        required: true
+        default: frontend
+        type: choice
+        options:
+          - frontend
+          - backend
+          - both
+      frontend_release_id:
+        description: "Existing frontend release id under /var/www/finance/releases."
+        required: false
+        type: string
+      backend_release_id:
+        description: "Existing backend release id under /opt/finance/releases."
+        required: false
+        type: string
+      current_release_confirmation:
+        description: "Required. Expected current prod release id(s), for example frontend=old-id or frontend=old-id,backend=old-id."
+        required: true
+        type: string
+      restart_backend:
+        description: "Restart finance-backend.service after backend rollback."
+        required: true
+        default: false
+        type: boolean
+      confirm_rollback:
+        description: "Required. Enter finance-production-rollback."
+        required: true
+        type: string
+      confirm_backend_restart:
+        description: "Required when restart_backend=true. Enter finance-backend.service."
+        required: false
+        type: string
+      db_rollback_approved:
+        description: "Documentation flag only. This workflow never performs DB rollback."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finance-prod-rollback
+  cancel-in-progress: false
+
+env:
+  FINANCE_FRONTEND_BASE: /var/www/finance
+  FINANCE_BACKEND_BASE: /opt/finance
+  FINANCE_BACKEND_SERVICE: finance-backend.service
+
+jobs:
+  validate-rollback-inputs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate rollback gates
+        env:
+          INPUT_COMPONENT: ${{ inputs.component }}
+          INPUT_FRONTEND_RELEASE_ID: ${{ inputs.frontend_release_id }}
+          INPUT_BACKEND_RELEASE_ID: ${{ inputs.backend_release_id }}
+          INPUT_CURRENT_RELEASE_CONFIRMATION: ${{ inputs.current_release_confirmation }}
+          INPUT_RESTART_BACKEND: ${{ inputs.restart_backend }}
+          INPUT_CONFIRM_ROLLBACK: ${{ inputs.confirm_rollback }}
+          INPUT_CONFIRM_BACKEND_RESTART: ${{ inputs.confirm_backend_restart }}
+          INPUT_DB_ROLLBACK_APPROVED: ${{ inputs.db_rollback_approved }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          component="${INPUT_COMPONENT}"
+          frontend_release_id="${INPUT_FRONTEND_RELEASE_ID}"
+          backend_release_id="${INPUT_BACKEND_RELEASE_ID}"
+          current_release_confirmation="${INPUT_CURRENT_RELEASE_CONFIRMATION}"
+          restart_backend="${INPUT_RESTART_BACKEND}"
+          confirm_rollback="${INPUT_CONFIRM_ROLLBACK}"
+          confirm_backend_restart="${INPUT_CONFIRM_BACKEND_RESTART}"
+          db_rollback_approved="${INPUT_DB_ROLLBACK_APPROVED}"
+          expected_current_frontend_release_id=""
+          expected_current_backend_release_id=""
+
+          safe_release_id() {
+            case "$1" in
+              ""|*[!A-Za-z0-9._-]*)
+                return 1
+                ;;
+            esac
+          }
+
+          parse_current_release_confirmation() {
+            normalized="${current_release_confirmation//,/ }"
+            normalized="${normalized//;/ }"
+
+            if [ -z "${normalized}" ]; then
+              echo "::error::current_release_confirmation is required"
+              exit 1
+            fi
+
+            for item in ${normalized}; do
+              case "${item}" in
+                frontend=*)
+                  if [ -n "${expected_current_frontend_release_id}" ]; then
+                    echo "::error::current_release_confirmation contains duplicate frontend entry"
+                    exit 1
+                  fi
+                  expected_current_frontend_release_id="${item#frontend=}"
+                  ;;
+                backend=*)
+                  if [ -n "${expected_current_backend_release_id}" ]; then
+                    echo "::error::current_release_confirmation contains duplicate backend entry"
+                    exit 1
+                  fi
+                  expected_current_backend_release_id="${item#backend=}"
+                  ;;
+                *)
+                  echo "::error::current_release_confirmation must use frontend=<release_id> and/or backend=<release_id>"
+                  exit 1
+                  ;;
+              esac
+            done
+
+            if [ -n "${expected_current_frontend_release_id}" ] && ! safe_release_id "${expected_current_frontend_release_id}"; then
+              echo "::error::frontend current release confirmation must be a safe release id"
+              exit 1
+            fi
+
+            if [ -n "${expected_current_backend_release_id}" ] && ! safe_release_id "${expected_current_backend_release_id}"; then
+              echo "::error::backend current release confirmation must be a safe release id"
+              exit 1
+            fi
+          }
+
+          parse_current_release_confirmation
+
+          if [ "${confirm_rollback}" != "finance-production-rollback" ]; then
+            echo "::error::confirm_rollback must be finance-production-rollback"
+            exit 1
+          fi
+
+          if [ "${db_rollback_approved}" = "true" ]; then
+            echo "::error::DB rollback is not automated by this workflow; use the approved DBA runbook"
+            exit 1
+          fi
+
+          if [ "${component}" = "frontend" ] || [ "${component}" = "both" ]; then
+            if ! safe_release_id "${frontend_release_id}"; then
+              echo "::error::frontend_release_id is required and must be a safe release id"
+              exit 1
+            fi
+
+            if [ -z "${expected_current_frontend_release_id}" ]; then
+              echo "::error::current_release_confirmation must include frontend=<current_release_id>"
+              exit 1
+            fi
+          fi
+
+          if [ "${component}" = "backend" ] || [ "${component}" = "both" ]; then
+            if ! safe_release_id "${backend_release_id}"; then
+              echo "::error::backend_release_id is required and must be a safe release id"
+              exit 1
+            fi
+
+            if [ -z "${expected_current_backend_release_id}" ]; then
+              echo "::error::current_release_confirmation must include backend=<current_release_id>"
+              exit 1
+            fi
+
+            if [ "${restart_backend}" = "true" ] && [ "${confirm_backend_restart}" != "${FINANCE_BACKEND_SERVICE}" ]; then
+              echo "::error::confirm_backend_restart must be ${FINANCE_BACKEND_SERVICE}"
+              exit 1
+            fi
+          elif [ "${restart_backend}" = "true" ]; then
+            echo "::error::restart_backend=true requires component backend or both"
+            exit 1
+          fi
+
+  rollback:
+    runs-on: ubuntu-latest
+    needs: validate-rollback-inputs
+    environment: production
+
+    steps:
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Roll back release symlink
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_ROLLBACK_COMPONENT: ${{ inputs.component }}
+          FINANCE_FRONTEND_RELEASE_ID: ${{ inputs.frontend_release_id }}
+          FINANCE_BACKEND_RELEASE_ID: ${{ inputs.backend_release_id }}
+          FINANCE_CURRENT_RELEASE_CONFIRMATION: ${{ inputs.current_release_confirmation }}
+          FINANCE_RESTART_BACKEND: ${{ inputs.restart_backend }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          ssh_opts=(
+            -p "${HEXCORE_PROD_SSH_PORT}"
+            -i "${ssh_key}"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="${known_hosts}"
+            -o StrictHostKeyChecking=yes
+          )
+
+          ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_ROLLBACK_COMPONENT='${FINANCE_ROLLBACK_COMPONENT}' FINANCE_FRONTEND_RELEASE_ID='${FINANCE_FRONTEND_RELEASE_ID}' FINANCE_BACKEND_RELEASE_ID='${FINANCE_BACKEND_RELEASE_ID}' FINANCE_CURRENT_RELEASE_CONFIRMATION='${FINANCE_CURRENT_RELEASE_CONFIRMATION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' FINANCE_FRONTEND_BASE='${FINANCE_FRONTEND_BASE}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          expected_current_frontend_release_id=""
+          expected_current_backend_release_id=""
+
+          safe_release_id() {
+            case "$1" in
+              ""|*[!A-Za-z0-9._-]*)
+                return 1
+                ;;
+            esac
+          }
+
+          parse_current_release_confirmation() {
+            normalized="${FINANCE_CURRENT_RELEASE_CONFIRMATION//,/ }"
+            normalized="${normalized//;/ }"
+
+            if [ -z "${normalized}" ]; then
+              echo "current_release_confirmation is required"
+              exit 1
+            fi
+
+            for item in ${normalized}; do
+              case "${item}" in
+                frontend=*)
+                  if [ -n "${expected_current_frontend_release_id}" ]; then
+                    echo "current_release_confirmation contains duplicate frontend entry"
+                    exit 1
+                  fi
+                  expected_current_frontend_release_id="${item#frontend=}"
+                  ;;
+                backend=*)
+                  if [ -n "${expected_current_backend_release_id}" ]; then
+                    echo "current_release_confirmation contains duplicate backend entry"
+                    exit 1
+                  fi
+                  expected_current_backend_release_id="${item#backend=}"
+                  ;;
+                *)
+                  echo "current_release_confirmation must use frontend=<release_id> and/or backend=<release_id>"
+                  exit 1
+                  ;;
+              esac
+            done
+
+            if [ -n "${expected_current_frontend_release_id}" ] && ! safe_release_id "${expected_current_frontend_release_id}"; then
+              echo "frontend current release confirmation must be a safe release id"
+              exit 1
+            fi
+
+            if [ -n "${expected_current_backend_release_id}" ] && ! safe_release_id "${expected_current_backend_release_id}"; then
+              echo "backend current release confirmation must be a safe release id"
+              exit 1
+            fi
+          }
+
+          verify_current_release() {
+            base="$1"
+            expected_release_id="$2"
+            releases="${base}/releases"
+            current="${base}/current"
+            expected_dir="${releases}/${expected_release_id}"
+
+            safe_release_id "${expected_release_id}"
+            test -d "${expected_dir}"
+
+            if [ ! -L "${current}" ]; then
+              echo "${current} must be an existing symlink before rollback"
+              exit 1
+            fi
+
+            actual_current_dir="$(readlink -f "${current}")"
+            expected_current_dir="$(readlink -f "${expected_dir}")"
+
+            if [ "${actual_current_dir}" != "${expected_current_dir}" ]; then
+              echo "${current} points to ${actual_current_dir}; expected ${expected_current_dir}. Aborting rollback."
+              exit 1
+            fi
+          }
+
+          flip_symlink() {
+            base="$1"
+            release_id="$2"
+            marker_file="$3"
+            releases="${base}/releases"
+            current="${base}/current"
+            release_dir="${releases}/${release_id}"
+
+            safe_release_id "${release_id}"
+            test -d "${release_dir}"
+            test -e "${release_dir}/${marker_file}"
+
+            if [ -e "${current}" ] && [ ! -L "${current}" ]; then
+              echo "${current} exists and is not a symlink; aborting rollback"
+              exit 1
+            fi
+
+            ln -sfnT "${release_dir}" "${current}.next"
+            mv -Tf "${current}.next" "${current}"
+            test "$(readlink -f "${current}")" = "${release_dir}"
+          }
+
+          parse_current_release_confirmation
+
+          if [ "${FINANCE_ROLLBACK_COMPONENT}" = "frontend" ] || [ "${FINANCE_ROLLBACK_COMPONENT}" = "both" ]; then
+            verify_current_release "${FINANCE_FRONTEND_BASE}" "${expected_current_frontend_release_id}"
+            flip_symlink "${FINANCE_FRONTEND_BASE}" "${FINANCE_FRONTEND_RELEASE_ID}" "index.html"
+          fi
+
+          if [ "${FINANCE_ROLLBACK_COMPONENT}" = "backend" ] || [ "${FINANCE_ROLLBACK_COMPONENT}" = "both" ]; then
+            verify_current_release "${FINANCE_BACKEND_BASE}" "${expected_current_backend_release_id}"
+            flip_symlink "${FINANCE_BACKEND_BASE}" "${FINANCE_BACKEND_RELEASE_ID}" "venv"
+
+            if [ "${FINANCE_RESTART_BACKEND}" = "true" ]; then
+              systemctl restart "${FINANCE_BACKEND_SERVICE}"
+            else
+              echo "Backend rollback symlink updated; service restart skipped by input."
+            fi
+          fi
+
+          curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null
+          curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null
+          REMOTE

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -12,8 +13,13 @@ from app.authz import DenialReason
 from app.categories.repository import SqlAlchemyCategoryRepository
 from app.config import get_settings
 from app.db.session import accounts_categories_repository_mode, sync_session_scope
+from app.sync.domain_changes import SyncChangeRecorder
 
-from .repository import SqlAlchemyTransactionRepository, TransactionRecord
+from .repository import (
+    SqlAlchemyTransactionRepository,
+    TransactionRecord,
+    transaction_record_date,
+)
 from .schemas import (
     OwnershipType,
     PageInfo,
@@ -51,10 +57,14 @@ def transaction_service_for_request() -> Iterator[TransactionService]:
             SqlAlchemyTransactionRepository(session),
             SqlAlchemyAccountRepository(session),
             SqlAlchemyCategoryRepository(session),
+            SyncChangeRecorder(session),
         )
 
 
-TransactionServiceDependency = Annotated[TransactionService, Depends(transaction_service_for_request)]
+TransactionServiceDependency = Annotated[
+    TransactionService,
+    Depends(transaction_service_for_request),
+]
 
 
 def _transaction_dto(record: TransactionRecord) -> TransactionDto:
@@ -67,6 +77,7 @@ def _transaction_dto(record: TransactionRecord) -> TransactionDto:
         amount=record.amount,
         currency=record.currency,
         occurred_at=record.occurred_at,
+        transaction_date=transaction_record_date(record),
         description=record.description,
         source_type=record.source_type,
         transfer_scope=record.transfer_scope,
@@ -87,6 +98,7 @@ def _autocomplete_dto(record: TransactionRecord) -> TransactionAutocompleteDto:
         account_id=record.account_id,
         category_id=record.category_id,
         occurred_at=record.occurred_at,
+        transaction_date=transaction_record_date(record),
         source_type=record.source_type,
     )
 
@@ -189,8 +201,8 @@ async def list_transactions(
             household_id=householdId,
             ownership_type=str(ownershipType) if ownershipType else None,
             status=str(status) if status else None,
-            start=_date_boundary(startDate, end=False),
-            end=_date_boundary(endDate, end=True),
+            start_date=_date_only(startDate),
+            end_date=_date_only(endDate),
             q=q,
             sort=str(sort) if sort else None,
         )
@@ -313,16 +325,10 @@ async def restore_transaction(
     return TransactionEnvelope(data=_transaction_dto(record))
 
 
-def _date_boundary(value: str | None, *, end: bool):
+def _date_only(value: str | None) -> date | None:
     if value is None:
         return None
-    from datetime import UTC, datetime, time
-
     try:
-        parsed = datetime.fromisoformat(value)
+        return date.fromisoformat(value)
     except ValueError as exc:
         raise TransactionValidationError(DenialReason.VALIDATION_FAILED) from exc
-    if parsed.tzinfo is not None:
-        return parsed.astimezone(UTC)
-    boundary = time.max if end else time.min
-    return datetime.combine(parsed.date(), boundary, tzinfo=UTC)

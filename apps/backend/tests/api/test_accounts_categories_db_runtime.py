@@ -18,7 +18,17 @@ from app.categories.repository import SqlAlchemyCategoryRepository
 from app.categories.schemas import CategoryScope, CategoryType
 from app.config import get_settings
 from app.db.base import Base
-from app.db.models import Account, Category, Household, User
+from app.db.models import (
+    Account,
+    AccountBalanceSnapshot,
+    Category,
+    Household,
+    SyncChange,
+    SyncClient,
+    SyncClientMutation,
+    Transaction,
+    User,
+)
 from app.db.models import Membership as DbMembership
 from app.db.session import sync_engine_for_url
 from app.main import create_app
@@ -29,7 +39,12 @@ SLICE_TABLES = [
     Household.__table__,
     DbMembership.__table__,
     Account.__table__,
+    AccountBalanceSnapshot.__table__,
     Category.__table__,
+    Transaction.__table__,
+    SyncClient.__table__,
+    SyncChange.__table__,
+    SyncClientMutation.__table__,
 ]
 
 
@@ -373,6 +388,72 @@ def test_db_backed_routes_persist_across_app_restarts(
     assert persisted_account.json()["data"]["name"] == "Restart Proof Account"
     assert persisted_category.status_code == 200
     assert persisted_category.json()["data"]["name"] == "Restart Proof Category"
+
+
+def test_db_backed_account_snapshot_update_persists_and_blocks_currency_after_transactions(
+    db_runtime_graph: dict[str, object],
+) -> None:
+    owner = db_runtime_graph["owner"]
+    account_id = str(db_runtime_graph["owner_account_id"])
+
+    with _client_for_actor(owner) as client:  # type: ignore[arg-type]
+        updated = client.patch(
+            f"/api/v1/accounts/{account_id}",
+            json={
+                "name": "DB Snapshot Updated",
+                "currentBalance": "45.6700",
+                "currency": "USD",
+                "version": 1,
+            },
+        )
+        fetched = client.get(f"/api/v1/accounts/{account_id}")
+
+    assert updated.status_code == 200, updated.text
+    assert fetched.status_code == 200
+    data = fetched.json()["data"]
+    assert data["name"] == "DB Snapshot Updated"
+    assert Decimal(data["currentBalance"]) == Decimal("45.6700")
+    assert data["currency"] == "USD"
+    assert Decimal(data["initialBalance"]) == Decimal("10.0000")
+
+    engine = sync_engine_for_url(get_settings().database_url)
+    with engine.begin() as connection:
+        from sqlalchemy.orm import Session
+
+        session = Session(bind=connection, expire_on_commit=False, future=True)
+        session.add(
+            Transaction(
+                id=uuid4(),
+                transaction_type="expense",
+                account_id=UUID(account_id),
+                counterparty_account_id=None,
+                category_id=UUID(str(db_runtime_graph["owner_category_id"])),
+                amount=Decimal("1.0000"),
+                currency="USD",
+                occurred_at=BASE_TIME,
+                transaction_date=BASE_TIME.date(),
+                description="currency lock proof",
+                source_type="manual",
+                transfer_scope=None,
+                transfer_status=None,
+                record_status="active",
+                created_by_user_id=UUID(str(db_runtime_graph["owner"].user_id)),  # type: ignore[union-attr]
+                last_edited_by_user_id=UUID(str(db_runtime_graph["owner"].user_id)),  # type: ignore[union-attr]
+                created_at=BASE_TIME,
+                updated_at=BASE_TIME,
+                version=1,
+            )
+        )
+        session.flush()
+
+    with _client_for_actor(owner) as client:  # type: ignore[arg-type]
+        conflict = client.patch(
+            f"/api/v1/accounts/{account_id}",
+            json={"currency": "EUR", "version": data["version"]},
+        )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS"
 
 
 def test_db_backed_routes_cover_create_update_archive_restore_delete_contracts(

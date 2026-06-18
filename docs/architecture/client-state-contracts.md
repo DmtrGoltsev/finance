@@ -334,16 +334,68 @@ Transfer form states:
 - После logout, session expiration, password reset, delete/deactivation, leave/revoke membership, invite accept/revoke или household archive клиент очищает соответствующие protected snapshots.
 - Former member не должен видеть shared данные через offline mode после потери membership. При следующем запуске или refresh shared cache должен быть заблокирован до проверки session/membership.
 - PWA service worker не должен кэшировать authenticated API responses как общедоступные assets. Cache keys и storage должны быть user-scoped; shared browser/device сценарии требуют logout clear.
-- Android local persistence должна хранить минимальный набор данных, необходимый для UX, и очищаться при смене account/session.
+- Android local persistence должна хранить минимальный набор данных, необходимый для UX, и очищаться при смене account/session. Для offline-first scope Android использует Room как локальный источник отображения и `pending_mutations` как очередь только для разрешенных syncable операций.
+- OCR/screenshot upload намеренно online-only: capture/OCR/screenshot entity/operation не являются syncable, не должны попадать в offline queue и не должны сохранять raw images, raw OCR text или OCR payloads в локальном pending/storage.
 - Crash reports, frontend telemetry, breadcrumbs и analytics events не должны содержать суммы, балансы, названия счетов/категорий, descriptions, email, tokens, raw query payload или screenshots с финансовыми данными.
+
+Syncable операции:
+
+| Область | Syncable через backend/Android offline-first | Примечания |
+| --- | --- | --- |
+| Transactions | Create/update/delete/restore для ручных операций и поддержанных transfer/brokerage сценариев | Каждая mutation повторно авторизуется backend при replay. |
+| Accounts | Create/update/archive/delete/restore видимых счетов | Scope и membership проверяются на сервере; локальная запись не расширяет права. |
+| Categories | Create/update/archive/delete/restore personal/household категорий | Category selectors должны оставаться совместимыми со scope операции. |
+| Asset categories | Create/update/archive/delete/restore категорий активов | Используется для Android/PWA parity и investment UI. |
+| Planning plans | Create/update/delete/restore текущих planning plans | История как derived/read model не редактируется offline напрямую. |
+| Planning income sources | Create/update/confirm/delete/restore источников дохода плана | Delete/restore используют tombstones для корректного replay и pull. |
+| Planning allocations | Create/update/delete/restore распределений плана | Delete/restore используют tombstones; target repair не является offline mutation. |
+| Investment migration | `investment_migrations:create` | Единая атомарная backend command, не набор независимых queued mutations. |
+
+Online-only операции:
+
+- OCR/screenshot upload и capture/OCR payloads: навсегда online-only; raw images, raw OCR text и OCR payloads не сохраняются в Room, `pending_mutations`, logs или telemetry.
+- `copy_plan`: online-only server workflow, потому что создает derived план из server-visible source plan и должен видеть актуальные права/историю.
+- Planning history mutation: online-only/derived; клиент может читать историю, но не должен локально переписывать history rows как offline mutations.
+- Target repair workflows для planning allocations/goals: online-only/derived, потому что repair зависит от текущего server state и может затрагивать несколько связанных объектов.
+- Любые destructive choose-server/choose-local overwrite сценарии: вне MVP conflict UI.
+
+Planning tombstones и local-first Android:
+
+- Удаления planning plans, income sources и allocations фиксируются tombstone-записями, чтобы pull/replay не "воскрешал" локально удаленный объект после сетевого сбоя или гонки refresh.
+- Tombstone хранит только минимальную sync metadata: entity id/type, operation status, timestamps/revision context и безопасную ошибку. Он не должен хранить raw OCR, screenshots, hidden rows или payload, раскрывающий чужой personal scope.
+- Android показывает planning данные из Room сразу, помечая pending/failed/rejected состояния через sync UI. После успешного replay локальная запись выравнивается с server response; после rejected запись остается видимой как issue, пока пользователь не исправит входные данные или не удалит локальную попытку безопасным flow.
+- Pull с сервера применяет tombstones до отображения списков, чтобы удаленные income sources/allocations/plans не возвращались в UI между синхронизациями.
+
+Investment migration command:
+
+- Investment migration синхронизируется только как `investment_migrations:create`.
+- Команда атомарна на backend: она должна либо целиком применить migration, либо целиком отказать/откатить ее, сохраняя согласованность asset categories, investment flags, account bindings и derived report state.
+- Нельзя разбивать migration на группу независимых `asset_category`/`account` mutations в offline queue: частичный replay создал бы несогласованное состояние, сложные конфликты порядка и риск неправильных investment totals.
+- Retry допустим только на уровне той же command с idempotency/client mutation id; UI не должен предлагать пользователю вручную выбрать, какие внутренние шаги migration применить.
+
+Conflict UI MVP:
+
+- Conflict UI показывает sync issues со статусами `failed` и `rejected`.
+- Для `failed` доступен безопасный retry: повторить failed mutations и затем обновить локальное состояние из backend.
+- Для `rejected` UI показывает безопасное объяснение без raw request payload, hidden ids, hidden counts или чужих personal details. Пользователь должен исправить данные через обычную форму или отказаться от локальной попытки, если такой flow явно реализован.
+- MVP не предлагает destructive "choose server", "choose local", force overwrite, ручное редактирование server diff или объединение скрытых payload. Такие действия требуют отдельного Product/Security/Privacy review.
 
 Offline UI:
 
 - `offlineReadonly` может показывать только ранее видимые данные текущего viewer при валидном локальном access context.
-- Mutations в offline MVP безопаснее запрещать или держать как локальный draft без отправки, пока сервер не подтвердит access. Draft для shared operation должен заново показать shared warning перед submit.
+- Для разрешенного offline-first scope Android может принимать локальную mutation, сохранять ее в Room/pending queue и показывать как pending. Для операций вне syncable scope mutations запрещаются offline или остаются локальным draft без отправки, пока сервер не подтвердит access. Draft для shared operation должен заново показать shared warning перед submit.
 - Offline empty/error states не должны отличать "данных нет" от "данные могли измениться на сервере"; безопасный текст - "Не удалось обновить данные. Показаны последние доступные видимые данные" или "Данные недоступны без подключения".
 - Report caches должны соблюдать правила report API: `shared_family_report` может быть household-scoped только без viewer-personal rows; `combined_viewer_overview` всегда viewer-scoped.
 - Drill-down cursors и paginated list cursors нельзя переиспользовать после membership/access version change.
+
+QA gates для offline-first scope:
+
+- Backend targeted lint из `apps/backend`: `.\.venv\Scripts\python.exe -m ruff check src/app/sync src/app/transactions src/app/accounts src/app/categories src/app/asset_categories src/app/planning tests/sync tests/transactions tests/accounts tests/categories tests/asset_categories tests/planning tests/db/test_sync_foundation_migration_slice.py tests/db/test_planning_sync_tombstone_migration.py`.
+- Backend targeted tests из `apps/backend`: `.\.venv\Scripts\python.exe -m pytest tests/sync tests/transactions tests/accounts tests/categories tests/asset_categories tests/planning tests/db/test_sync_foundation_migration_slice.py tests/db/test_planning_sync_tombstone_migration.py`.
+- Android JVM tests из `apps/android`: `.\gradlew.bat :app:testDebugUnitTest`.
+- Android APK build из `apps/android`: `.\gradlew.bat :app:assembleDebug`.
+- APK zip gate после build: проверить, что `apps/android/app/build/outputs/apk/debug/app-debug.apk` существует и открывается как ZIP, например PowerShell-командой `[IO.Compression.ZipFile]::OpenRead((Resolve-Path "app\build\outputs\apk\debug\app-debug.apk")).Dispose()` после `Add-Type -AssemblyName System.IO.Compression.FileSystem`.
+- Full backend ruff может оставаться красным на legacy unrelated files. Для завершенного offline-first scope доказательством являются targeted ruff/tests по затронутым backend modules и Android Gradle gates.
 
 ## 10. Handoff notes для future design
 
@@ -374,6 +426,9 @@ Offline UI:
 - PWA service worker или Android local DB могут сохранить shared snapshots после leave/revoke.
 - Report cache для `combined_viewer_overview` может быть ошибочно разделен между участниками household.
 - Shared transaction description может содержать чувствительные личные детали, если UI не предупреждает пользователя.
+- Offline queue может случайно принять online-only workflow (`copy_plan`, OCR/screenshot upload, planning history mutation, target repair) и тем самым создать несогласованное или privacy-risk состояние.
+- Investment migration может быть ошибочно разложена на независимые asset/account mutations вместо атомарной command.
+- Conflict UI может соблазнить destructive overwrite UX, который скрывает реальные server-side rejects и повышает риск потери данных.
 
 Эскалировать к Product/Security/Privacy до реализации, если:
 
@@ -382,4 +437,7 @@ Offline UI:
 - нужно разрешить personal<->shared transfer или split visibility;
 - former member должен видеть исторические shared данные после leave/revoke;
 - offline-first mutations должны работать без свежей server-side authorization;
+- online-only workflows нужно сделать syncable или сохранить OCR/screenshot/raw payloads локально;
+- investment migration нужно частично применять, мерджить вручную или раскладывать на отдельные mutations;
+- conflict UI должен выбирать server/local overwrite, показывать raw payload/server diff или выполнять destructive resolution;
 - telemetry/crash reporting требует screenshots, raw payloads или granular financial events.

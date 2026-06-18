@@ -2,29 +2,32 @@
 
 Ownership: backend workers assigned by the orchestrator only.
 
-Expected future contents:
+Current contents:
 
 - FastAPI application under `src/app/`.
-- Auth, session, CSRF/CORS, and reusable authz predicate modules.
+- Auth, session, CSRF/CORS, rate limiting, and reusable authz predicate modules.
 - SQLAlchemy database access aligned with Alembic migrations.
-- Pytest unit, integration, contract, and security tests.
-- Evidence-producing test commands for API, authz, reports, transfers, privacy, and security gates.
+- Accounts, categories, transactions, transfers, reports, capture drafts, category OCR mappings, and server-side screenshot OCR runtime.
+- Pytest unit, integration, contract, privacy, and security tests.
 
-Do not add dependency manifests or production code here until a backend worker receives explicit ownership.
+Production deploy work is outside this workspace README. Keep backend changes
+scoped to the assigned feature or fix.
 
-## Minimal Scaffold
+## Implemented Surface
 
-This workspace now contains the initial FastAPI scaffold for Wave 2 backend work:
+This workspace contains the current FastAPI backend:
 
 - Python 3.12 package metadata in `pyproject.toml`.
 - FastAPI app factory in `src/app/main.py`.
-- Operational `/health` endpoint only.
-- Empty `/api/v1` router placeholder for future auth and feature modules.
+- Operational `/health` endpoint and `/api/v1` feature router.
 - Pydantic settings with `FINANCE_BACKEND_` environment variable prefix and local-only safe defaults.
-- SQLAlchemy async engine/sessionmaker placeholder for PostgreSQL access.
-- Basic pytest coverage for app import and health response.
+- SQLAlchemy database access and Alembic migration alignment.
+- Auth/session, account/category, transaction/transfer, report, capture-draft, and screenshot OCR coverage.
 
-No financial feature endpoints, auth/authz implementation, domain models, migrations, seed data, bank integrations, imports, SMS/push integrations, broker integrations, external credential handling, card data, IBAN/account requisites, or raw statement flows are implemented in this scaffold.
+No file import/report-preview flow, bank API ingestion, broker API ingestion,
+SMS/push import pipeline, SMS/push/notification interception, external
+credential handling, card data, IBAN/account requisites, or raw statement flows
+are implemented in the MVP backend.
 
 Privacy invariants remain MVP blockers for future endpoints:
 
@@ -33,6 +36,8 @@ Privacy invariants remain MVP blockers for future endpoints:
 - Reports, exports, search, autocomplete, counts, cache materialization, pagination, and aggregation must filter visible rows before returning or aggregating data.
 - Hidden resources must use neutral responses and must not expose hidden counts, hidden facets, or diagnostic metadata.
 - Logs, audit, telemetry, crash reports, exports, caches, and client state must not disclose hidden financial data or secrets.
+- Screenshot OCR external category labels are transient request/response values
+  only. Draft and transaction descriptions must stay label-free.
 
 ## Local Backend Run
 
@@ -50,6 +55,41 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
 The standard `app.main:app` runtime remains default-deny for auth unless real runtime secrets and stores are wired.
+When a database URL and `FINANCE_BACKEND_AUTH_TOKEN_HASH_SECRET` are configured,
+`POST /api/v1/users` creates an active user and returns the same session response
+shape as login. Android bearer registration returns `accessToken`, `tokenType`,
+`expiresAt`, and `actor`; PWA cookie registration returns `transport`,
+`csrfToken`, `expiresAt`, and `actor`.
+
+## Screenshot OCR Runtime
+
+`POST /api/v1/capture-drafts/screenshot-ocr` uses self-hosted Tesseract via
+Pillow/pytesseract. Install the OS Tesseract binary and Russian/English language
+packs on hosts that enable the endpoint. The Python test suite fakes the OCR
+adapter and does not require the binary.
+
+Debian/Ubuntu package names:
+
+```bash
+sudo apt-get install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
+tesseract --list-langs
+```
+
+Key settings:
+
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_ENABLED`
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TESSERACT_CMD`
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_LANG`
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_UPLOAD_BYTES`
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_PIXELS`
+- `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TIMEOUT_SECONDS`
+
+The endpoint accepts temporary PNG/JPEG/WebP uploads only. It does not persist
+screenshots or raw OCR text; category mappings store only normalized label hashes.
+Raw category labels are transient request/response values for user confirmation
+only. Health `/health` proves the backend process is up; an authenticated
+`POST /api/v1/capture-drafts/screenshot-ocr` smoke with a small PNG/JPEG/WebP is
+the runtime diagnostic for Tesseract availability and language data.
 
 ## Production QA Bootstrap
 
@@ -103,6 +143,19 @@ $headers = @{ Authorization = "Bearer $($login.accessToken)" }
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/sessions/current -Headers $headers
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/accounts -Headers $headers
 Invoke-RestMethod "http://127.0.0.1:8000/api/v1/reports/summary?reportMode=combined_viewer_overview&householdId=22222222-2222-4222-8222-222222222222&currency=USD" -Headers $headers
+```
+
+Minimal registration smoke for DB-backed local runtime:
+
+```powershell
+$registration = Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/v1/users `
+  -ContentType 'application/json' `
+  -Body '{"email":"new.owner@example.test","password":"correct horse battery staple","displayName":"New Owner","transport":"android_bearer"}'
+
+$headers = @{ Authorization = "Bearer $($registration.accessToken)" }
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/sessions/current -Headers $headers
 ```
 
 Local Vite PWA origins `http://127.0.0.1:5174` and `http://127.0.0.1:5173` are allowed by CORS only outside production-like environments. Production-like environments use only explicit `FINANCE_BACKEND_CORS_ALLOWED_ORIGINS`.

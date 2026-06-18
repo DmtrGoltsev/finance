@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
-from typing import Optional, Sequence, Tuple, Union
+from enum import StrEnum
 
 
-class StringEnum(str, Enum):
+class StringEnum(StrEnum):
     def __str__(self) -> str:
         return self.value
 
@@ -87,6 +87,7 @@ class SourceType(StringEnum):
 
 
 class ReportMode(StringEnum):
+    PERSONAL = "personal"
     SHARED_FAMILY_REPORT = "shared_family_report"
     COMBINED_VIEWER_OVERVIEW = "combined_viewer_overview"
 
@@ -110,11 +111,11 @@ class ScopeRef:
     id: str
 
     @classmethod
-    def personal(cls, owner_user_id: str) -> "ScopeRef":
+    def personal(cls, owner_user_id: str) -> ScopeRef:
         return cls(kind=ScopeKind.PERSONAL, id=owner_user_id)
 
     @classmethod
-    def household(cls, household_id: str) -> "ScopeRef":
+    def household(cls, household_id: str) -> ScopeRef:
         return cls(kind=ScopeKind.HOUSEHOLD, id=household_id)
 
 
@@ -127,13 +128,13 @@ class Membership:
 
 @dataclass(frozen=True)
 class Actor:
-    user_id: Optional[str]
+    user_id: str | None
     memberships: Sequence[Membership] = ()
-    session_id: Optional[str] = None
-    request_id: Optional[str] = None
+    session_id: str | None = None
+    request_id: str | None = None
 
     @classmethod
-    def anonymous(cls) -> "Actor":
+    def anonymous(cls) -> Actor:
         return cls(user_id=None)
 
 
@@ -146,8 +147,8 @@ class HouseholdRef:
 class Account:
     id: str
     ownership_type: AccountOwnershipType
-    owner_user_id: Optional[str] = None
-    household_id: Optional[str] = None
+    owner_user_id: str | None = None
+    household_id: str | None = None
     status: ResourceStatus = ResourceStatus.ACTIVE
 
 
@@ -155,8 +156,8 @@ class Account:
 class Category:
     id: str
     scope: CategoryScope
-    owner_user_id: Optional[str] = None
-    household_id: Optional[str] = None
+    owner_user_id: str | None = None
+    household_id: str | None = None
     kind: CategoryKind = CategoryKind.BOTH
     status: ResourceStatus = ResourceStatus.ACTIVE
 
@@ -166,8 +167,8 @@ class Transaction:
     id: str
     transaction_type: TransactionType
     account: Account
-    counterparty_account: Optional[Account] = None
-    category: Optional[Category] = None
+    counterparty_account: Account | None = None
+    category: Category | None = None
     source_type: SourceType = SourceType.MANUAL
     status: ResourceStatus = ResourceStatus.ACTIVE
 
@@ -176,21 +177,21 @@ class Transaction:
 class TransactionDraft:
     transaction_type: TransactionType
     account: Account
-    counterparty_account: Optional[Account] = None
-    category: Optional[Category] = None
+    counterparty_account: Account | None = None
+    category: Category | None = None
     source_type: SourceType = SourceType.MANUAL
 
 
 @dataclass(frozen=True)
 class ReportRequest:
     mode: ReportMode
-    household_id: Optional[str]
+    household_id: str | None
 
 
 @dataclass(frozen=True)
 class ExportRequest:
     mode: ReportMode
-    household_id: Optional[str]
+    household_id: str | None
 
 
 @dataclass(frozen=True)
@@ -205,24 +206,24 @@ class Invite:
 @dataclass(frozen=True)
 class VisibleReportScope:
     mode: ReportMode
-    scopes: Tuple[ScopeRef, ...]
+    scopes: tuple[ScopeRef, ...]
 
     @property
-    def household_scopes(self) -> Tuple[ScopeRef, ...]:
+    def household_scopes(self) -> tuple[ScopeRef, ...]:
         return tuple(scope for scope in self.scopes if scope.kind == ScopeKind.HOUSEHOLD)
 
     @property
-    def personal_scopes(self) -> Tuple[ScopeRef, ...]:
+    def personal_scopes(self) -> tuple[ScopeRef, ...]:
         return tuple(scope for scope in self.scopes if scope.kind == ScopeKind.PERSONAL)
 
 
 @dataclass(frozen=True)
 class AuthzDecision:
     decision: Decision
-    reason: Optional[DenialReason] = None
-    resolved_scope: Optional[ScopeRef] = None
-    visible_scope: Optional[VisibleReportScope] = None
-    transfer_scope: Optional[TransferScopeKind] = None
+    reason: DenialReason | None = None
+    resolved_scope: ScopeRef | None = None
+    visible_scope: VisibleReportScope | None = None
+    transfer_scope: TransferScopeKind | None = None
     audit: AuditClass = AuditClass.NO_AUDIT
 
     @property
@@ -235,9 +236,9 @@ class AuthzDecision:
 
 def allow(
     *,
-    resolved_scope: Optional[ScopeRef] = None,
-    visible_scope: Optional[VisibleReportScope] = None,
-    transfer_scope: Optional[TransferScopeKind] = None,
+    resolved_scope: ScopeRef | None = None,
+    visible_scope: VisibleReportScope | None = None,
+    transfer_scope: TransferScopeKind | None = None,
     audit: AuditClass = AuditClass.AUDIT_ALLOW,
 ) -> AuthzDecision:
     return AuthzDecision(
@@ -262,7 +263,7 @@ def _is_authenticated(actor: Actor) -> bool:
     return bool(actor.user_id)
 
 
-def _has_active_membership(actor: Actor, household_id: Optional[str]) -> bool:
+def _has_active_membership(actor: Actor, household_id: str | None) -> bool:
     if not household_id or not actor.user_id:
         return False
 
@@ -274,7 +275,7 @@ def _has_active_membership(actor: Actor, household_id: Optional[str]) -> bool:
     )
 
 
-def _account_scope(account: Account) -> Optional[ScopeRef]:
+def _account_scope(account: Account) -> ScopeRef | None:
     if account.status == ResourceStatus.DELETED:
         return None
 
@@ -287,7 +288,7 @@ def _account_scope(account: Account) -> Optional[ScopeRef]:
     return None
 
 
-def _category_scope(category: Category) -> Optional[ScopeRef]:
+def _category_scope(category: Category) -> ScopeRef | None:
     if category.status == ResourceStatus.DELETED:
         return None
 
@@ -315,7 +316,7 @@ def _reference_denial(decision: AuthzDecision) -> AuthzDecision:
 
 
 def _category_supports_transaction(
-    category: Category, transaction_type: Optional[TransactionType]
+    category: Category, transaction_type: TransactionType | None
 ) -> bool:
     if transaction_type is None or transaction_type not in {
         TransactionType.INCOME,
@@ -347,7 +348,7 @@ def canMutateAccount(
     actor: Actor,
     account: Account,
     *,
-    proposed_ownership_type: Optional[AccountOwnershipType] = None,
+    proposed_ownership_type: AccountOwnershipType | None = None,
 ) -> AuthzDecision:
     read_decision = canReadAccount(actor, account)
     if not read_decision.allowed:
@@ -407,7 +408,7 @@ def canUseCategory(
     category: Category,
     account: Account,
     *,
-    transaction_type: Optional[TransactionType] = None,
+    transaction_type: TransactionType | None = None,
 ) -> AuthzDecision:
     account_decision = canReadAccount(actor, account)
     if not account_decision.allowed:
@@ -530,9 +531,9 @@ def canMutateTransaction(
     actor: Actor,
     transaction: Transaction,
     *,
-    proposed_account: Optional[Account] = None,
-    proposed_counterparty_account: Optional[Account] = None,
-    proposed_category: Optional[Category] = None,
+    proposed_account: Account | None = None,
+    proposed_counterparty_account: Account | None = None,
+    proposed_category: Category | None = None,
 ) -> AuthzDecision:
     read_decision = canReadTransaction(actor, transaction)
     if not read_decision.allowed:
@@ -579,6 +580,11 @@ def resolveReportVisibleScope(actor: Actor, request: ReportRequest) -> AuthzDeci
     if not _is_authenticated(actor):
         return deny(DenialReason.UNAUTHENTICATED)
 
+    if request.mode == ReportMode.PERSONAL:
+        personal_scope = ScopeRef.personal(actor.user_id)
+        visible_scope = VisibleReportScope(mode=request.mode, scopes=(personal_scope,))
+        return allow(visible_scope=visible_scope, resolved_scope=personal_scope)
+
     if not request.household_id or not _has_active_membership(actor, request.household_id):
         return deny()
 
@@ -608,7 +614,7 @@ def canExportData(actor: Actor, request: ExportRequest) -> AuthzDecision:
 
 
 def canManageInvite(
-    actor: Actor, target: Union[HouseholdRef, Invite]
+    actor: Actor, target: HouseholdRef | Invite
 ) -> AuthzDecision:
     if not _is_authenticated(actor):
         return deny(DenialReason.UNAUTHENTICATED)

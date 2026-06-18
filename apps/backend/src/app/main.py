@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.auth.rate_limits import InMemoryRateLimiter, RateLimitConfig
 from app.config import Settings, get_settings
 from app.db.session import is_production_like_environment
 
@@ -19,6 +20,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     _configure_cors(application, app_settings)
+    application.state.auth_rate_limiter = InMemoryRateLimiter(RateLimitConfig.default())
     application.include_router(api_router, prefix=app_settings.api_v1_prefix)
     return application
 

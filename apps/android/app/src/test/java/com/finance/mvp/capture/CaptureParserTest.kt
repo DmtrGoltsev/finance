@@ -1,0 +1,266 @@
+package com.finance.mvp.capture
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CaptureParserTest {
+    @Test
+    fun screenshotBankPurchaseParsesStructuredFields() {
+        val candidate = CaptureParser.parseScreenshotOcr(
+            text = """
+                Bank card
+                Purchase 987.65 RUB at Fresh Market
+                Balance 12 000.00 RUB
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNotNull(candidate)
+        candidate!!
+        assertEquals("987.65", candidate.amount)
+        assertEquals("RUB", candidate.currency)
+        assertEquals("Fresh Market", candidate.merchantName)
+        assertEquals("screenshot", candidate.captureSource)
+        assertNull(candidate.sourceAppPackage)
+        assertEquals("Photo Picker", candidate.sourceAppLabel)
+        assertTrue(candidate.confidence >= 0.85)
+        assertTrue(candidate.evidenceHash.length == 64)
+        assertTrue(candidate.idempotencyKey.startsWith("capture-v1:screenshot:"))
+    }
+
+    @Test
+    fun screenshotBrokerOperationParsesAsDraftCandidate() {
+        val candidate = CaptureParser.parseScreenshotOcr(
+            text = "Broker order executed. Buy ETF FXUS. Total 120.50 USD. Portfolio updated.",
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNotNull(candidate)
+        candidate!!
+        assertEquals("120.50", candidate.amount)
+        assertEquals("USD", candidate.currency)
+        assertEquals("Brokerage operation", candidate.merchantName)
+        assertEquals("screenshot", candidate.captureSource)
+        assertTrue(candidate.confidence >= 0.75)
+    }
+
+    @Test
+    fun screenshotTransferOrAmbiguousTextIsIgnored() {
+        assertNull(
+            CaptureParser.parseScreenshotOcr(
+                text = "Transfer between accounts 500.00 USD completed",
+                capturedAtMillis = FIXED_TIME,
+            ),
+        )
+        assertNull(
+            CaptureParser.parseScreenshotOcr(
+                text = "Statement screen amount 19.99 USD",
+                capturedAtMillis = FIXED_TIME,
+            ),
+        )
+    }
+
+    @Test
+    fun screenshotMultipleAmountsPrefersPaymentAmountOverBalance() {
+        val candidate = CaptureParser.parseScreenshotOcr(
+            text = "Balance 10 000.00 RUB. Payment 345.67 RUB at Pharmacy. Cashback 3.45 RUB.",
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNotNull(candidate)
+        assertEquals("345.67", candidate!!.amount)
+        assertEquals("Pharmacy", candidate.merchantName)
+    }
+
+    @Test
+    fun screenshotEmptyOrLowConfidenceTextIsIgnored() {
+        assertNull(CaptureParser.parseScreenshotOcr(text = "", capturedAtMillis = FIXED_TIME))
+        assertNull(
+            CaptureParser.parseScreenshotOcr(
+                text = "Receipt-like screen 42.00 USD",
+                capturedAtMillis = FIXED_TIME,
+            ),
+        )
+    }
+
+    @Test
+    fun screenshotCreateRequestDoesNotCarryRawOcrText() {
+        val rawOcr = "Payment 45.90 USD at Coffee Place internal receipt line"
+        val candidate = CaptureParser.parseScreenshotOcr(rawOcr, FIXED_TIME)
+
+        assertNotNull(candidate)
+        val requestText = candidate!!.toCreateRequest().toString()
+        assertEquals("screenshot", candidate.captureSource)
+        assertEquals("Coffee Place", candidate.merchantName)
+        assertEquals("Coffee Place", candidate.description)
+        assertFalse(requestText.contains(rawOcr))
+        assertFalse(requestText.contains("internal receipt line", ignoreCase = true))
+        assertFalse(requestText.contains("rawOcr", ignoreCase = true))
+        assertFalse(requestText.contains("image", ignoreCase = true))
+    }
+
+    @Test
+    fun screenshotSuspiciousMerchantHintFallsBackToGenericDescription() {
+        val candidate = CaptureParser.parseScreenshotOcr(
+            text = "Payment 45.90 USD at internal receipt line",
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNotNull(candidate)
+        candidate!!
+        assertEquals("45.90", candidate.amount)
+        assertEquals("USD", candidate.currency)
+        assertEquals("screenshot", candidate.captureSource)
+        assertNull(candidate.merchantName)
+        assertEquals("Screenshot capture", candidate.description)
+        assertTrue(candidate.confidence >= 0.55)
+    }
+
+    @Test
+    fun screenshotSensitiveMerchantHintsFallBackToGenericDescription() {
+        val sensitiveHints = listOf(
+            "4111111111111111",
+            "account 123456789",
+            "555 123 4567",
+            "customer@example.com",
+            "+1 (555) 123-4567",
+        )
+
+        sensitiveHints.forEach { hint ->
+            val candidate = CaptureParser.parseScreenshotOcr(
+                text = "Payment 45.90 USD at $hint",
+                capturedAtMillis = FIXED_TIME,
+            )
+
+            assertNotNull("Expected screenshot candidate for $hint", candidate)
+            candidate!!
+            assertEquals("45.90", candidate.amount)
+            assertEquals("USD", candidate.currency)
+            assertEquals("screenshot", candidate.captureSource)
+            assertNull("Sensitive hint must not become merchantName: $hint", candidate.merchantName)
+            assertEquals("Screenshot capture", candidate.description)
+            assertFalse(candidate.description.orEmpty().contains(hint, ignoreCase = true))
+            assertTrue(candidate.confidence >= 0.55)
+        }
+    }
+
+    @Test
+    fun screenshotIdempotencyIsStableForSameMinuteAndChangesForDifferentEvidence() {
+        val first = CaptureParser.parseScreenshotOcr(
+            text = "Payment 9.99 USD at Market",
+            capturedAtMillis = FIXED_TIME,
+        )
+        val duplicate = CaptureParser.parseScreenshotOcr(
+            text = "Payment   9.99 USD at Market",
+            capturedAtMillis = FIXED_TIME + 1_000,
+        )
+        val different = CaptureParser.parseScreenshotOcr(
+            text = "Payment 10.99 USD at Market",
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertEquals(first!!.idempotencyKey, duplicate!!.idempotencyKey)
+        assertEquals(first.evidenceHash, duplicate.evidenceHash)
+        assertNotEquals(first.idempotencyKey, different!!.idempotencyKey)
+    }
+
+    @Test
+    fun categoryAggregateScreenshotExtractsVisibleRowsAndIgnoresSummary() {
+        val result = CaptureParser.parseScreenshotOcrResult(
+            text = """
+                Анализ финансов
+                Расходы
+                Супермаркеты
+                224 584 ₽
+                34 операции
+                Кафе, рестораны, фастфуд
+                222 129 ₽
+                80 операций
+                Погашение кредитов
+                104 621 ₽
+                1 операция
+                Ещё 17 категорий на 338 156 ₽
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertNull(result.singleCandidate)
+        assertEquals(3, result.aggregateCandidates.size)
+        assertEquals("Супермаркеты", result.aggregateCandidates[0].externalLabel)
+        assertEquals("224584.00", result.aggregateCandidates[0].amount)
+        assertEquals("RUB", result.aggregateCandidates[0].currency)
+        assertEquals(34, result.aggregateCandidates[0].operationCount)
+        assertEquals("Кафе, рестораны, фастфуд", result.aggregateCandidates[1].externalLabel)
+        assertEquals("222129.00", result.aggregateCandidates[1].amount)
+        assertEquals(80, result.aggregateCandidates[1].operationCount)
+        assertEquals("Погашение кредитов", result.aggregateCandidates[2].externalLabel)
+        assertEquals("104621.00", result.aggregateCandidates[2].amount)
+        assertEquals(1, result.aggregateCandidates[2].operationCount)
+        assertTrue(result.aggregateCandidates.none { it.externalLabel.contains("Ещё", ignoreCase = true) })
+    }
+
+    @Test
+    fun categoryAggregateScreenshotParsesMultilineCategoryAndAmount() {
+        val candidates = CaptureParser.parseCategoryAggregateScreenshotOcr(
+            text = """
+                Кафе, рестораны,
+                фастфуд
+                222 129 ₽
+                80 операций
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertEquals(1, candidates.size)
+        assertEquals("Кафе, рестораны, фастфуд", candidates.single().externalLabel)
+        assertEquals("222129.00", candidates.single().amount)
+        assertEquals(80, candidates.single().operationCount)
+        val request = candidates.single().toCreateRequest("cat-food")
+        assertEquals("cat-food", request.categoryId)
+        assertEquals("Скрин: Кафе, рестораны, фастфуд", request.description)
+        assertNull(request.merchantName)
+        assertFalse(request.toString().contains("80 операций"))
+    }
+
+    @Test
+    fun categoryAggregateScreenshotInitializesAndroidSafeAmountRegex() {
+        val candidates = CaptureParser.parseCategoryAggregateScreenshotOcr(
+            text = """
+                Супермаркеты
+                224 584 ₽
+                34 операции
+            """.trimIndent(),
+            capturedAtMillis = FIXED_TIME,
+        )
+
+        assertEquals(1, candidates.size)
+        assertEquals("Супермаркеты", candidates.single().externalLabel)
+        assertEquals("224584.00", candidates.single().amount)
+        assertEquals(34, candidates.single().operationCount)
+    }
+
+    @Test
+    fun categoryAggregateMappingNormalizationIsStable() {
+        assertEquals(
+            "кафе рестораны фастфуд",
+            CategoryAggregateMappingKeys.normalizedExternalLabel("  Кафе, рестораны,\nфастфуд  "),
+        )
+        assertEquals(
+            CategoryAggregateMappingKeys.mappingKey("household:one", "Супермаркеты"),
+            CategoryAggregateMappingKeys.mappingKey("household:one", "супермаркеты"),
+        )
+        assertNotEquals(
+            CategoryAggregateMappingKeys.mappingKey("household:one", "Супермаркеты"),
+            CategoryAggregateMappingKeys.mappingKey("household:two", "Супермаркеты"),
+        )
+    }
+
+    private companion object {
+        const val FIXED_TIME: Long = 1_779_558_000_000L
+    }
+}

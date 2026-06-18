@@ -4,6 +4,54 @@ Scope: Finance only. Do not change RocketFlow routes, services, databases, or
 nginx locations. Finance is expected under `/finance/` with backend API under
 `/finance-api/`.
 
+## Release deployment
+
+GitHub Actions is the primary production CI/CD path. The workflow is
+`.github/workflows/finance-hexcore-prod-deploy.yml`.
+
+Pushes to branch names containing `release` run CI/package only:
+
+- frontend: Node.js 22, `npm ci`, `npm test`, production PWA build, artifact
+  checksum, and manifest;
+- backend: Python 3.12, `apps/backend[dev]`, `ruff`, `pytest`, wheel build,
+  migration-inclusive artifact, checksum, and manifest.
+
+Production deploys are manual `workflow_dispatch` actions gated by explicit
+inputs and the GitHub `production` environment. Frontend releases deploy to
+`/var/www/finance/releases/<release-id>` and atomically flip
+`/var/www/finance/current`. Backend releases deploy to
+`/opt/finance/releases/<release-id>` and atomically flip `/opt/finance/current`.
+
+Required GitHub secrets are `HEXCORE_PROD_SSH_HOST`, `HEXCORE_PROD_SSH_USER`,
+`HEXCORE_PROD_SSH_PRIVATE_KEY`, and `HEXCORE_PROD_SSH_KNOWN_HOSTS`.
+`HEXCORE_PROD_SSH_PORT` is optional and defaults to `22` when unset. Workflows
+use pinned host-key verification with `StrictHostKeyChecking=yes`; do not use
+`StrictHostKeyChecking=no` or trust-on-first-use host keys for production.
+
+Backend migrations are disabled by default. A production Alembic upgrade runs
+only when `deploy_backend=true`, `run_migrations=true`, exact revision inputs,
+backup proof, production confirmation, and environment approval are all present.
+The workflow sources `/etc/finance/backend.env` on the host; DB secrets are not
+stored in GitHub.
+
+Backend restart is disabled by default and requires `restart_backend=true`,
+`confirm_backend_restart=finance-backend.service`, and environment approval.
+
+Manual rollback is available in
+`.github/workflows/finance-prod-rollback.yml`; it flips frontend/backend
+symlinks to existing release directories and does not perform DB rollback.
+
+Runbooks:
+
+- `docs/production/finance-cicd-runbook.md`
+- `docs/production/finance-db-migrations.md`
+- `docs/production/finance-secrets-and-host-key.md`
+
+Direct SSH/SCP upload to HexCore is retained only as a manual/emergency fallback
+for operators when GitHub Actions is unavailable. It must follow the same
+release-directory, symlink, pinned-host-key, migration-gate, and no-secret-log
+rules.
+
 ## Backend environment
 
 Use `/etc/finance/backend.env` or the service manager equivalent. Keep the
@@ -12,7 +60,7 @@ Use `/etc/finance/backend.env` or the service manager equivalent. Keep the
 ```bash
 FINANCE_BACKEND_ENVIRONMENT=production
 FINANCE_BACKEND_DEBUG=false
-FINANCE_BACKEND_DATABASE_URL=postgresql+asyncpg://finance_app:<secret>@127.0.0.1:5432/finance
+FINANCE_BACKEND_DATABASE_URL='<host-side production DSN from secret manager>'
 FINANCE_BACKEND_DATABASE_MIGRATION_POLICY=external
 FINANCE_BACKEND_ACCOUNTS_CATEGORIES_REPOSITORY_MODE=db
 FINANCE_BACKEND_CORS_ALLOWED_ORIGINS='["https://<public-host>"]'
@@ -20,11 +68,63 @@ FINANCE_BACKEND_AUTH_TOKEN_HASH_SECRET=<32+ byte secret from secret manager>
 FINANCE_BACKEND_AUTH_COOKIE_PATH=/
 FINANCE_BACKEND_AUTH_COOKIE_SECURE=true
 FINANCE_BACKEND_AUTH_COOKIE_SAMESITE=lax
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_ENABLED=true
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TESSERACT_CMD=/usr/bin/tesseract
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_LANG=rus+eng
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_UPLOAD_BYTES=8388608
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_MAX_PIXELS=16000000
+FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TIMEOUT_SECONDS=8
 ```
 
 `psycopg` is required by the sync SQLAlchemy path because
 `postgresql+asyncpg` is converted to `postgresql+psycopg` for migrations and
 DB-backed runtime helpers.
+
+## Screenshot OCR runtime
+
+PWA/iOS browser screenshot capture uses `POST /api/v1/capture-drafts/screenshot-ocr`
+and requires self-hosted Tesseract on the backend host. Android OCR remains
+on-device and does not upload screenshots.
+
+Install the OS packages before enabling OCR:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
+tesseract --list-langs
+```
+
+Expected language output includes `rus` and `eng`. If the binary is outside
+`/usr/bin/tesseract`, set `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_TESSERACT_CMD`
+to the absolute path.
+
+Operational OCR checks:
+
+- `curl -fsS http://127.0.0.1:8081/health` confirms the backend process, not the
+  Tesseract binary.
+- A small authenticated PNG/JPEG/WebP request to
+  `/finance-api/api/v1/capture-drafts/screenshot-ocr` is the runtime diagnostic
+  for OCR availability. `OCR_ENGINE_UNAVAILABLE` means the binary or language
+  data is missing; `OCR_DISABLED` means the env flag is off; `OCR_TIMEOUT` means
+  the image or host is too slow for the configured timeout.
+- The endpoint accepts only PNG/JPEG/WebP, max upload bytes and decoded pixels
+  from the `FINANCE_BACKEND_CAPTURE_SCREENSHOT_OCR_*` settings. HEIC and raw
+  text/body payloads must be rejected.
+
+Screenshots and raw OCR text are temporary request data only. They must not be
+written to application logs, audit, backups, object storage, support artifacts,
+or debug dumps. Category mappings store only normalized label hashes; raw labels
+are transient request/response values for user confirmation.
+
+If nginx fronts `/finance-api/`, set a body-size limit high enough for the OCR
+upload cap and low enough to preserve the backend limit, for example:
+
+```nginx
+location /finance-api/ {
+    client_max_body_size 8m;
+    proxy_pass http://127.0.0.1:8081/;
+}
+```
 
 ## Frontend build
 
@@ -84,6 +184,8 @@ Browser checks:
 - no request goes to old `/api/` and backend runtime uses only `FINANCE_BACKEND_*`
   configuration names.
 
-Remaining production gate: do not enable/start the service until migrations,
-secret injection, backend health, frontend build inspection, and QA login smoke
-have passed.
+Remaining production gate: do not enable/start/restart the service until
+migrations, secret injection, backend health, frontend build inspection, and QA
+login smoke have passed. In CI/CD, `finance-backend.service` restart is allowed
+only through the explicit restart input, service-name confirmation, and the
+GitHub `production` environment approval.

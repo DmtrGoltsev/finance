@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Final
 
 
-class DomainStrEnum(str, Enum):
+class DomainStrEnum(StrEnum):
     """String enum base that serializes cleanly in Pydantic and JSON."""
 
     def __str__(self) -> str:
@@ -51,6 +51,7 @@ class TransactionType(DomainStrEnum):
 
 
 class ReportMode(DomainStrEnum):
+    PERSONAL = "personal"
     SHARED_FAMILY_REPORT = "shared_family_report"
     COMBINED_VIEWER_OVERVIEW = "combined_viewer_overview"
 

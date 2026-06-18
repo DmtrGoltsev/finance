@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "20260518_0004"
@@ -69,8 +69,14 @@ def upgrade() -> None:
             "transaction_type IN ('income', 'expense', 'transfer', 'brokerage')",
             name=op.f("ck_transactions_transaction_type_valid"),
         ),
-        sa.CheckConstraint("source_type IN ('manual')", name=op.f("ck_transactions_source_type_valid")),
-        sa.CheckConstraint("source_type = 'manual'", name=op.f("ck_transactions_source_type_manual_only")),
+        sa.CheckConstraint(
+            "source_type IN ('manual')",
+            name=op.f("ck_transactions_source_type_valid"),
+        ),
+        sa.CheckConstraint(
+            "source_type = 'manual'",
+            name=op.f("ck_transactions_source_type_manual_only"),
+        ),
         sa.CheckConstraint("amount > 0", name=op.f("ck_transactions_positive_amount")),
         sa.CheckConstraint(
             "currency = upper(currency) AND length(currency) = 3",
@@ -97,13 +103,21 @@ def upgrade() -> None:
             "record_status IN ('active', 'deleted')",
             name=op.f("ck_transactions_record_status_valid"),
         ),
-        sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], name=op.f("fk_transactions_account_id_accounts")),
+        sa.ForeignKeyConstraint(
+            ["account_id"],
+            ["accounts.id"],
+            name=op.f("fk_transactions_account_id_accounts"),
+        ),
         sa.ForeignKeyConstraint(
             ["counterparty_account_id"],
             ["accounts.id"],
             name=op.f("fk_transactions_counterparty_account_id_accounts"),
         ),
-        sa.ForeignKeyConstraint(["category_id"], ["categories.id"], name=op.f("fk_transactions_category_id_categories")),
+        sa.ForeignKeyConstraint(
+            ["category_id"],
+            ["categories.id"],
+            name=op.f("fk_transactions_category_id_categories"),
+        ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"],
             ["users.id"],
@@ -148,4 +162,3 @@ def downgrade() -> None:
     op.drop_index("ix_transactions_category_occurred", table_name="transactions")
     op.drop_index("ix_transactions_account_occurred_status", table_name="transactions")
     op.drop_table("transactions")
-

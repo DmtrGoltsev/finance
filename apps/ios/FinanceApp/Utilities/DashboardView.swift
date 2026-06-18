@@ -1,0 +1,227 @@
+import Foundation
+import SwiftUI
+
+extension FinanceDashboard {
+    struct DashboardViewData {
+        let mode: FinanceMode
+        let scopeTitle: String
+        let visibleAccounts: [Account]
+        let visibleTransactions: [Transaction]
+        let primaryCurrency: CurrencyCode
+        let capital: String
+        let accountCount: Int
+        let operationCount: Int
+        let monthIncome: String
+        let monthExpenses: String
+        let transferTotal: String
+        let topCategories: [CategorySpend]
+        let recentTransactions: [Transaction]
+        let assetSummaries: [AssetSummary]
+    }
+
+    struct CategorySpend {
+        let categoryId: String
+        let name: String
+        let amount: String
+        let currency: CurrencyCode
+        let sfSymbol: String
+        let color: Color
+    }
+
+    struct AssetSummary {
+        let accountType: AccountType
+        let currency: CurrencyCode
+        let balance: String
+        let count: Int
+        let sfSymbol: String
+        let color: Color
+        let title: String
+    }
+
+    func viewFor(_ mode: FinanceMode) -> DashboardViewData {
+        let visibleAccounts = accountsFor(mode)
+        let visibleTransactions = transactionsFor(mode)
+        let currency = visibleAccounts.first?.currency ?? .RUB
+
+        let capital = visibleAccounts
+            .filter { $0.status == .active }
+            .reduce(Decimal.zero) { sum, acc in
+                guard acc.currency == currency else { return sum }
+                return sum + (Decimal(string: acc.currentBalance) ?? .zero)
+            }
+
+        let incomeTotal = visibleTransactions
+            .filter { $0.transactionType == .income }
+            .reduce(Decimal.zero) { sum, t in
+                guard t.currency == currency else { return sum }
+                return sum + (Decimal(string: t.amount) ?? .zero)
+            }
+
+        let expenseTotal = visibleTransactions
+            .filter { $0.transactionType == .expense }
+            .reduce(Decimal.zero) { sum, t in
+                guard t.currency == currency else { return sum }
+                return sum + (Decimal(string: t.amount) ?? .zero)
+            }
+
+        let transferTotal = visibleTransactions
+            .filter { $0.transactionType == .transfer }
+            .reduce(Decimal.zero) { sum, t in
+                guard t.currency == currency else { return sum }
+                return sum + (Decimal(string: t.amount) ?? .zero)
+            }
+
+        let topCategories = topCategorySpends(
+            transactions: visibleTransactions,
+            allCategories: categories,
+            currency: currency
+        )
+
+        let recent = visibleTransactions
+            .sorted { sortDateKey($0) < sortDateKey($1) }
+            .suffix(4)
+
+        return DashboardViewData(
+            mode: mode,
+            scopeTitle: mode.title,
+            visibleAccounts: visibleAccounts,
+            visibleTransactions: visibleTransactions,
+            primaryCurrency: currency,
+            capital: MoneyHelpers.decimalToString(capital),
+            accountCount: visibleAccounts.filter { $0.status == .active }.count,
+            operationCount: visibleTransactions.count,
+            monthIncome: MoneyHelpers.decimalToString(incomeTotal),
+            monthExpenses: MoneyHelpers.decimalToString(expenseTotal),
+            transferTotal: MoneyHelpers.decimalToString(transferTotal),
+            topCategories: topCategories,
+            recentTransactions: Array(recent),
+            assetSummaries: assetSummaries(accounts: visibleAccounts, currency: currency)
+        )
+    }
+
+    func accountsFor(_ mode: FinanceMode) -> [Account] {
+        switch mode {
+        case .personal:
+            return accounts.filter { $0.ownershipType == .personal && $0.status == .active }
+        case .shared:
+            let hhId = session.householdId
+            return accounts.filter { $0.ownershipType == .shared && $0.householdId == hhId && $0.status == .active }
+        case .overview:
+            return accounts.filter { $0.status == .active }
+        }
+    }
+
+    func transactionsFor(_ mode: FinanceMode) -> [Transaction] {
+        let visibleAccounts = accountsFor(mode)
+        let accountIds = Set(visibleAccounts.map(\.id))
+        return transactions.filter { accountIds.contains($0.accountId) }
+    }
+
+    func sortDateKey(_ transaction: Transaction) -> String {
+        transaction.transactionDate ?? String(transaction.occurredAt.prefix(10))
+    }
+}
+
+private extension FinanceDashboard {
+    func topCategorySpends(
+        transactions: [Transaction],
+        allCategories: [Category],
+        currency: CurrencyCode
+    ) -> [CategorySpend] {
+        let expenseTxs = transactions.filter { $0.transactionType == .expense && $0.currency == currency }
+        var map: [String: Decimal] = [:]
+        for tx in expenseTxs {
+            guard let catId = tx.categoryId else { continue }
+            let amount = Decimal(string: tx.amount) ?? .zero
+            map[catId, default: .zero] += amount
+        }
+        return map
+            .map { catId, total in
+                let cat = allCategories.first { $0.id == catId }
+                return CategorySpend(
+                    categoryId: catId,
+                    name: cat?.name ?? "Без категории",
+                    amount: MoneyHelpers.decimalToString(total),
+                    currency: currency,
+                    sfSymbol: categoryIcon(cat),
+                    color: categoryColor(cat)
+                )
+            }
+            .sorted { Decimal(string: $0.amount) ?? .zero > Decimal(string: $1.amount) ?? .zero }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    func categoryIcon(_ category: Category?) -> String {
+        switch category?.type {
+        case .expense: return "tag"
+        case .income: return "plus.circle"
+        default: return "tag"
+        }
+    }
+
+    func categoryColor(_ category: Category?) -> Color {
+        switch category?.type {
+        case .expense: return FinanceColors.expense
+        case .income: return FinanceColors.income
+        default: return .secondary
+        }
+    }
+
+    func assetSummaries(accounts: [Account], currency: CurrencyCode) -> [AssetSummary] {
+        let active = accounts.filter { $0.status == .active }
+        return AccountType.allCases.compactMap { type in
+            let filtered = active.filter { $0.accountType == type && $0.currency == currency }
+            let balance = filtered.reduce(Decimal.zero) { sum, acc in
+                sum + (Decimal(string: acc.currentBalance) ?? .zero)
+            }
+            return AssetSummary(
+                accountType: type,
+                currency: currency,
+                balance: MoneyHelpers.decimalToString(balance),
+                count: filtered.count,
+                sfSymbol: type.sfSymbol,
+                color: type.color,
+                title: type.title
+            )
+        }
+    }
+}
+
+extension AccountType {
+    var sfSymbol: String {
+        switch self {
+        case .cash: return "banknote"
+        case .bank: return "building.columns"
+        case .card: return "creditcard"
+        case .deposit: return "piggybank"
+        case .brokerage: return "chart.line.uptrend.xyaxis"
+        case .metal: return "bitcoinsign.bank"
+        case .other: return "centsign.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cash: return FinanceColors.income
+        case .bank: return FinanceColors.primary
+        case .card: return FinanceColors.planningPrimary
+        case .deposit: return FinanceColors.investment
+        case .brokerage: return FinanceColors.investment
+        case .metal: return Color.orange
+        case .other: return .secondary
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .cash: return "Наличные"
+        case .bank: return "Банк"
+        case .card: return "Карты"
+        case .deposit: return "Вклады"
+        case .brokerage: return "Брокер"
+        case .metal: return "Металлы"
+        case .other: return "Другое"
+        }
+    }
+}

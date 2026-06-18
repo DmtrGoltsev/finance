@@ -13,6 +13,7 @@ from app.authz import (
     canMutateCategory,
     canReadCategory,
 )
+from app.sync.domain_changes import SyncChangeRecorder
 
 from .repository import CategoryRecord, CategoryRepository, repository
 from .schemas import (
@@ -141,8 +142,13 @@ def _autocomplete_dto(record: CategoryRecord) -> CategoryAutocompleteDto:
 
 
 class CategoryService:
-    def __init__(self, store: CategoryRepository = repository) -> None:
+    def __init__(
+        self,
+        store: CategoryRepository = repository,
+        sync_change_recorder: SyncChangeRecorder | None = None,
+    ) -> None:
         self._store = store
+        self._sync_change_recorder = sync_change_recorder
 
     def list(
         self,
@@ -198,7 +204,13 @@ class CategoryService:
         records = self._sort(records, CategoryListSort.NAME_ASC)
         return [_autocomplete_dto(record) for record in records[:limit]]
 
-    def create(self, *, actor: Actor, request: CategoryCreateRequest) -> CategoryDto:
+    def create(
+        self,
+        *,
+        actor: Actor,
+        request: CategoryCreateRequest,
+        category_id: str | None = None,
+    ) -> CategoryDto:
         if not actor.user_id:
             raise _not_found(actor)
 
@@ -214,6 +226,7 @@ class CategoryService:
             household_id = request.household_id
 
         record = self._store.create(
+            category_id=category_id,
             name=request.name,
             type=request.type,
             scope=request.scope,
@@ -223,6 +236,7 @@ class CategoryService:
             color=request.color,
             created_by_user_id=actor.user_id,
         )
+        self._record_sync_change(actor=actor, operation="create", record=record)
         return _dto(record)
 
     def get(self, *, actor: Actor, category_id: str) -> CategoryDto:
@@ -255,7 +269,9 @@ class CategoryService:
         if request.status is not None:
             updated = self._record_with_status(updated, request.status)
 
-        return _dto(self._store.save(updated))
+        saved = self._store.save(updated)
+        self._record_sync_change(actor=actor, operation="update", record=saved)
+        return _dto(saved)
 
     def delete(self, *, actor: Actor, category_id: str) -> None:
         record = self._require_visible(actor, category_id)
@@ -265,7 +281,8 @@ class CategoryService:
                 ARCHIVED_NOT_MUTABLE_CODE,
                 "Archived or deleted records are not mutable.",
             )
-        self._store.save(self._record_with_status(record, RecordStatus.DELETED))
+        deleted = self._store.save(self._record_with_status(record, RecordStatus.DELETED))
+        self._record_sync_change(actor=actor, operation="delete", record=deleted)
 
     def archive(self, *, actor: Actor, category_id: str) -> CategoryDto:
         record = self._require_visible(actor, category_id)
@@ -275,13 +292,17 @@ class CategoryService:
                 ARCHIVED_NOT_MUTABLE_CODE,
                 "Archived or deleted records are not mutable.",
             )
-        return _dto(self._store.save(self._record_with_status(record, RecordStatus.ARCHIVED)))
+        archived = self._store.save(self._record_with_status(record, RecordStatus.ARCHIVED))
+        self._record_sync_change(actor=actor, operation="archive", record=archived)
+        return _dto(archived)
 
     def restore(self, *, actor: Actor, category_id: str) -> CategoryDto:
         record = self._require_visible(actor, category_id)
         if record.status == RecordStatus.DELETED:
             raise _not_found(actor)
-        return _dto(self._store.save(self._record_with_status(record, RecordStatus.ACTIVE)))
+        restored = self._store.save(self._record_with_status(record, RecordStatus.ACTIVE))
+        self._record_sync_change(actor=actor, operation="restore", record=restored)
+        return _dto(restored)
 
     def _require_visible(self, actor: Actor, category_id: str) -> CategoryRecord:
         record = self._store.get(category_id)
@@ -369,6 +390,21 @@ class CategoryService:
         if new_status == RecordStatus.DELETED:
             return replace(record, status=new_status, deleted_at=record.deleted_at or now)
         return record
+
+    def _record_sync_change(
+        self,
+        *,
+        actor: Actor,
+        operation: str,
+        record: CategoryRecord,
+    ) -> None:
+        if self._sync_change_recorder is None:
+            return
+        self._sync_change_recorder.record_category_change(
+            actor_user_id=actor.user_id,
+            operation=operation,
+            record=record,
+        )
 
 
 service = CategoryService()
