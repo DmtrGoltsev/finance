@@ -192,7 +192,7 @@ struct AssetCategoryGroupCard: View {
             name: trimmed,
             manualAmount: isManualOnly ? editManualAmount : nil,
             assetType: nil,
-            iconKey: nil,
+            iconKey: group.iconKey,
             isInvestment: editIsInvestment,
             version: nil
         )

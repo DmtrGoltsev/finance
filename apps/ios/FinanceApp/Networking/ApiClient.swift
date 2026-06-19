@@ -66,5 +66,8 @@ protocol FinanceApiClient: Sendable {
     func updatePlanningAllocation(allocationId: String, _ request: PlanningAllocationUpdateRequest) async throws -> PlanningAllocation
     func deletePlanningAllocation(allocationId: String) async throws
 
+    func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse
+    func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse
+
     func dashboard(startDate: String?, endDate: String?) async throws -> FinanceDashboard
 }

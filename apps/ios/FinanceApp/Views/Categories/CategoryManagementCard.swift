@@ -3,8 +3,12 @@ import SwiftUI
 struct CategoryManagementCard: View {
     let categories: [Category]
     let hasHousehold: Bool
+    let householdId: String?
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
     @State private var selectedType: CategoryType = .expense
     @State private var selectedScope: CategoryScope = .personal
@@ -173,18 +177,29 @@ struct CategoryManagementCard: View {
         let trimmed = newCategoryName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         isLoading = true
+        let request = CategoryCreateRequest(
+            name: trimmed,
+            type: selectedType,
+            scope: selectedScope,
+            householdId: selectedScope == .household ? householdId : nil,
+            iconKey: nil,
+            color: nil
+        )
         do {
-            _ = try await apiClient.createCategory(CategoryCreateRequest(
-                name: trimmed,
-                type: selectedType,
-                scope: selectedScope,
-                householdId: selectedScope == .household ? nil : nil,
-                iconKey: nil,
-                color: nil
-            ))
+            _ = try await apiClient.createCategory(request)
             newCategoryName = ""
             await onRefresh()
             message = "Категория добавлена"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let category = localCategory(from: request)
+                try await enqueueOptimistic(entityId: category.id, operation: .create, payload: category)
+                newCategoryName = ""
+                await onLocalSnapshotChanged()
+                message = "Категория добавлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -192,17 +207,35 @@ struct CategoryManagementCard: View {
     }
 
     private func updateCategory(_ category: Category, _ newName: String) async {
+        let request = CategoryUpdateRequest(
+            name: newName,
+            iconKey: category.iconKey,
+            color: category.color,
+            version: category.version
+        )
         do {
-            _ = try await apiClient.updateCategory(
-                categoryId: category.id,
-                CategoryUpdateRequest(
+            _ = try await apiClient.updateCategory(categoryId: category.id, request)
+            await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let updated = Category(
+                    id: category.id,
                     name: newName,
+                    type: category.type,
+                    scope: category.scope,
+                    ownerUserId: category.ownerUserId,
+                    householdId: category.householdId,
                     iconKey: category.iconKey,
                     color: category.color,
+                    status: category.status,
                     version: category.version
                 )
-            )
-            await onRefresh()
+                try await enqueueOptimistic(entityId: category.id, operation: .update, baseVersion: category.version, payload: updated)
+                await onLocalSnapshotChanged()
+                message = "Категория обновлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -212,6 +245,15 @@ struct CategoryManagementCard: View {
         do {
             _ = try await apiClient.archiveCategory(categoryId: id)
             await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let version = categories.first(where: { $0.id == id })?.version
+                try await enqueueOptimistic(entityId: id, operation: .archive, baseVersion: version, payload: Optional<Category>.none)
+                await onLocalSnapshotChanged()
+                message = "Категория архивирована локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -221,12 +263,74 @@ struct CategoryManagementCard: View {
         do {
             _ = try await apiClient.restoreCategory(categoryId: id)
             await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let category = categories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                let restored = Category(
+                    id: category.id,
+                    name: category.name,
+                    type: category.type,
+                    scope: category.scope,
+                    ownerUserId: category.ownerUserId,
+                    householdId: category.householdId,
+                    iconKey: category.iconKey,
+                    color: category.color,
+                    status: .active,
+                    version: category.version
+                )
+                try await enqueueOptimistic(entityId: id, operation: .restore, baseVersion: category.version, payload: restored)
+                await onLocalSnapshotChanged()
+                message = "Категория восстановлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
     }
-}
 
+    private func enqueueOptimistic<T: Encodable>(
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        payload: T?
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        if let payload {
+            try await syncService.enqueueOptimisticMutation(
+                scope: localScope,
+                entityType: .categories,
+                entityId: entityId,
+                operation: operation,
+                baseVersion: baseVersion,
+                request: payload
+            )
+        } else {
+            try await syncService.enqueueOptimisticMutation(
+                scope: localScope,
+                entityType: .categories,
+                entityId: entityId,
+                operation: operation,
+                baseVersion: baseVersion
+            )
+        }
+    }
+
+    private func localCategory(from request: CategoryCreateRequest) -> Category {
+        Category(
+            id: "local-\(UUID().uuidString)",
+            name: request.name,
+            type: request.type,
+            scope: request.scope,
+            ownerUserId: request.scope == .personal ? localScope?.viewerUserId : nil,
+            householdId: request.householdId,
+            iconKey: request.iconKey,
+            color: request.color,
+            status: .active,
+            version: nil
+        )
+    }
+}
 private struct CategoryManagementRow: View {
     let category: Category
     let onUpdate: (String) async -> Void

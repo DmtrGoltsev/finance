@@ -5,7 +5,10 @@ struct AnalyticsTab: View {
     let selectedMode: FinanceMode
     let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
     @State private var selectedSubsection: AnalyticsSubsection = .summary
     @State private var reportMonth = DateHelpers.currentYearMonth()
@@ -29,7 +32,10 @@ struct AnalyticsTab: View {
                         dashboard: dashboard,
                         selectedMode: selectedMode,
                         onModeSelected: onModeSelected,
-                        apiClient: apiClient
+                        apiClient: apiClient,
+                        syncService: syncService,
+                        localScope: localScope,
+                        onLocalSnapshotChanged: onLocalSnapshotChanged
                     )
                 }
             }
@@ -60,13 +66,14 @@ struct AnalyticsTab: View {
                 )
 
                 CategoryBreakdownCard(
+                    breakdown: categoryBreakdown,
                     transactions: dashboard?.viewFor(selectedMode).visibleTransactions ?? [],
                     categories: dashboard?.categories ?? [],
                     currency: currency
                 )
 
                 CapitalBreakdownCard(
-                    groups: dashboard?.assetCategoryGroups ?? [],
+                    groups: accountBalances?.assetCategoryGroups ?? dashboard?.assetCategoryGroups ?? [],
                     currency: currency
                 )
             }
@@ -106,6 +113,8 @@ struct AnalyticsTab: View {
             accountBalances = try await balances
         } catch {
             reportSummary = nil
+            categoryBreakdown = nil
+            accountBalances = nil
         }
     }
 
@@ -122,6 +131,9 @@ struct AnalyticsTab: View {
     }
 
     private func investmentAmount(for currency: CurrencyCode) -> String {
+        if let amount = accountBalances?.investmentsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
+            return amount
+        }
         if let amount = dashboard?.investmentsByCurrency.first(where: { $0.currency == currency })?.amount {
             return amount
         }

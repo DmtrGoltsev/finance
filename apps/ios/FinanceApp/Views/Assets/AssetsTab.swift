@@ -5,7 +5,10 @@ struct AssetsTab: View {
     let selectedMode: FinanceMode
     let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
     @State private var showAssetCategorySheet = false
     @State private var showAddAccountSheet = false
@@ -31,6 +34,10 @@ struct AssetsTab: View {
 
     private var assetCategories: [AssetCategory] {
         dashboard?.assetCategories ?? []
+    }
+
+    private var viewerUserId: String? {
+        localScope?.viewerUserId
     }
 
     var body: some View {
@@ -164,6 +171,15 @@ struct AssetsTab: View {
             _ = try await apiClient.createAssetCategory(request)
             await onRefresh()
             message = "Категория создана"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let category = localAssetCategory(from: request)
+                try await enqueueOptimistic(entityType: .assetCategories, entityId: category.id, operation: .create, payload: category)
+                await onLocalSnapshotChanged()
+                message = "Категория создана локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -175,6 +191,16 @@ struct AssetsTab: View {
             _ = try await apiClient.updateAssetCategory(assetCategoryId: id, request)
             await onRefresh()
             message = "Категория обновлена"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let current = assetCategories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                let category = updatedAssetCategory(current, request: request)
+                try await enqueueOptimistic(entityType: .assetCategories, entityId: id, operation: .update, baseVersion: current.version, payload: category)
+                await onLocalSnapshotChanged()
+                message = "Категория обновлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -185,6 +211,15 @@ struct AssetsTab: View {
             _ = try await apiClient.archiveAssetCategory(assetCategoryId: id)
             await onRefresh()
             message = "Категория архивирована"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let version = assetCategories.first(where: { $0.id == id })?.version
+                try await enqueueOptimistic(entityType: .assetCategories, entityId: id, operation: .archive, baseVersion: version, payload: Optional<AssetCategory>.none)
+                await onLocalSnapshotChanged()
+                message = "Категория архивирована локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -196,6 +231,15 @@ struct AssetsTab: View {
             _ = try await apiClient.createAccount(request)
             await onRefresh()
             message = "Счёт создан"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let account = localAccount(from: request)
+                try await enqueueOptimistic(entityType: .accounts, entityId: account.id, operation: .create, payload: account)
+                await onLocalSnapshotChanged()
+                message = "Счёт создан локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -207,6 +251,18 @@ struct AssetsTab: View {
             _ = try await apiClient.updateAccount(accountId: id, request)
             await onRefresh()
             message = "Счёт обновлён"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let current = visibleAccounts.first(where: { $0.id == id }) ?? dashboard?.accounts.first(where: { $0.id == id }) else {
+                    throw LocalOptimisticError.missingCurrentEntity
+                }
+                let account = updatedAccount(current, request: request)
+                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .update, baseVersion: current.version, payload: account)
+                await onLocalSnapshotChanged()
+                message = "Счёт обновлён локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -217,6 +273,15 @@ struct AssetsTab: View {
             _ = try await apiClient.archiveAccount(accountId: id)
             await onRefresh()
             message = "Счёт архивирован"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let version = dashboard?.accounts.first(where: { $0.id == id })?.version
+                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .archive, baseVersion: version, payload: Optional<Account>.none)
+                await onLocalSnapshotChanged()
+                message = "Счёт архивирован локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -227,8 +292,117 @@ struct AssetsTab: View {
             _ = try await apiClient.restoreAccount(accountId: id)
             await onRefresh()
             message = "Счёт восстановлен"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let current = dashboard?.accounts.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                let account = Account(
+                    id: current.id,
+                    name: current.name,
+                    accountType: current.accountType,
+                    ownershipType: current.ownershipType,
+                    ownerUserId: current.ownerUserId,
+                    householdId: current.householdId,
+                    assetCategoryId: current.assetCategoryId,
+                    currency: current.currency,
+                    initialBalance: current.initialBalance,
+                    currentBalance: current.currentBalance,
+                    isPaymentAccount: current.isPaymentAccount,
+                    status: .active,
+                    version: current.version
+                )
+                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .restore, baseVersion: current.version, payload: account)
+                await onLocalSnapshotChanged()
+                message = "Счёт восстановлен локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
+    }
+
+    private func enqueueOptimistic<T: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        payload: T?
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        if let payload {
+            try await syncService.enqueueOptimisticMutation(scope: localScope, entityType: entityType, entityId: entityId, operation: operation, baseVersion: baseVersion, request: payload)
+        } else {
+            try await syncService.enqueueOptimisticMutation(scope: localScope, entityType: entityType, entityId: entityId, operation: operation, baseVersion: baseVersion)
+        }
+    }
+
+    private func localAssetCategory(from request: AssetCategoryCreateRequest) -> AssetCategory {
+        AssetCategory(
+            id: "local-\(UUID().uuidString)",
+            name: request.name,
+            scopeType: request.scopeType,
+            ownerUserId: request.scopeType == .personal ? viewerUserId : nil,
+            householdId: request.householdId,
+            currency: request.currency,
+            assetType: request.assetType ?? .bank,
+            iconKey: request.iconKey,
+            manualAmount: request.manualAmount ?? "0",
+            isInvestment: request.isInvestment ?? false,
+            recordStatus: .active,
+            version: nil
+        )
+    }
+
+    private func updatedAssetCategory(_ current: AssetCategory, request: AssetCategoryUpdateRequest) -> AssetCategory {
+        AssetCategory(
+            id: current.id,
+            name: request.name ?? current.name,
+            scopeType: current.scopeType,
+            ownerUserId: current.ownerUserId,
+            householdId: current.householdId,
+            currency: current.currency,
+            assetType: request.assetType ?? current.assetType,
+            iconKey: request.iconKey ?? current.iconKey,
+            manualAmount: request.manualAmount ?? current.manualAmount,
+            isInvestment: request.isInvestment ?? current.isInvestment,
+            recordStatus: current.recordStatus,
+            version: current.version
+        )
+    }
+
+    private func localAccount(from request: AccountCreateRequest) -> Account {
+        Account(
+            id: "local-\(UUID().uuidString)",
+            name: request.name,
+            accountType: request.accountType,
+            ownershipType: request.ownershipType,
+            ownerUserId: request.ownershipType == .personal ? viewerUserId : nil,
+            householdId: request.householdId,
+            assetCategoryId: request.assetCategoryId,
+            currency: request.currency,
+            initialBalance: request.initialBalance,
+            currentBalance: request.initialBalance,
+            isPaymentAccount: request.isPaymentAccount ?? false,
+            status: .active,
+            version: nil
+        )
+    }
+
+    private func updatedAccount(_ current: Account, request: AccountUpdateRequest) -> Account {
+        Account(
+            id: current.id,
+            name: request.name ?? current.name,
+            accountType: request.accountType ?? current.accountType,
+            ownershipType: current.ownershipType,
+            ownerUserId: current.ownerUserId,
+            householdId: current.householdId,
+            assetCategoryId: request.assetCategoryId,
+            currency: request.currency ?? current.currency,
+            initialBalance: current.initialBalance,
+            currentBalance: request.currentBalance ?? current.currentBalance,
+            isPaymentAccount: request.isPaymentAccount ?? current.isPaymentAccount,
+            status: current.status,
+            version: current.version
+        )
     }
 }

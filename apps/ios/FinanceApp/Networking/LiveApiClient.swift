@@ -5,7 +5,11 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     private let session: URLSession
     private let tokenStore: CSRFTokenStore
 
-    init(baseURL: String = "http://45.10.110.42/finance-api", tokenStore: CSRFTokenStore = .shared) {
+    convenience init(environment: AppEnvironment, tokenStore: CSRFTokenStore = .shared) {
+        self.init(baseURL: environment.apiBaseURL.absoluteString, tokenStore: tokenStore)
+    }
+
+    init(baseURL: String = AppEnvironment.current.apiBaseURL.absoluteString, tokenStore: CSRFTokenStore = .shared) {
         self.builder = RequestBuilder(baseURL: baseURL)
         self.tokenStore = tokenStore
         let config = URLSessionConfiguration.default
@@ -40,7 +44,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         return SessionStatus(
             isAuthenticated: actor != nil,
             displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
-            householdId: householdId
+            householdId: householdId,
+            userId: actor?.userId,
+            sessionId: actor?.sessionId
         )
     }
 
@@ -63,7 +69,13 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
             tokenStore.saveCsrfToken(loginResp.csrfToken!)
             if let expiry = loginResp.expiresAt { tokenStore.saveSessionExpiry(expiry) }
             let householdId = loginResp.actor?.memberships.first(where: { $0.status == "active" })?.householdId
-            return .authenticated(SessionStatus(isAuthenticated: true, displayName: nil, householdId: householdId))
+            return .authenticated(SessionStatus(
+                isAuthenticated: true,
+                displayName: nil,
+                householdId: householdId,
+                userId: loginResp.actor?.userId,
+                sessionId: loginResp.actor?.sessionId
+            ))
         }
         return .accepted(message: "Заявка на регистрацию принята")
     }
@@ -80,6 +92,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let request = builder.makeURLRequest(url: url, method: "DELETE", csrfToken: csrfToken)
         _ = try? await performRequestRaw(request, expectedCodes: [200, 204])
         tokenStore.clear()
+        clearSessionCookies()
     }
 
     // MARK: - Accounts
@@ -557,6 +570,24 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         _ = try await performRequestRaw(req, expectedCodes: [200, 204])
     }
 
+    // MARK: - Sync
+
+    func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse {
+        let body = try ResponseParser.encode(request)
+        let url = builder.makeURL(path: "/api/v1/sync/push")
+        let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
+        let data = try await performRequest(req)
+        return try ResponseParser.unwrapDataEnvelope(SyncPushResponse.self, from: data)
+    }
+
+    func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse {
+        let body = try ResponseParser.encode(request)
+        let url = builder.makeURL(path: "/api/v1/sync/pull")
+        let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
+        let data = try await performRequest(req)
+        return try ResponseParser.unwrapDataEnvelope(SyncPullResponse.self, from: data)
+    }
+
     // MARK: - Dashboard
 
     func dashboard(startDate: String? = nil, endDate: String? = nil) async throws -> FinanceDashboard {
@@ -621,6 +652,15 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
 
     private var csrfToken: String? { tokenStore.csrfToken }
 
+    private func clearSessionCookies() {
+        let storages = [HTTPCookieStorage.shared, session.configuration.httpCookieStorage].compactMap { $0 }
+        for storage in storages {
+            for cookie in storage.cookies ?? [] where cookie.name == FinanceConstants.sessionCookieName {
+                storage.deleteCookie(cookie)
+            }
+        }
+    }
+
     private func performRequest(_ request: URLRequest, expectedCodes: [Int] = [200]) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -669,7 +709,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         return SessionStatus(
             isAuthenticated: actor != nil,
             displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
-            householdId: householdId
+            householdId: householdId,
+            userId: actor?.userId,
+            sessionId: actor?.sessionId
         )
     }
 

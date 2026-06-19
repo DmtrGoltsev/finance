@@ -5,7 +5,10 @@ struct CategoriesTab: View {
     let selectedMode: FinanceMode
     let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
     private var categories: [Category] {
         dashboard?.categories ?? []
@@ -13,6 +16,10 @@ struct CategoriesTab: View {
 
     private var hasHousehold: Bool {
         dashboard?.session.householdId != nil
+    }
+
+    private var householdId: String? {
+        dashboard?.session.householdId
     }
 
     var body: some View {
@@ -23,8 +30,12 @@ struct CategoriesTab: View {
                 CategoryManagementCard(
                     categories: categories,
                     hasHousehold: hasHousehold,
+                    householdId: householdId,
                     apiClient: apiClient,
-                    onRefresh: onRefresh
+                    syncService: syncService,
+                    localScope: localScope,
+                    onRefresh: onRefresh,
+                    onLocalSnapshotChanged: onLocalSnapshotChanged
                 )
             }
             .padding(16)
