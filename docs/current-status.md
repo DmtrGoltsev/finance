@@ -16,8 +16,8 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - PWA assets: `index-cwshrAjc.js`, `index-CLMqvBfm.css`.
 - Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`.
 - Tag alignment: open; aligning `v0.1.0-mvp` to production deployed commit evidence requires explicit owner approval before any retag/push/tag mutation.
-- Frontend: `http://45.10.110.42/finance/`.
-- Backend API: `http://45.10.110.42/finance-api`.
+- Frontend: production Finance PWA URL is intentionally omitted from this native iOS status note; use release evidence or environment configuration for exact endpoints.
+- Backend API: production Finance API URL is intentionally omitted from this native iOS status note; use release evidence or environment configuration for exact endpoints.
 - Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 
 ## Self-service registration (2026-06-12)
@@ -85,6 +85,26 @@ QA evidence для этого scope должно опираться на targete
 - PR: `https://github.com/DmtrGoltsev/finance/pull/1` merged at `2026-06-18T23:53:47Z`; remote `main` HEAD и merge commit подтверждены как `cff578df0be001c0af187c5a90d9917fc0b2c1e9` с parents `3f70a3bf...` + release head `b09043e5...`.
 - Workflows on `main`: files present; active workflows confirmed: `Finance HexCore Production CI/CD` id `298526666`, `Finance Production Manual Rollback` id `298581092`.
 - Production deploy не считать выполненным. Public backend health PASS и frontend PASS, но `workflow_dispatch` остается BLOCKED: GitHub `production` environment absent (`total_count=0`, direct endpoint 404), environment secrets absent, repo secrets `total_count=0`; также нужны backup proof, production `alembic current`, service/symlink proof.
+
+## Native iOS offline CRUD wiring status (2026-06-19)
+
+- Native `apps/ios` теперь ставит optimistic sync mutations в очередь при сетевой ошибке для manual transaction quick-add create, transaction delete, account create/update/archive/restore, category create/update/archive/restore и asset category create/update/archive.
+- Planning fallback добавлен для exposed native UI mutations: plan create, income source create/update/confirm/delete и allocation create/update/delete. Эти операции используют typed `SyncEntityType` (`planning_plans`, `planning_income_sources`, `planning_allocations`) и optimistic local planning records.
+- Online path остается live API first; fallback в local pending mutation срабатывает только для `FinanceApiError.networkError`/`URLError`. Auth, validation и server errors не ставятся в очередь.
+- OCR/screenshot/capture draft workflows остаются online-only и не представлены offline sync mutations. Planning copy/history/target repair также остаются online-only и не ставятся в pending queue.
+- Точный TODO: в текущих SwiftUI экранах native iOS нет exposed hard-delete callbacks для accounts, normal categories и asset categories; довязанные destructive flows используют archive/restore там, где такие callbacks уже существуют. Hard-delete offline wiring требует сначала явной native UI/API callback surface.
+- Точный TODO: в текущем native `PlanningView` нет exposed callbacks для plan update/delete; offline fallback покрывает только доступный в UI plan create. Copy plan остается online-only из-за зависимости от текущей серверной истории и прав доступа.
+- Точный TODO: pending local writes накладываются на in-memory dashboard и sync overview, но report totals/investments не пересчитываются полностью из pending mutations без отдельного native local read-model pass или Xcode/device verification.
+- Точный TODO: planning pending writes отображаются в `PlanningView` через локальные optimistic records и упрощенный пересчет summary; окончательная серверная нормализация, conflict behavior и Xcode/device proof остаются отдельными проверками.
+
+## Native iOS parity branch final status (2026-06-19)
+
+- Branch/worktree: `codex/IOS`, path `C:\Users\style\Documents\Codex\Финансы-ios`, base `origin/main` commit `66feadd94dbf936faec500f565638973ca270f64`.
+- Target remains native-only: `apps/ios` SwiftUI/UIKit/Foundation/Security/PhotosUI. PWA/Capacitor exists separately under `apps/web-pwa` and is not the parity target.
+- Implemented in the current native branch: API config hardening and Release guard; auth/register/session/logout wipe improvements; manual transaction date-only behavior and payment account filter fallback; capture editable amount/date with online-only OCR/copy boundary; payment account/assets/investment/icon preservation; analytics month/category/investment wiring; planning fallback for exposed syncable mutations; icon-only tabs; offline-first local JSON store, sync queue, manual sync, issue UI and Russian sync messages.
+- QA status: Windows static QA is PASS with no FAIL recorded. The only BLOCKED items are Mac/Xcode-only gates because `swift`, `xcodebuild` and `xcodegen` are unavailable in the current Windows environment.
+- Future required gates before native iOS release sign-off: XcodeGen project generation, Debug/Release builds, simulator/device flows, Keychain/cookie wipe runtime proof, offline queue backend push/pull convergence, and OCR/copy online-only UX validation.
+- Evidence hygiene: this status records only sanitized summary facts. No secrets, raw logs, raw screenshots, APKs, `.xcresult` bundles, raw OCR payloads or evidence binaries are stored in docs.
 
 ## Финальные доказательства
 

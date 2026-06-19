@@ -4,6 +4,16 @@ struct SessionStatus: Codable, Sendable {
     let isAuthenticated: Bool
     let displayName: String?
     let householdId: String?
+    let userId: String?
+    let sessionId: String?
+
+    init(isAuthenticated: Bool, displayName: String?, householdId: String?, userId: String? = nil, sessionId: String? = nil) {
+        self.isAuthenticated = isAuthenticated
+        self.displayName = displayName
+        self.householdId = householdId
+        self.userId = userId
+        self.sessionId = sessionId
+    }
 }
 
 struct ActorContext: Codable, Sendable {

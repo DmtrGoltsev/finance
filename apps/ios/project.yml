@@ -10,6 +10,11 @@ settings:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1,2"
+  configs:
+    Debug:
+      FINANCE_API_BASE_URL: "http://127.0.0.1:8000/finance-api"
+    Release:
+      FINANCE_API_BASE_URL: "$(FINANCE_RELEASE_API_BASE_URL)"
 
 targets:
   FinanceApp:

@@ -6,6 +6,12 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
     static let shared = CategoryAggregateMappingStore()
 
     private let servicePrefix = "com.finance.app.category-mapping"
+    private let indexedServicesKey = "finance.category-mapping.services"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     private func serviceKey(_ label: String) -> String {
         let hash = SHA256.hash(data: Data(label.utf8))
@@ -14,6 +20,7 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
 
     func save(label: String, categoryId: String) {
         let service = serviceKey(label)
+        rememberService(service)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -41,5 +48,36 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    func clearAll() {
+        indexedServices().forEach(deleteService)
+        defaults.removeObject(forKey: indexedServicesKey)
+
+        let legacyQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "mapping",
+        ]
+        SecItemDelete(legacyQuery as CFDictionary)
+    }
+
+    private func rememberService(_ service: String) {
+        var services = indexedServices()
+        guard !services.contains(service) else { return }
+        services.append(service)
+        defaults.set(services, forKey: indexedServicesKey)
+    }
+
+    private func indexedServices() -> [String] {
+        defaults.stringArray(forKey: indexedServicesKey) ?? []
+    }
+
+    private func deleteService(_ service: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "mapping",
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

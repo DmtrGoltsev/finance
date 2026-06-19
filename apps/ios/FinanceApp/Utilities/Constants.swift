@@ -17,7 +17,6 @@ enum FinanceColors {
 }
 
 enum FinanceConstants {
-    static let apiBaseURL = "http://45.10.110.42/finance-api"
     static let currencies: [CurrencyCode] = [.RUB, .USD, .EUR, .XAU]
     static let csrfHeaderName = "X-CSRF-Token"
     static let sessionCookieName = "__Host-finance_session"

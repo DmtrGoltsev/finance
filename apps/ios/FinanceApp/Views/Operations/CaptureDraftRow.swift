@@ -47,7 +47,8 @@ struct CaptureDraftRow: View {
 
     private var confidencePercent: String {
         guard let c = draft.confidence, let d = Decimal(string: c) else { return "?" }
-        return "\(Int((d * 100 as NSDecimalNumber).intValue))"
+        let percent = d * Decimal(100)
+        return "\(NSDecimalNumber(decimal: percent).intValue)"
     }
 
     var body: some View {
