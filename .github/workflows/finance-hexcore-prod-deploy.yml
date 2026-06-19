@@ -78,6 +78,7 @@ env:
   FINANCE_BACKEND_BASE: /opt/finance
   FINANCE_BACKEND_SERVICE: finance-backend.service
   FINANCE_BACKEND_ENV_FILE: /etc/finance/backend.env
+  FINANCE_DB_BACKUP_DIR: /opt/finance/backups/postgres
 
 jobs:
   prepare-release:
@@ -109,16 +110,19 @@ jobs:
           echo "Resolved release id ${release_id}"
 
   validate-prod-inputs:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
+      deploy_frontend: ${{ steps.validate.outputs.deploy_frontend }}
+      deploy_backend: ${{ steps.validate.outputs.deploy_backend }}
       run_migrations: ${{ steps.validate.outputs.run_migrations }}
       expected_current_revision: ${{ steps.validate.outputs.expected_current_revision }}
       target_revision: ${{ steps.validate.outputs.target_revision }}
       restart_backend: ${{ steps.validate.outputs.restart_backend }}
+      auto_db_backup: ${{ steps.validate.outputs.auto_db_backup }}
+      deploy_mode: ${{ steps.validate.outputs.deploy_mode }}
 
     steps:
-      - name: Validate production gates
+      - name: Resolve production deploy plan and guardrails
         id: validate
         shell: bash
         env:
@@ -133,14 +137,39 @@ jobs:
           FINANCE_INPUT_BACKUP_PROOF: ${{ inputs.backup_proof }}
         run: |
           set -euo pipefail
-          deploy_frontend="${FINANCE_INPUT_DEPLOY_FRONTEND}"
-          deploy_backend="${FINANCE_INPUT_DEPLOY_BACKEND}"
-          run_migrations="${FINANCE_INPUT_RUN_MIGRATIONS}"
-          restart_backend="${FINANCE_INPUT_RESTART_BACKEND}"
+
+          event_name="${GITHUB_EVENT_NAME}"
+          auto_db_backup="false"
+
+          if [ "${event_name}" = "push" ]; then
+            if [[ "${GITHUB_REF_NAME}" != *release* ]]; then
+              echo "::error::release push deploy requires a branch name containing release"
+              exit 1
+            fi
+
+            deploy_frontend="true"
+            deploy_backend="true"
+            run_migrations="true"
+            restart_backend="true"
+            expected_current_revision="auto"
+            target_revision="auto"
+            auto_db_backup="true"
+            deploy_mode="release_push"
+          elif [ "${event_name}" = "workflow_dispatch" ]; then
+            deploy_frontend="${FINANCE_INPUT_DEPLOY_FRONTEND}"
+            deploy_backend="${FINANCE_INPUT_DEPLOY_BACKEND}"
+            run_migrations="${FINANCE_INPUT_RUN_MIGRATIONS}"
+            restart_backend="${FINANCE_INPUT_RESTART_BACKEND}"
+            expected_current_revision="${FINANCE_INPUT_EXPECTED_CURRENT_REVISION}"
+            target_revision="${FINANCE_INPUT_TARGET_REVISION}"
+            deploy_mode="manual_dispatch"
+          else
+            echo "::error::Unsupported event ${event_name}"
+            exit 1
+          fi
+
           confirm_production_deploy="${FINANCE_INPUT_CONFIRM_PRODUCTION_DEPLOY}"
           confirm_backend_restart="${FINANCE_INPUT_CONFIRM_BACKEND_RESTART}"
-          expected_current_revision="${FINANCE_INPUT_EXPECTED_CURRENT_REVISION}"
-          target_revision="${FINANCE_INPUT_TARGET_REVISION}"
           backup_proof="${FINANCE_INPUT_BACKUP_PROOF}"
 
           for value_name in deploy_frontend deploy_backend run_migrations restart_backend; do
@@ -161,12 +190,12 @@ jobs:
             exit 1
           fi
 
-          if [ -n "${expected_current_revision}" ] && [[ ! "${expected_current_revision}" =~ ^(base|[A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]; then
+          if [ -n "${expected_current_revision}" ] && [ "${expected_current_revision}" != "auto" ] && [[ ! "${expected_current_revision}" =~ ^(base|[A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]; then
             echo "::error::expected_current_revision must be base or an exact safe revision token"
             exit 1
           fi
 
-          if [ -n "${target_revision}" ] && [[ ! "${target_revision}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+          if [ -n "${target_revision}" ] && [ "${target_revision}" != "auto" ] && [[ ! "${target_revision}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
             echo "::error::target_revision must be an exact safe revision token"
             exit 1
           fi
@@ -186,44 +215,56 @@ jobs:
             exit 1
           fi
 
-          if [ "${deploy_frontend}" = "true" ] || [ "${deploy_backend}" = "true" ] || [ "${run_migrations}" = "true" ]; then
-            if [ "${confirm_production_deploy}" != "finance-production" ]; then
-              echo "::error::confirm_production_deploy must be finance-production"
-              exit 1
-            fi
-          fi
-
-          if [ "${restart_backend}" = "true" ] && [ "${confirm_backend_restart}" != "${FINANCE_BACKEND_SERVICE}" ]; then
-            echo "::error::confirm_backend_restart must be ${FINANCE_BACKEND_SERVICE}"
-            exit 1
-          fi
-
-          if [ "${run_migrations}" = "true" ]; then
-            for value_name in expected_current_revision target_revision backup_proof; do
-              value="${!value_name}"
-              if [ -z "${value}" ]; then
-                echo "::error::${value_name} is required when run_migrations=true"
+          if [ "${event_name}" = "workflow_dispatch" ]; then
+            if [ "${deploy_frontend}" = "true" ] || [ "${deploy_backend}" = "true" ] || [ "${run_migrations}" = "true" ]; then
+              if [ "${confirm_production_deploy}" != "finance-production" ]; then
+                echo "::error::confirm_production_deploy must be finance-production"
                 exit 1
               fi
-            done
+            fi
 
-            target_revision_lower="${target_revision,,}"
-            if [ "${target_revision_lower}" = "head" ] || [ "${target_revision_lower}" = "heads" ]; then
-              echo "::error::target_revision must be an exact safe revision, not head"
+            if [ "${restart_backend}" = "true" ] && [ "${confirm_backend_restart}" != "${FINANCE_BACKEND_SERVICE}" ]; then
+              echo "::error::confirm_backend_restart must be ${FINANCE_BACKEND_SERVICE}"
               exit 1
             fi
 
-            if [ "${backup_proof}" = "none" ] || [ "${backup_proof}" = "n/a" ] || [ ${#backup_proof} -lt 8 ]; then
-              echo "::error::backup_proof must identify a real backup artifact or ticket"
-              exit 1
+            if [ "${run_migrations}" = "true" ]; then
+              for value_name in expected_current_revision target_revision backup_proof; do
+                value="${!value_name}"
+                if [ -z "${value}" ]; then
+                  echo "::error::${value_name} is required when run_migrations=true"
+                  exit 1
+                fi
+              done
+
+              expected_current_revision_lower="${expected_current_revision,,}"
+              if [ "${expected_current_revision_lower}" = "head" ] || [ "${expected_current_revision_lower}" = "heads" ] || [ "${expected_current_revision_lower}" = "auto" ]; then
+                echo "::error::manual expected_current_revision must be base or an exact safe revision, not head or auto"
+                exit 1
+              fi
+
+              target_revision_lower="${target_revision,,}"
+              if [ "${target_revision_lower}" = "head" ] || [ "${target_revision_lower}" = "heads" ] || [ "${target_revision_lower}" = "auto" ]; then
+                echo "::error::manual target_revision must be an exact safe revision, not head or auto"
+                exit 1
+              fi
+
+              if [ "${backup_proof}" = "none" ] || [ "${backup_proof}" = "n/a" ] || [ ${#backup_proof} -lt 8 ]; then
+                echo "::error::backup_proof must identify a real backup artifact or ticket"
+                exit 1
+              fi
             fi
           fi
 
           {
+            echo "deploy_frontend=${deploy_frontend}"
+            echo "deploy_backend=${deploy_backend}"
             echo "run_migrations=${run_migrations}"
             echo "expected_current_revision=${expected_current_revision}"
             echo "target_revision=${target_revision}"
             echo "restart_backend=${restart_backend}"
+            echo "auto_db_backup=${auto_db_backup}"
+            echo "deploy_mode=${deploy_mode}"
           } >> "${GITHUB_OUTPUT}"
 
   frontend-ci-package:
@@ -364,7 +405,7 @@ jobs:
           retention-days: 14
 
   deploy-frontend:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_frontend == 'true'
+    if: ${{ needs.validate-prod-inputs.outputs.deploy_frontend == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - prepare-release
@@ -473,12 +514,26 @@ jobs:
           mv -Tf "${current}.next" "${current}"
           test "$(readlink -f "${current}")" = "${release_dir}"
 
-          curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null
-          curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null
+          routes_ready="false"
+          for attempt in {1..24}; do
+            if curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null \
+              && curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null; then
+              routes_ready="true"
+              break
+            fi
+
+            echo "Waiting for Finance routes after frontend deploy, attempt ${attempt}/24..."
+            sleep 5
+          done
+
+          if [ "${routes_ready}" != "true" ]; then
+            echo "::error::Finance routes did not become healthy after frontend deploy"
+            exit 1
+          fi
           REMOTE
 
   deploy-backend:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_backend == 'true'
+    if: ${{ needs.validate-prod-inputs.outputs.deploy_backend == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - prepare-release
@@ -518,6 +573,12 @@ jobs:
           FINANCE_EXPECTED_CURRENT_REVISION: ${{ needs.validate-prod-inputs.outputs.expected_current_revision }}
           FINANCE_TARGET_REVISION: ${{ needs.validate-prod-inputs.outputs.target_revision }}
           FINANCE_RESTART_BACKEND: ${{ needs.validate-prod-inputs.outputs.restart_backend }}
+          FINANCE_AUTO_DB_BACKUP: ${{ needs.validate-prod-inputs.outputs.auto_db_backup }}
+          FINANCE_DEPLOY_MODE: ${{ needs.validate-prod-inputs.outputs.deploy_mode }}
+          FINANCE_DB_BACKUP_DIR: ${{ env.FINANCE_DB_BACKUP_DIR }}
+          FINANCE_COMMIT_SHA: ${{ github.sha }}
+          FINANCE_GITHUB_RUN_ID: ${{ github.run_id }}
+          FINANCE_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -547,7 +608,7 @@ jobs:
             "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}:${remote_tmp}"
 
           ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
-            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_RUN_MIGRATIONS='${FINANCE_RUN_MIGRATIONS}' FINANCE_EXPECTED_CURRENT_REVISION='${FINANCE_EXPECTED_CURRENT_REVISION}' FINANCE_TARGET_REVISION='${FINANCE_TARGET_REVISION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' bash -s" <<'REMOTE'
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_RUN_MIGRATIONS='${FINANCE_RUN_MIGRATIONS}' FINANCE_EXPECTED_CURRENT_REVISION='${FINANCE_EXPECTED_CURRENT_REVISION}' FINANCE_TARGET_REVISION='${FINANCE_TARGET_REVISION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' FINANCE_AUTO_DB_BACKUP='${FINANCE_AUTO_DB_BACKUP}' FINANCE_DEPLOY_MODE='${FINANCE_DEPLOY_MODE}' FINANCE_DB_BACKUP_DIR='${FINANCE_DB_BACKUP_DIR}' FINANCE_COMMIT_SHA='${FINANCE_COMMIT_SHA}' FINANCE_GITHUB_RUN_ID='${FINANCE_GITHUB_RUN_ID}' FINANCE_GITHUB_RUN_ATTEMPT='${FINANCE_GITHUB_RUN_ATTEMPT}' bash -s" <<'REMOTE'
           set -euo pipefail
           case "${FINANCE_RELEASE_ID}" in
             ""|*[!A-Za-z0-9._-]*)
@@ -598,19 +659,201 @@ jobs:
             set +a
 
             cd "${release_dir}/package/apps/backend"
-            current_revision="$("${release_dir}/venv/bin/python" -m alembic -c alembic.ini current | awk '/^[A-Za-z0-9_]+/ {print $1}' | tail -n 1)"
-            if [ -z "${current_revision}" ]; then
-              current_revision="base"
+            alembic_python="${release_dir}/venv/bin/python"
+
+            safe_revision_token() {
+              local revision="$1"
+              if [ "${revision}" = "base" ]; then
+                return 0
+              fi
+              [[ "${revision}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+            }
+
+            read_single_alembic_revision() {
+              local alembic_command="$1"
+              local -a revisions=()
+              mapfile -t revisions < <("${alembic_python}" -m alembic -c alembic.ini "${alembic_command}" | awk '/^[A-Za-z0-9][A-Za-z0-9._-]*/ {print $1}')
+
+              if [ "${#revisions[@]}" -eq 0 ] && [ "${alembic_command}" = "current" ]; then
+                echo "base"
+                return 0
+              fi
+
+              if [ "${#revisions[@]}" -ne 1 ]; then
+                echo "::error::Alembic ${alembic_command} returned ${#revisions[@]} revisions; expected exactly one"
+                return 1
+              fi
+
+              if ! safe_revision_token "${revisions[0]}"; then
+                echo "::error::Alembic ${alembic_command} returned an unsafe revision token"
+                return 1
+              fi
+
+              echo "${revisions[0]}"
+            }
+
+            create_finance_db_backup() {
+              local before_revision="$1"
+              local target_revision="$2"
+
+              command -v pg_dump >/dev/null || {
+                echo "::error::pg_dump is required on HexCore before running release-push migrations"
+                return 1
+              }
+
+              local db_url="${FINANCE_BACKEND_DATABASE_URL:-${DATABASE_URL:-}}"
+              if [ -z "${db_url}" ]; then
+                echo "::error::FINANCE_BACKEND_DATABASE_URL or DATABASE_URL must be present in ${FINANCE_BACKEND_ENV_FILE}"
+                return 1
+              fi
+
+              if [[ ! "${FINANCE_DB_BACKUP_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+                echo "::error::FINANCE_DB_BACKUP_DIR must be an absolute safe path"
+                return 1
+              fi
+
+              local pg_env
+              local pgpass_file
+              pg_env="$(mktemp)"
+              pgpass_file="$(mktemp)"
+              chmod 600 "${pgpass_file}"
+
+              if ! FINANCE_DB_URL_FOR_BACKUP="${db_url}" "${alembic_python}" - "${pgpass_file}" > "${pg_env}" <<'PY'
+          import os
+          import shlex
+          import sys
+          from pathlib import Path
+          from urllib.parse import parse_qs, unquote, urlsplit
+
+          db_url = os.environ["FINANCE_DB_URL_FOR_BACKUP"]
+          pgpass_path = Path(sys.argv[1])
+          parsed = urlsplit(db_url)
+          scheme = parsed.scheme.split("+", 1)[0]
+          if scheme not in {"postgres", "postgresql"}:
+              raise SystemExit("Database URL must use a PostgreSQL scheme")
+
+          query = parse_qs(parsed.query)
+          host = unquote(parsed.hostname or (query.get("host", ["localhost"])[0] or "localhost"))
+          port = parsed.port or int(query.get("port", ["5432"])[0])
+          user = unquote(parsed.username or "")
+          password = unquote(parsed.password or "")
+          database = unquote(parsed.path.lstrip("/").split("?", 1)[0])
+          if not user:
+              raise SystemExit("Database URL must include a username for non-interactive backup")
+          if not database:
+              raise SystemExit("Database URL must include a database name")
+
+          def pgpass_escape(value: str) -> str:
+              return value.replace("\\", "\\\\").replace(":", "\\:")
+
+          pgpass_path.write_text(
+              f"{pgpass_escape(host)}:{port}:{pgpass_escape(database)}:{pgpass_escape(user)}:{pgpass_escape(password)}\n",
+              encoding="utf-8",
+          )
+          pgpass_path.chmod(0o600)
+
+          def emit(name: str, value: str) -> None:
+              print(f"{name}={shlex.quote(value)}")
+
+          emit("PGHOST", host)
+          emit("PGPORT", str(port))
+          emit("PGUSER", user)
+          emit("PGDATABASE", database)
+          emit("PGPASSFILE", str(pgpass_path))
+          if "sslmode" in query:
+              emit("PGSSLMODE", query["sslmode"][0])
+          PY
+              then
+                rm -f "${pg_env}" "${pgpass_file}"
+                echo "::error::Unable to parse production database URL for backup"
+                return 1
+              fi
+
+              . "${pg_env}"
+              rm -f "${pg_env}"
+              export PGHOST PGPORT PGUSER PGDATABASE PGPASSFILE
+              if [ -n "${PGSSLMODE:-}" ]; then
+                export PGSSLMODE
+              fi
+
+              install -d -m 700 "${FINANCE_DB_BACKUP_DIR}"
+              local stamp
+              local safe_database
+              local backup_file
+              local evidence_file
+              stamp="$(date -u +'%Y%m%dT%H%M%SZ')"
+              safe_database="$(printf '%s' "${PGDATABASE}" | tr -c 'A-Za-z0-9._-' '_')"
+              backup_file="${FINANCE_DB_BACKUP_DIR}/${safe_database}-${stamp}-${FINANCE_RELEASE_ID}-${before_revision}-to-${target_revision}.dump"
+              evidence_file="${backup_file}.evidence.txt"
+
+              if ! pg_dump --format=custom --no-owner --no-privileges --file "${backup_file}" "${PGDATABASE}"; then
+                rm -f "${PGPASSFILE}" "${backup_file}"
+                echo "::error::Production database backup failed before migration"
+                return 1
+              fi
+              rm -f "${PGPASSFILE}"
+
+              sha256sum "${backup_file}" > "${backup_file}.sha256"
+              backup_sha="$(awk '{print $1}' "${backup_file}.sha256")"
+              {
+                echo "release_id=${FINANCE_RELEASE_ID}"
+                echo "deploy_mode=${FINANCE_DEPLOY_MODE}"
+                echo "commit_sha=${FINANCE_COMMIT_SHA}"
+                echo "github_run_id=${FINANCE_GITHUB_RUN_ID}"
+                echo "github_run_attempt=${FINANCE_GITHUB_RUN_ATTEMPT}"
+                echo "database=${PGDATABASE}"
+                echo "created_utc=${stamp}"
+                echo "alembic_current_before=${before_revision}"
+                echo "alembic_target=${target_revision}"
+                echo "backup_file=${backup_file}"
+                echo "backup_sha256=${backup_sha}"
+              } > "${evidence_file}"
+              chmod 600 "${backup_file}" "${backup_file}.sha256" "${evidence_file}"
+
+              echo "Created Finance production DB backup evidence:"
+              echo "  backup_file=${backup_file}"
+              echo "  backup_sha256=${backup_sha}"
+              echo "  evidence_file=${evidence_file}"
+            }
+
+            current_revision="$(read_single_alembic_revision current)"
+            target_revision="${FINANCE_TARGET_REVISION}"
+            if [ "${target_revision}" = "auto" ]; then
+              target_revision="$(read_single_alembic_revision heads)"
             fi
 
-            if [ "${current_revision}" != "${FINANCE_EXPECTED_CURRENT_REVISION}" ]; then
+            if ! safe_revision_token "${target_revision}"; then
+              echo "::error::Alembic target revision is unsafe"
+              exit 1
+            fi
+
+            expected_current_revision="${FINANCE_EXPECTED_CURRENT_REVISION}"
+            if [ "${expected_current_revision}" = "auto" ]; then
+              expected_current_revision="${current_revision}"
+            fi
+
+            if ! safe_revision_token "${expected_current_revision}"; then
+              echo "::error::Alembic expected current revision is unsafe"
+              exit 1
+            fi
+
+            echo "Alembic current revision before migration: ${current_revision}"
+            echo "Alembic target revision: ${target_revision}"
+
+            if [ "${current_revision}" != "${expected_current_revision}" ]; then
               echo "Alembic current revision mismatch"
               exit 1
             fi
 
-            "${release_dir}/venv/bin/python" -m alembic -c alembic.ini upgrade "${FINANCE_TARGET_REVISION}"
-            after_revision="$("${release_dir}/venv/bin/python" -m alembic -c alembic.ini current | awk '/^[A-Za-z0-9_]+/ {print $1}' | tail -n 1)"
-            if [ "${after_revision}" != "${FINANCE_TARGET_REVISION}" ]; then
+            if [ "${FINANCE_AUTO_DB_BACKUP}" = "true" ]; then
+              create_finance_db_backup "${current_revision}" "${target_revision}"
+            else
+              echo "Using operator-supplied backup proof from workflow_dispatch."
+            fi
+
+            "${alembic_python}" -m alembic -c alembic.ini upgrade "${target_revision}"
+            after_revision="$(read_single_alembic_revision current)"
+            if [ "${after_revision}" != "${target_revision}" ]; then
               echo "Alembic target revision mismatch after upgrade"
               exit 1
             fi
@@ -626,6 +869,20 @@ jobs:
             echo "Backend release staged and symlinked; service restart skipped by input."
           fi
 
-          curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null
-          curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null
+          routes_ready="false"
+          for attempt in {1..24}; do
+            if curl -fsS --max-time 10 http://127.0.0.1/finance-api/health >/dev/null \
+              && curl -fsS --max-time 10 http://127.0.0.1/finance/ >/dev/null; then
+              routes_ready="true"
+              break
+            fi
+
+            echo "Waiting for Finance routes after backend deploy, attempt ${attempt}/24..."
+            sleep 5
+          done
+
+          if [ "${routes_ready}" != "true" ]; then
+            echo "::error::Finance routes did not become healthy after backend deploy"
+            exit 1
+          fi
           REMOTE

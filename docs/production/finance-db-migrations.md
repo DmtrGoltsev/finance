@@ -11,7 +11,19 @@ The production CI/CD workflow runs migrations only inside the backend deploy job
 and only after the backend artifact is staged and its Python 3.12 virtual
 environment is created.
 
-Required inputs:
+For release branch pushes, the workflow:
+
+- deploys the backend path automatically;
+- reads the current production revision with `alembic current`;
+- derives the target revision from the staged release's single `alembic heads`
+  result;
+- creates a host-side `pg_dump --format=custom` backup under
+  `/opt/finance/backups/postgres`;
+- writes `.sha256` and `.evidence.txt` files next to the backup dump;
+- runs `alembic upgrade <derived-target-revision>`;
+- restarts `finance-backend.service`.
+
+For `workflow_dispatch`, required inputs are still:
 
 - `deploy_backend=true`
 - `run_migrations=true`
@@ -53,21 +65,32 @@ The backend deploy job performs this sequence:
 5. Install the packaged backend wheel.
 6. If `run_migrations=true`, source `/etc/finance/backend.env`.
 7. Run `alembic current`.
-8. Compare the actual current revision to `expected_current_revision`.
-9. Run `alembic upgrade <target_revision>`.
-10. Verify `alembic current` equals `target_revision`.
-11. Flip `/opt/finance/current` to the release.
-12. Restart `finance-backend.service` only when the restart input is explicitly
-    enabled and confirmed.
-13. Run `/finance-api/health` and `/finance/` health checks.
+8. For release branch pushes, derive the target from a single `alembic heads`
+   result; for manual dispatch, use the exact `target_revision` input.
+9. Compare the actual current revision to the expected value. On release branch
+   push, the expected value is the production revision just read by the
+   workflow; on manual dispatch, it is the exact operator input.
+10. For release branch pushes, create automatic backup evidence before upgrade.
+11. Run `alembic upgrade <target_revision>`.
+12. Verify `alembic current` equals `target_revision`.
+13. Flip `/opt/finance/current` to the release.
+14. Restart `finance-backend.service` automatically for release branch pushes,
+    or only when the manual restart input is explicitly enabled and confirmed.
+15. Run `/finance-api/health` and `/finance/` health checks.
 
 If any migration check fails, the workflow exits before the backend symlink flip.
 
 ## Backup proof
 
-`backup_proof` must identify a real backup artifact, backup run, storage object,
-or operations ticket created before the migration run. It is evidence metadata,
-not a secret.
+For manual dispatch, `backup_proof` must identify a real backup artifact, backup
+run, storage object, or operations ticket created before the migration run. It is
+evidence metadata, not a secret.
+
+For release branch pushes, no `backup_proof` input exists. The workflow creates
+the backup itself on HexCore before Alembic upgrade. It reads the production DB
+URL from `/etc/finance/backend.env`, converts it to `pg_dump` environment
+variables and a temporary `.pgpass` file, and removes that temporary file after
+the dump. The workflow logs only backup path, SHA256, and evidence path.
 
 Minimum operator evidence:
 
@@ -100,13 +123,17 @@ Before enabling `run_migrations=true`, confirm:
 - the service can read `/etc/finance/backend.env`
 - the staged release is the release intended for the migration
 
+For release branch push migrations, also confirm `pg_dump` is installed on
+HexCore and the deploy user can create `/opt/finance/backups/postgres`.
+
 ## Escalation triggers
 
 Stop and escalate when:
 
 - `alembic current` returns a revision other than the expected value
 - multiple heads are detected
-- backup proof is missing, stale, or cannot be restored by the operator
+- manual backup proof is missing, stale, or cannot be restored by the operator
+- automatic release-push backup creation or checksum creation fails
 - the migration contains destructive table/column operations
 - auth, session, household membership, ownership scope, money precision, or
   report semantics change
