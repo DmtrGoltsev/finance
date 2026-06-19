@@ -75,6 +75,17 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 QA evidence для этого scope должно опираться на targeted backend ruff/tests, Android JVM tests, Android APK build и APK zip gate. Full backend ruff может оставаться красным из-за legacy unrelated files и не является единственным gate для этого scope.
 
+## Offline-first release QA and merge status (2026-06-18/2026-06-19)
+
+- Branch `codex/offline-first-release-qa` был зеленым на GitHub Actions run `27796358035`, head `b09043e531152bb5f9b2fdb6ef18b21d786bbebf`.
+- Release id: `20260618T234841Z-b09043e5`.
+- Package gates: frontend package `56 passed`; backend package `285 passed, 6 skipped`.
+- Local emulator E2E PASS до CI зафиксирован в sanitized evidence: `MVP_EVIDENCE/offline-first-release-qa-20260618-234050/QA_REPORT_SANITIZED.md`.
+- Release blockers fixed before green CI: backend ruff gate; FastAPI `0.137.2` route introspection through `iter_route_contexts`; pinned backend dependencies `fastapi==0.137.2`, `starlette==1.3.1`.
+- PR: `https://github.com/DmtrGoltsev/finance/pull/1` merged at `2026-06-18T23:53:47Z`; remote `main` HEAD и merge commit подтверждены как `cff578df0be001c0af187c5a90d9917fc0b2c1e9` с parents `3f70a3bf...` + release head `b09043e5...`.
+- Workflows on `main`: files present; active workflows confirmed: `Finance HexCore Production CI/CD` id `298526666`, `Finance Production Manual Rollback` id `298581092`.
+- Production deploy не считать выполненным. Public backend health PASS и frontend PASS, но `workflow_dispatch` остается BLOCKED: GitHub `production` environment absent (`total_count=0`, direct endpoint 404), environment secrets absent, repo secrets `total_count=0`; также нужны backup proof, production `alembic current`, service/symlink proof.
+
 ## Финальные доказательства
 
 - Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
