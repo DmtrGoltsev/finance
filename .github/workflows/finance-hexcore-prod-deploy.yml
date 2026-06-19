@@ -781,6 +781,18 @@ jobs:
           create_backend_venv "${release_dir}/venv"
           "${release_dir}/venv/bin/python" -m pip install --upgrade pip
           "${release_dir}/venv/bin/python" -m pip install "${release_dir}"/package/apps/backend/dist/*.whl
+          install -d -m 755 "${release_dir}/bin"
+          cat > "${release_dir}/bin/finance-backend" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          release_dir="$(cd "${script_dir}/.." && pwd)"
+          cd "${release_dir}/package/apps/backend"
+          exec "${release_dir}/venv/bin/uvicorn" app.main:app \
+            --host "${FINANCE_BACKEND_HOST:-127.0.0.1}" \
+            --port "${FINANCE_BACKEND_PORT:-8081}"
+          SH
+          chmod 755 "${release_dir}/bin/finance-backend"
 
           if [ "${FINANCE_RUN_MIGRATIONS}" = "true" ]; then
             test -f "${FINANCE_BACKEND_ENV_FILE}"
@@ -995,6 +1007,14 @@ jobs:
 
           if [ "${FINANCE_RESTART_BACKEND}" = "true" ]; then
             systemctl restart "${FINANCE_BACKEND_SERVICE}"
+            if ! systemctl is-active --quiet "${FINANCE_BACKEND_SERVICE}"; then
+              echo "::error::${FINANCE_BACKEND_SERVICE} is not active after restart"
+              systemctl show "${FINANCE_BACKEND_SERVICE}" \
+                -p ActiveState -p SubState -p Result -p ExecMainStatus \
+                -p FragmentPath -p ExecStart -p WorkingDirectory -p MainPID \
+                --no-pager || true
+              exit 1
+            fi
           else
             echo "Backend release staged and symlinked; service restart skipped by input."
           fi
@@ -1013,6 +1033,10 @@ jobs:
 
           if [ "${routes_ready}" != "true" ]; then
             echo "::error::Finance routes did not become healthy after backend deploy"
+            systemctl show "${FINANCE_BACKEND_SERVICE}" \
+              -p ActiveState -p SubState -p Result -p ExecMainStatus \
+              -p FragmentPath -p ExecStart -p WorkingDirectory -p MainPID \
+              --no-pager || true
             exit 1
           fi
           REMOTE

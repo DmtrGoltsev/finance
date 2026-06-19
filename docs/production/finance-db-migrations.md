@@ -66,20 +66,21 @@ The backend deploy job performs this sequence:
    `/opt/finance/releases/<release-id>/venv` with the first compatible
    configured candidate.
 5. Install the packaged backend wheel.
-6. If `run_migrations=true`, source `/etc/finance/backend.env`.
-7. Run `alembic current`.
-8. For release branch pushes, derive the target from a single `alembic heads`
+6. Create the stable `bin/finance-backend` service wrapper for the release.
+7. If `run_migrations=true`, source `/etc/finance/backend.env`.
+8. Run `alembic current`.
+9. For release branch pushes, derive the target from a single `alembic heads`
    result; for manual dispatch, use the exact `target_revision` input.
-9. Compare the actual current revision to the expected value. On release branch
+10. Compare the actual current revision to the expected value. On release branch
    push, the expected value is the production revision just read by the
    workflow; on manual dispatch, it is the exact operator input.
-10. For release branch pushes, create automatic backup evidence before upgrade.
-11. Run `alembic upgrade <target_revision>`.
-12. Verify `alembic current` equals `target_revision`.
-13. Flip `/opt/finance/current` to the release.
-14. Restart `finance-backend.service` automatically for release branch pushes,
+11. For release branch pushes, create automatic backup evidence before upgrade.
+12. Run `alembic upgrade <target_revision>`.
+13. Verify `alembic current` equals `target_revision`.
+14. Flip `/opt/finance/current` to the release.
+15. Restart `finance-backend.service` automatically for release branch pushes,
     or only when the manual restart input is explicitly enabled and confirmed.
-15. Run `/finance-api/health` and `/finance/` health checks.
+16. Run `/finance-api/health` and `/finance/` health checks.
 
 If any migration check fails, the workflow exits before the backend symlink flip.
 

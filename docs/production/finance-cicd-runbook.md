@@ -130,6 +130,9 @@ Remote model:
   configured backend Python candidate that can create a venv and satisfies the
   backend package requirement, currently Python `>=3.12`
 - deploy installs the packaged backend wheel into that virtual environment
+- deploy writes a stable `/opt/finance/releases/<release-id>/bin/finance-backend`
+  wrapper that starts `app.main:app` on `127.0.0.1:8081` unless host-side
+  `FINANCE_BACKEND_HOST` or `FINANCE_BACKEND_PORT` override it
 - deploy atomically flips `/opt/finance/current` to the new release
 - deploy refuses to overwrite a non-symlink `current` directory
 - `systemctl restart finance-backend.service` runs only when both the restart
