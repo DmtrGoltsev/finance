@@ -124,8 +124,11 @@ Remote model:
 - releases live under `/opt/finance/releases/<release-id>`
 - `/opt/finance/current` must be a symlink
 - deploy extracts the backend artifact into the new release directory
-- deploy creates a Python 3.12 virtual environment at
-  `/opt/finance/releases/<release-id>/venv`
+- deploy inspects `python3.12`, `python3.11`, `python3`, and the current
+  backend venv Python without logging secrets
+- deploy creates `/opt/finance/releases/<release-id>/venv` from the first
+  configured backend Python candidate that can create a venv and satisfies the
+  backend package requirement, currently Python `>=3.12`
 - deploy installs the packaged backend wheel into that virtual environment
 - deploy atomically flips `/opt/finance/current` to the new release
 - deploy refuses to overwrite a non-symlink `current` directory

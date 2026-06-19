@@ -8,8 +8,9 @@ deployment notes.
 ## Current workflow behavior
 
 The production CI/CD workflow runs migrations only inside the backend deploy job
-and only after the backend artifact is staged and its Python 3.12 virtual
-environment is created.
+and only after the backend artifact is staged and a backend virtual environment
+is created with a host Python interpreter that satisfies the backend package
+requirement, currently Python `>=3.12`.
 
 For release branch pushes, the workflow:
 
@@ -61,7 +62,9 @@ The backend deploy job performs this sequence:
 1. Download and verify the backend artifact checksum.
 2. Copy the artifact to the host using pinned SSH host-key verification.
 3. Extract to `/opt/finance/releases/<release-id>`.
-4. Build `/opt/finance/releases/<release-id>/venv`.
+4. Inspect host Python runtime availability without logging secrets, then build
+   `/opt/finance/releases/<release-id>/venv` with the first compatible
+   configured candidate.
 5. Install the packaged backend wheel.
 6. If `run_migrations=true`, source `/etc/finance/backend.env`.
 7. Run `alembic current`.

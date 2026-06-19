@@ -79,6 +79,8 @@ env:
   FINANCE_BACKEND_SERVICE: finance-backend.service
   FINANCE_BACKEND_ENV_FILE: /etc/finance/backend.env
   FINANCE_DB_BACKUP_DIR: /opt/finance/backups/postgres
+  FINANCE_BACKEND_MIN_PYTHON: "3.12"
+  FINANCE_BACKEND_PYTHON_CANDIDATES: "python3.12 /opt/finance/current/venv/bin/python python3.11 python3"
 
 jobs:
   prepare-release:
@@ -563,6 +565,57 @@ jobs:
           printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
           ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
 
+      - name: Inspect HexCore backend Python runtime
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          ssh_opts=(
+            -p "${HEXCORE_PROD_SSH_PORT}"
+            -i "${ssh_key}"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="${known_hosts}"
+            -o StrictHostKeyChecking=yes
+          )
+
+          ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" bash -s <<'REMOTE'
+          set -euo pipefail
+
+          inspect_python() {
+            local candidate="$1"
+            local resolved
+            local version
+            resolved="$(command -v "${candidate}" 2>/dev/null || true)"
+            if [ -z "${resolved}" ]; then
+              echo "${candidate}=missing"
+              return 0
+            fi
+
+            version="$("${resolved}" --version 2>&1 || true)"
+            echo "${candidate}=present ${version}"
+          }
+
+          inspect_python python3.12
+          inspect_python python3.11
+          inspect_python python3
+
+          if [ -x /opt/finance/current/venv/bin/python ]; then
+            version="$(/opt/finance/current/venv/bin/python --version 2>&1 || true)"
+            echo "current_venv_python=present ${version}"
+          else
+            echo "current_venv_python=missing_or_not_executable"
+          fi
+          REMOTE
+
       - name: Deploy backend artifact to HexCore
         env:
           HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
@@ -576,6 +629,8 @@ jobs:
           FINANCE_AUTO_DB_BACKUP: ${{ needs.validate-prod-inputs.outputs.auto_db_backup }}
           FINANCE_DEPLOY_MODE: ${{ needs.validate-prod-inputs.outputs.deploy_mode }}
           FINANCE_DB_BACKUP_DIR: ${{ env.FINANCE_DB_BACKUP_DIR }}
+          FINANCE_BACKEND_MIN_PYTHON: ${{ env.FINANCE_BACKEND_MIN_PYTHON }}
+          FINANCE_BACKEND_PYTHON_CANDIDATES: ${{ env.FINANCE_BACKEND_PYTHON_CANDIDATES }}
           FINANCE_COMMIT_SHA: ${{ github.sha }}
           FINANCE_GITHUB_RUN_ID: ${{ github.run_id }}
           FINANCE_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -608,7 +663,7 @@ jobs:
             "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}:${remote_tmp}"
 
           ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
-            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_RUN_MIGRATIONS='${FINANCE_RUN_MIGRATIONS}' FINANCE_EXPECTED_CURRENT_REVISION='${FINANCE_EXPECTED_CURRENT_REVISION}' FINANCE_TARGET_REVISION='${FINANCE_TARGET_REVISION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' FINANCE_AUTO_DB_BACKUP='${FINANCE_AUTO_DB_BACKUP}' FINANCE_DEPLOY_MODE='${FINANCE_DEPLOY_MODE}' FINANCE_DB_BACKUP_DIR='${FINANCE_DB_BACKUP_DIR}' FINANCE_COMMIT_SHA='${FINANCE_COMMIT_SHA}' FINANCE_GITHUB_RUN_ID='${FINANCE_GITHUB_RUN_ID}' FINANCE_GITHUB_RUN_ATTEMPT='${FINANCE_GITHUB_RUN_ATTEMPT}' bash -s" <<'REMOTE'
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_TMP='${remote_tmp}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_RUN_MIGRATIONS='${FINANCE_RUN_MIGRATIONS}' FINANCE_EXPECTED_CURRENT_REVISION='${FINANCE_EXPECTED_CURRENT_REVISION}' FINANCE_TARGET_REVISION='${FINANCE_TARGET_REVISION}' FINANCE_RESTART_BACKEND='${FINANCE_RESTART_BACKEND}' FINANCE_AUTO_DB_BACKUP='${FINANCE_AUTO_DB_BACKUP}' FINANCE_DEPLOY_MODE='${FINANCE_DEPLOY_MODE}' FINANCE_DB_BACKUP_DIR='${FINANCE_DB_BACKUP_DIR}' FINANCE_BACKEND_MIN_PYTHON='${FINANCE_BACKEND_MIN_PYTHON}' FINANCE_BACKEND_PYTHON_CANDIDATES='${FINANCE_BACKEND_PYTHON_CANDIDATES}' FINANCE_COMMIT_SHA='${FINANCE_COMMIT_SHA}' FINANCE_GITHUB_RUN_ID='${FINANCE_GITHUB_RUN_ID}' FINANCE_GITHUB_RUN_ATTEMPT='${FINANCE_GITHUB_RUN_ATTEMPT}' bash -s" <<'REMOTE'
           set -euo pipefail
           case "${FINANCE_RELEASE_ID}" in
             ""|*[!A-Za-z0-9._-]*)
@@ -648,7 +703,82 @@ jobs:
           cp "${artifact_root}/backend.sha256" "${release_dir}/.backend.sha256"
           cp "${artifact_root}/release-manifest.txt" "${release_dir}/.release-manifest.txt"
 
-          python3.12 -m venv "${release_dir}/venv"
+          python_candidate_available() {
+            local candidate="$1"
+            case "${candidate}" in
+              */*) [ -x "${candidate}" ] ;;
+              *) command -v "${candidate}" >/dev/null 2>&1 ;;
+            esac
+          }
+
+          validate_python_candidate() {
+            local candidate="$1"
+            "${candidate}" - "${FINANCE_BACKEND_MIN_PYTHON}" <<'PY'
+          import sys
+
+          minimum = tuple(int(part) for part in sys.argv[1].split("."))
+          current = sys.version_info[: len(minimum)]
+          raise SystemExit(0 if current >= minimum else 1)
+          PY
+          }
+
+          python_version() {
+            local candidate="$1"
+            "${candidate}" - <<'PY'
+          import sys
+
+          print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+          PY
+          }
+
+          create_backend_venv() {
+            local venv_dir="$1"
+            local candidate
+            local version
+
+            for candidate in ${FINANCE_BACKEND_PYTHON_CANDIDATES}; do
+              case "${candidate}" in
+                ""|*[!A-Za-z0-9_./-]*)
+                  echo "::error::Unsafe backend Python candidate configured"
+                  return 1
+                  ;;
+              esac
+
+              if ! python_candidate_available "${candidate}"; then
+                echo "Backend Python candidate unavailable: ${candidate}"
+                continue
+              fi
+
+              version="$(python_version "${candidate}" 2>/dev/null || true)"
+              if [ -z "${version}" ]; then
+                echo "Backend Python candidate could not report a version: ${candidate}"
+                continue
+              fi
+
+              if ! validate_python_candidate "${candidate}"; then
+                echo "Backend Python candidate ${candidate} has version ${version}; requires >=${FINANCE_BACKEND_MIN_PYTHON}"
+                continue
+              fi
+
+              rm -rf "${venv_dir}"
+              if "${candidate}" -m venv "${venv_dir}"; then
+                created_version="$(python_version "${venv_dir}/bin/python")"
+                if validate_python_candidate "${venv_dir}/bin/python"; then
+                  echo "Created backend virtual environment with Python ${created_version} from ${candidate}"
+                  return 0
+                fi
+
+                echo "Backend virtual environment Python ${created_version} does not satisfy >=${FINANCE_BACKEND_MIN_PYTHON}"
+              else
+                echo "Backend Python candidate ${candidate} could not create a virtual environment"
+              fi
+            done
+
+            echo "::error::No Python >=${FINANCE_BACKEND_MIN_PYTHON} interpreter capable of creating the backend virtual environment was found on HexCore"
+            return 1
+          }
+
+          create_backend_venv "${release_dir}/venv"
           "${release_dir}/venv/bin/python" -m pip install --upgrade pip
           "${release_dir}/venv/bin/python" -m pip install "${release_dir}"/package/apps/backend/dist/*.whl
 
