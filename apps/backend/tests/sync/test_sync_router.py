@@ -71,6 +71,7 @@ def sync_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
     owner_id = uuid4()
     other_id = uuid4()
     account_id = uuid4()
+    counterparty_account_id = uuid4()
     category_id = uuid4()
     with engine.begin() as connection:
         session = Session(bind=connection, expire_on_commit=False, future=True)
@@ -94,11 +95,37 @@ def sync_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
                     updated_at=BASE_TIME,
                     version=1,
                 ),
+                Account(
+                    id=counterparty_account_id,
+                    name="Owner Savings",
+                    account_type="cash",
+                    ownership_type="personal",
+                    owner_user_id=owner_id,
+                    household_id=None,
+                    currency="RUB",
+                    initial_balance_amount=Decimal("50.0000"),
+                    current_balance_amount=Decimal("50.0000"),
+                    record_status="active",
+                    created_by_user_id=owner_id,
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
                 AccountBalanceSnapshot(
                     id=uuid4(),
                     account_id=account_id,
                     snapshot_date=BASE_TIME.date(),
                     balance_amount=Decimal("100.0000"),
+                    currency="RUB",
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
+                AccountBalanceSnapshot(
+                    id=uuid4(),
+                    account_id=counterparty_account_id,
+                    snapshot_date=BASE_TIME.date(),
+                    balance_amount=Decimal("50.0000"),
                     currency="RUB",
                     created_at=BASE_TIME,
                     updated_at=BASE_TIME,
@@ -129,6 +156,7 @@ def sync_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
             "owner": Actor(user_id=str(owner_id), request_id="req-owner"),
             "other": Actor(user_id=str(other_id), request_id="req-other"),
             "account_id": str(account_id),
+            "counterparty_account_id": str(counterparty_account_id),
             "category_id": str(category_id),
         }
     finally:
@@ -210,6 +238,11 @@ def _transaction_count(sync_graph: dict[str, Any], transaction_id: UUID) -> int:
         )
 
 
+def _transaction_row(sync_graph: dict[str, Any], transaction_id: UUID) -> Transaction | None:
+    with Session(sync_graph["engine"], expire_on_commit=False, future=True) as session:
+        return session.get(Transaction, transaction_id)
+
+
 def _entity_count(sync_graph: dict[str, Any], model: type, entity_id: UUID) -> int:
     with Session(sync_graph["engine"], expire_on_commit=False, future=True) as session:
         return int(
@@ -227,6 +260,17 @@ def _sync_change_count(sync_graph: dict[str, Any], transaction_id: UUID) -> int:
                 .where(SyncChange.entity_id == transaction_id)
             )
             or 0
+        )
+
+
+def _sync_changes_for(sync_graph: dict[str, Any], entity_ids: set[str]) -> list[SyncChange]:
+    with Session(sync_graph["engine"], expire_on_commit=False, future=True) as session:
+        return list(
+            session.execute(
+                select(SyncChange)
+                .where(SyncChange.entity_id.in_([UUID(entity_id) for entity_id in entity_ids]))
+                .order_by(SyncChange.seq.asc())
+            ).scalars()
         )
 
 
@@ -357,6 +401,173 @@ def test_sync_push_idempotency_replays_stored_result(sync_graph: dict[str, Any])
     assert first.json()["results"][0]["data"]["id"] == str(entity_id)
     assert _transaction_count(sync_graph, entity_id) == 1
     assert _sync_change_count(sync_graph, entity_id) == 1
+
+
+def test_sync_push_accepts_categoryless_asset_buy_transaction(
+    sync_graph: dict[str, Any],
+) -> None:
+    entity_id = uuid4()
+    body = {
+        "deviceId": "android-investment-device",
+        "clientSchemaVersion": 1,
+        "mutations": [
+            {
+                "clientMutationId": "mutation-asset-buy-create",
+                "entityType": "transactions",
+                "entityId": str(entity_id),
+                "operation": "create",
+                "payload": {
+                    "transactionType": "asset_buy",
+                    "accountId": sync_graph["account_id"],
+                    "amount": "42.0000",
+                    "currency": "RUB",
+                    "transactionDate": "2026-06-14",
+                    "sourceType": "manual",
+                },
+            }
+        ],
+    }
+
+    with _client_for_actor(sync_graph["owner"]) as client:
+        response = client.post("/api/v1/sync/push", json=body)
+
+    assert response.status_code == 200, response.text
+    result = response.json()["results"][0]
+    assert result["status"] == "applied"
+    assert result["data"]["id"] == str(entity_id)
+    assert result["data"]["transactionType"] == "asset_buy"
+    assert result["data"]["accountId"] == sync_graph["account_id"]
+    assert result["data"]["categoryId"] is None
+    assert result["data"]["amount"] == "42.0000"
+    assert result["data"]["transactionDate"] == "2026-06-14"
+    row = _transaction_row(sync_graph, entity_id)
+    assert row is not None
+    assert row.transaction_type == "asset_buy"
+    assert str(row.account_id) == sync_graph["account_id"]
+    assert row.category_id is None
+    assert row.transaction_date.isoformat() == "2026-06-14"
+    assert _transaction_count(sync_graph, entity_id) == 1
+    assert _sync_change_count(sync_graph, entity_id) == 1
+
+
+def test_sync_push_transfer_create_emits_account_changes_with_updated_balances(
+    sync_graph: dict[str, Any],
+) -> None:
+    entity_id = uuid4()
+    body = {
+        "deviceId": "android-transfer-device",
+        "clientSchemaVersion": 1,
+        "mutations": [
+            {
+                "clientMutationId": "mutation-transfer-create",
+                "entityType": "transactions",
+                "entityId": str(entity_id),
+                "operation": "create",
+                "payload": {
+                    "transactionType": "transfer",
+                    "accountId": sync_graph["account_id"],
+                    "counterpartyAccountId": sync_graph["counterparty_account_id"],
+                    "amount": "12.5000",
+                    "currency": "RUB",
+                    "transactionDate": "2026-06-14",
+                    "sourceType": "manual",
+                },
+            }
+        ],
+    }
+
+    with _client_for_actor(sync_graph["owner"]) as client:
+        response = client.post("/api/v1/sync/push", json=body)
+
+    assert response.status_code == 200, response.text
+    result = response.json()["results"][0]
+    assert result["status"] == "applied"
+    changes = _sync_changes_for(
+        sync_graph,
+        {str(entity_id), sync_graph["account_id"], sync_graph["counterparty_account_id"]},
+    )
+    assert [change.entity_type for change in changes] == [
+        "transactions",
+        "accounts",
+        "accounts",
+    ]
+    assert result["changeSeq"] == changes[-1].seq
+    account_payloads = {
+        str(change.entity_id): change.payload
+        for change in changes
+        if change.entity_type == "accounts"
+    }
+    assert account_payloads[sync_graph["account_id"]]["currentBalance"] == "87.5000"
+    assert account_payloads[sync_graph["counterparty_account_id"]]["currentBalance"] == "62.5000"
+    assert all(
+        change.client_mutation_id == "mutation-transfer-create"
+        for change in changes
+    )
+
+
+def test_sync_push_rejects_wrong_category_shapes(sync_graph: dict[str, Any]) -> None:
+    asset_buy_id = uuid4()
+    expense_id = uuid4()
+
+    with _client_for_actor(sync_graph["owner"]) as client:
+        asset_buy_with_category = client.post(
+            "/api/v1/sync/push",
+            json={
+                "deviceId": "android-category-shape-device",
+                "clientSchemaVersion": 1,
+                "mutations": [
+                    {
+                        "clientMutationId": "mutation-asset-buy-with-category",
+                        "entityType": "transactions",
+                        "entityId": str(asset_buy_id),
+                        "operation": "create",
+                        "payload": {
+                            "transactionType": "asset_buy",
+                            "accountId": sync_graph["account_id"],
+                            "categoryId": sync_graph["category_id"],
+                            "amount": "42.0000",
+                            "currency": "RUB",
+                            "transactionDate": "2026-06-14",
+                            "sourceType": "manual",
+                        },
+                    }
+                ],
+            },
+        )
+        expense_without_category = client.post(
+            "/api/v1/sync/push",
+            json={
+                "deviceId": "android-category-shape-device",
+                "clientSchemaVersion": 1,
+                "mutations": [
+                    {
+                        "clientMutationId": "mutation-expense-without-category",
+                        "entityType": "transactions",
+                        "entityId": str(expense_id),
+                        "operation": "create",
+                        "payload": {
+                            "transactionType": "expense",
+                            "accountId": sync_graph["account_id"],
+                            "amount": "42.0000",
+                            "currency": "RUB",
+                            "transactionDate": "2026-06-14",
+                            "sourceType": "manual",
+                        },
+                    }
+                ],
+            },
+        )
+
+    for response in (asset_buy_with_category, expense_without_category):
+        assert response.status_code == 200, response.text
+        result = response.json()["results"][0]
+        assert result["status"] == "rejected"
+        assert result["errorCode"] == "VALIDATION_FAILED"
+
+    assert _transaction_count(sync_graph, asset_buy_id) == 0
+    assert _transaction_count(sync_graph, expense_id) == 0
+    assert _sync_change_count(sync_graph, asset_buy_id) == 0
+    assert _sync_change_count(sync_graph, expense_id) == 0
 
 
 @pytest.mark.parametrize("entity_type", ("capture_drafts", "screenshot_ocr", "ocr", "screenshots"))

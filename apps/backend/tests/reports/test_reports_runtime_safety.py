@@ -462,6 +462,62 @@ def test_account_balances_include_asset_categories_manual_amount_and_investments
     assert transaction_graph["accounts"]["acc_ab_savings"] not in _account_ids(after_delete.json())
 
 
+def test_transfer_into_linked_investment_account_updates_current_asset_category_total(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    params = {
+        "reportMode": "shared_family_report",
+        "householdId": transaction_graph["households"]["hh_ab"],
+        "timezone": "Europe/Moscow",
+    }
+
+    with _client_for_actor(owner) as client:
+        category = client.post(
+            "/api/v1/asset-categories",
+            json={
+                "name": "Current Shared Investments",
+                "scopeType": "household",
+                "householdId": transaction_graph["households"]["hh_ab"],
+                "currency": "RUB",
+                "assetType": "brokerage",
+                "manualAmount": "100.0000",
+                "isInvestment": True,
+            },
+        )
+        assert category.status_code == 201, category.text
+        category_id = category.json()["data"]["id"]
+
+        linked = client.patch(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}",
+            json={"assetCategoryId": category_id},
+        )
+        transfer = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "transfer",
+                "accountId": transaction_graph["accounts"]["acc_ab_cash"],
+                "counterpartyAccountId": transaction_graph["accounts"]["acc_ab_savings"],
+                "amount": "25.0000",
+                "currency": "RUB",
+                "occurredAt": "2026-05-17T14:00:00+00:00",
+                "sourceType": "manual",
+            },
+        )
+        balances = client.get("/api/v1/reports/account-balances", params=params)
+
+    assert linked.status_code == 200, linked.text
+    assert transfer.status_code == 201, transfer.text
+    assert balances.status_code == 200, balances.text
+    group = balances.json()["data"]["assetCategoryGroups"][0]
+    assert group["assetCategoryId"] == category_id
+    assert group["linkedAccountsTotal"] == "125.0000"
+    assert group["currentBalanceTotal"] == "225.0000"
+    assert balances.json()["data"]["investmentsByCurrency"] == [
+        {"currency": "RUB", "investmentsTotal": "225.0000"}
+    ]
+
+
 def test_account_balance_reports_use_historical_snapshot_dates_for_investments(
     transaction_graph: dict[str, Any],
 ) -> None:

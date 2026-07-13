@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from sqlalchemy import select
 
 from app.authz import Actor
+from app.config import get_settings
+from app.db.models import SyncChange
+from app.db.session import sync_session_scope
 from tests.transactions.test_transactions_db_runtime import (
     _assert_no_hidden_markers,
     _assert_same_public_error,
@@ -40,6 +45,17 @@ def _balance(client: Any, account_id: str) -> Decimal:
     response = client.get(f"/api/v1/accounts/{account_id}")
     assert response.status_code == 200
     return Decimal(response.json()["data"]["currentBalance"])
+
+
+def _sync_changes_for(entity_ids: set[str]) -> list[SyncChange]:
+    with sync_session_scope(get_settings()) as session:
+        return list(
+            session.execute(
+                select(SyncChange)
+                .where(SyncChange.entity_id.in_([UUID(entity_id) for entity_id in entity_ids]))
+                .order_by(SyncChange.seq.asc())
+            ).scalars()
+        )
 
 
 def _visible_transfer_ids(client: Any) -> set[str]:
@@ -109,6 +125,42 @@ def test_same_scope_transfers_are_created_and_adjust_balances(
         assert shared_detail.status_code == 200
         assert _balance(client, shared_cash) == Decimal("98.0000")
         assert _balance(client, shared_savings) == Decimal("102.0000")
+
+
+def test_rest_transfer_create_emits_account_sync_changes_with_updated_balances(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    owner_cash = transaction_graph["accounts"]["acc_a_cash"]
+    owner_savings = transaction_graph["accounts"]["acc_a_savings"]
+
+    with _client_for_actor(owner) as client:
+        created = client.post(
+            "/api/v1/transactions",
+            json=_transfer_payload(
+                transaction_graph,
+                source="acc_a_cash",
+                counterparty="acc_a_savings",
+                amount="7.5000",
+            ),
+        )
+
+    assert created.status_code == 201, created.text
+    transaction_id = created.json()["data"]["id"]
+    changes = _sync_changes_for({transaction_id, owner_cash, owner_savings})
+    assert [change.entity_type for change in changes] == [
+        "transactions",
+        "accounts",
+        "accounts",
+    ]
+    account_payloads = {
+        str(change.entity_id): change.payload
+        for change in changes
+        if change.entity_type == "accounts"
+    }
+    assert account_payloads[owner_cash]["currentBalance"] == "92.5000"
+    assert account_payloads[owner_savings]["currentBalance"] == "107.5000"
+    assert all(change.change_type == "update" for change in changes[1:])
 
 
 def test_transfer_denials_are_neutral_and_leave_no_visible_partial_rows(
