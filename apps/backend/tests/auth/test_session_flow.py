@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -103,6 +103,11 @@ def _client(
 
 
 def _login(client: TestClient, harness: AuthHarness) -> str:
+    response = _login_response(client, harness)
+    return str(response["accessToken"])
+
+
+def _login_response(client: TestClient, harness: AuthHarness) -> dict[str, object]:
     response = client.post(
         "/api/v1/sessions",
         json={
@@ -114,7 +119,7 @@ def _login(client: TestClient, harness: AuthHarness) -> str:
     assert response.status_code == 201
     assert "__Host-finance_session" not in response.headers.get("set-cookie", "")
     assert "finance_csrf" not in response.headers.get("set-cookie", "")
-    return str(response.json()["accessToken"])
+    return dict(response.json())
 
 
 def _pwa_login(client: TestClient, harness: AuthHarness):
@@ -230,6 +235,110 @@ def test_authenticated_bearer_session_returns_canonical_uuid_actor_context() -> 
     assert stored[0].session_token_hash is not None
     assert access_token not in repr(stored[0])
     assert stored[0].session_version == 7
+
+
+def test_android_bearer_login_returns_refresh_token_and_stores_only_hash() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        body = _login_response(client, harness)
+
+    refresh_token = str(body["refreshToken"])
+    access_token = str(body["accessToken"])
+    assert body["tokenType"] == "Bearer"
+    assert access_token
+    assert refresh_token
+    assert refresh_token != access_token
+
+    stored = harness.sessions.records_for_tests()
+    assert len(stored) == 1
+    assert stored[0].refresh_token_hash is not None
+    assert stored[0].session_token_hash != access_token
+    assert stored[0].refresh_token_hash != refresh_token
+    assert access_token not in repr(stored[0])
+    assert refresh_token not in repr(stored[0])
+
+
+def test_refresh_rotates_android_access_and_refresh_token() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness)
+        old_access_token = str(login_body["accessToken"])
+        old_refresh_token = str(login_body["refreshToken"])
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        old_access_current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {old_access_token}"},
+        )
+
+    assert refreshed.status_code == 200
+    refreshed_body = refreshed.json()
+    assert refreshed_body["tokenType"] == "Bearer"
+    assert refreshed_body["accessToken"]
+    assert refreshed_body["refreshToken"]
+    assert refreshed_body["accessToken"] != old_access_token
+    assert refreshed_body["refreshToken"] != old_refresh_token
+    assert refreshed_body["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert replay.status_code == 401
+    assert old_access_current.status_code == 401
+    assert old_refresh_token not in replay.text
+
+    stored = harness.sessions.records_for_tests()
+    assert len(stored) == 1
+    assert stored[0].refresh_token_hash is not None
+    assert refreshed_body["refreshToken"] not in repr(stored[0])
+
+
+def test_refresh_with_invalid_expired_or_revoked_token_is_rejected() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        invalid = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": "invalid-refresh-token"},
+        )
+        login_body = _login_response(client, harness)
+        refresh_token = str(login_body["refreshToken"])
+
+        record = harness.sessions.records_for_tests()[0]
+        harness.sessions._records[record.id] = replace(
+            record,
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        expired = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert invalid.status_code == 401
+    assert expired.status_code == 401
+    assert refresh_token not in expired.text
+
+    revoked_harness = _auth_harness()
+    with _client(revoked_harness) as client:
+        login_body = _login_response(client, revoked_harness)
+        access_token = str(login_body["accessToken"])
+        refresh_token = str(login_body["refreshToken"])
+        logout = client.delete(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        revoked = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert logout.status_code == 204
+    assert revoked.status_code == 401
+    assert refresh_token not in revoked.text
 
 
 def test_pwa_login_sets_httponly_session_cookie_and_readable_csrf_cookie() -> None:

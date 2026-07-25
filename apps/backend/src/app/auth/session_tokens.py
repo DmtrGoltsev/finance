@@ -34,6 +34,24 @@ class SessionTokenStore(Protocol):
     ) -> SessionStorageRecord | None:
         """Fetch a stored session by a precomputed token hash."""
 
+    def get_session_by_refresh_token_hash(
+        self,
+        *,
+        refresh_token_hash: str,
+    ) -> SessionStorageRecord | None:
+        """Fetch a stored Android session by a precomputed refresh token hash."""
+
+    def rotate_android_session_tokens(
+        self,
+        *,
+        session_id: str,
+        old_refresh_token_hash: str,
+        new_session_token_hash: str,
+        new_refresh_token_hash: str,
+        rotated_at: datetime,
+    ) -> SessionStorageRecord | None:
+        """Replace Android access/refresh hashes when the old refresh hash still matches."""
+
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
         """Revoke one stored session."""
 
@@ -70,6 +88,42 @@ class InMemorySessionTokenStore:
             if record.session_token_hash == session_token_hash:
                 return record
         return None
+
+    def get_session_by_refresh_token_hash(
+        self,
+        *,
+        refresh_token_hash: str,
+    ) -> SessionStorageRecord | None:
+        for record in self._records.values():
+            if record.refresh_token_hash == refresh_token_hash:
+                return record
+        return None
+
+    def rotate_android_session_tokens(
+        self,
+        *,
+        session_id: str,
+        old_refresh_token_hash: str,
+        new_session_token_hash: str,
+        new_refresh_token_hash: str,
+        rotated_at: datetime,
+    ) -> SessionStorageRecord | None:
+        del rotated_at
+        record = self._records.get(session_id)
+        if (
+            record is None
+            or record.client_kind != AuthClientKind.ANDROID
+            or record.refresh_token_hash != old_refresh_token_hash
+        ):
+            return None
+
+        updated = replace(
+            record,
+            session_token_hash=new_session_token_hash,
+            refresh_token_hash=new_refresh_token_hash,
+        )
+        self._records[session_id] = updated
+        return updated
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
         record = self._records.get(session_id)
@@ -152,6 +206,35 @@ class SessionTokenService:
         stored = store.store_session(record)
         return IssuedSession(
             storage_record=stored,
+            session_token=access_token,
+            refresh_token=refresh_token,
+        )
+
+    def rotate_android_tokens(
+        self,
+        *,
+        record: SessionStorageRecord,
+        old_refresh_token_hash: str,
+        rotated_at: datetime | None = None,
+    ) -> IssuedSession | None:
+        """Rotate Android access and refresh tokens for an existing active session."""
+
+        store, token_factory, hashing_backend = self._required_primitives()
+        current_time = rotated_at or datetime.now(UTC)
+        access_token = token_factory.create_token()
+        refresh_token = token_factory.create_token()
+        updated = store.rotate_android_session_tokens(
+            session_id=record.id,
+            old_refresh_token_hash=old_refresh_token_hash,
+            new_session_token_hash=hashing_backend.hash_token(access_token),
+            new_refresh_token_hash=hashing_backend.hash_token(refresh_token),
+            rotated_at=current_time,
+        )
+        if updated is None:
+            return None
+
+        return IssuedSession(
+            storage_record=updated,
             session_token=access_token,
             refresh_token=refresh_token,
         )

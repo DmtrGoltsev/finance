@@ -148,6 +148,18 @@ class AuthRegistrationResult:
         return self.issued_session is not None and self.actor is not None
 
 
+@dataclass(frozen=True, slots=True)
+class AuthRefreshResult:
+    """Refresh outcome that carries rotated plaintext tokens only at the response boundary."""
+
+    issued_session: IssuedSession | None = None
+    actor: Actor | None = None
+
+    @property
+    def refreshed(self) -> bool:
+        return self.issued_session is not None and self.actor is not None
+
+
 @dataclass(slots=True)
 class AuthSessionService:
     """Credential verification, session issuance, and token actor resolution."""
@@ -311,6 +323,38 @@ class AuthSessionService:
         except ValueError:
             return False
 
+    def refresh_android_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
+        record = self._session_record_for_refresh_token(refresh_token_plaintext)
+        actor = self._actor_for_session_record(
+            record,
+            client_kind=AuthClientKind.ANDROID,
+            request_id=request_id,
+            now=now,
+        )
+        if (
+            record is None
+            or actor is None
+            or record.refresh_token_hash is None
+            or self.sessions is None
+        ):
+            return AuthRefreshResult()
+
+        issued = self._token_service().rotate_android_tokens(
+            record=record,
+            old_refresh_token_hash=record.refresh_token_hash,
+            rotated_at=now,
+        )
+        if issued is None:
+            return AuthRefreshResult()
+
+        return AuthRefreshResult(issued_session=issued, actor=actor)
+
     def _actor_for_session_record(
         self,
         record: SessionStorageRecord | None,
@@ -372,6 +416,22 @@ class AuthSessionService:
             return None
 
         return self.sessions.get_session_by_session_token_hash(session_token_hash=token_hash)
+
+    def _session_record_for_refresh_token(
+        self,
+        refresh_token_plaintext: str | None,
+    ) -> SessionStorageRecord | None:
+        if not refresh_token_plaintext or not self.configured:
+            return None
+
+        assert self.sessions is not None
+        assert self.token_hashing is not None
+        try:
+            token_hash = self.token_hashing.hash_token(refresh_token_plaintext)
+        except ValueError:
+            return None
+
+        return self.sessions.get_session_by_refresh_token_hash(refresh_token_hash=token_hash)
 
     def _token_service(self) -> SessionTokenService:
         assert self.sessions is not None

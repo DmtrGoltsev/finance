@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
@@ -157,6 +157,67 @@ class SqlAlchemySessionTokenStore:
             ).scalar_one_or_none()
             if model is None:
                 return None
+            return _session_record_from_model(model)
+
+    def get_session_by_refresh_token_hash(
+        self,
+        *,
+        refresh_token_hash: str,
+    ) -> SessionStorageRecord | None:
+        if not _is_approved_token_hash(refresh_token_hash):
+            return None
+
+        with self.session_factory() as session:
+            model = session.execute(
+                select(SessionModel).where(SessionModel.refresh_token_hash == refresh_token_hash)
+            ).scalar_one_or_none()
+            if model is None:
+                return None
+            return _session_record_from_model(model)
+
+    def rotate_android_session_tokens(
+        self,
+        *,
+        session_id: str,
+        old_refresh_token_hash: str,
+        new_session_token_hash: str,
+        new_refresh_token_hash: str,
+        rotated_at: datetime,
+    ) -> SessionStorageRecord | None:
+        parsed_session_id = _optional_uuid(session_id)
+        if (
+            parsed_session_id is None
+            or not _is_approved_token_hash(old_refresh_token_hash)
+            or not _is_approved_token_hash(new_session_token_hash)
+            or not _is_approved_token_hash(new_refresh_token_hash)
+        ):
+            return None
+
+        rotated_at_utc = _aware_utc(rotated_at)
+        with self.session_factory.begin() as session:
+            result = session.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.id == parsed_session_id,
+                    SessionModel.refresh_token_hash == old_refresh_token_hash,
+                    SessionModel.transport
+                    == SESSION_TRANSPORT_BY_CLIENT_KIND[AuthClientKind.ANDROID],
+                    SessionModel.status == TokenRecordStatus.ACTIVE.value,
+                    SessionModel.revoked_at.is_(None),
+                )
+                .values(
+                    session_token_hash=new_session_token_hash,
+                    refresh_token_hash=new_refresh_token_hash,
+                    last_seen_at=rotated_at_utc,
+                    updated_at=rotated_at_utc,
+                )
+            )
+            if result.rowcount != 1:
+                return None
+
+            model = session.execute(
+                select(SessionModel).where(SessionModel.id == parsed_session_id)
+            ).scalar_one()
             return _session_record_from_model(model)
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:

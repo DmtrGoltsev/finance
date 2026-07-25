@@ -114,6 +114,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
     required_paths = {
         "/users",
         "/sessions",
+        "/sessions/refresh",
         "/sessions/current",
         "/accounts",
         "/accounts/{accountId}",
@@ -164,6 +165,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
 def test_openapi_sessions_surface_matches_mounted_mvp_subset() -> None:
     assert _contract_methods("/users") == {"POST"}
     assert _contract_methods("/sessions") == {"POST"}
+    assert _contract_methods("/sessions/refresh") == {"POST"}
     assert _contract_methods("/sessions/current") == {"GET", "DELETE"}
 
 

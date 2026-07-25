@@ -66,6 +66,7 @@ def test_android_bearer_registration_creates_active_user_and_token_current_sessi
     body = response.json()
     assert body["tokenType"] == "Bearer"
     assert body["accessToken"]
+    assert body["refreshToken"]
     assert body["expiresAt"]
     assert body["actor"]["userId"] == str(UUID(body["actor"]["userId"]))
     assert body["actor"]["memberships"] == []
@@ -97,6 +98,9 @@ def test_android_bearer_registration_creates_active_user_and_token_current_sessi
     assert households == []
     assert memberships == []
     assert len(sessions) == 1
+    assert sessions[0].refresh_token_hash is not None
+    assert sessions[0].refresh_token_hash != body["refreshToken"]
+    assert body["refreshToken"] not in repr(sessions[0])
     assert accounts == []
     assert categories == []
 

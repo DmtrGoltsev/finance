@@ -113,6 +113,32 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /sessions/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotate Android bearer session tokens.
+      description: Public Android refresh-token contract. Accepts only refresh token material and returns rotated bearer access and refresh tokens for an active, non-revoked, non-expired Android session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRefreshRequest'
+      responses:
+        '200':
+          description: Rotated Android bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BearerSessionResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /sessions/current:
     get:
       tags: [Auth]
@@ -1931,6 +1957,15 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+    SessionRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+          maxLength: 4096
     ActorMembershipDto:
       type: object
       additionalProperties: false
@@ -1958,12 +1993,15 @@ components:
     BearerSessionResponse:
       type: object
       additionalProperties: false
-      required: [tokenType, accessToken, expiresAt, actor]
+      required: [tokenType, accessToken, refreshToken, expiresAt, actor]
       properties:
         tokenType:
           type: string
           const: Bearer
         accessToken:
+          type: string
+          minLength: 1
+        refreshToken:
           type: string
           minLength: 1
         expiresAt:

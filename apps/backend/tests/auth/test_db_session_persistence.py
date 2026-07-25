@@ -154,6 +154,7 @@ def test_db_backed_login_current_and_logout_survive_auth_store_recreation(
     assert login.status_code == 201
     login_body = login.json()
     access_token = login_body["accessToken"]
+    refresh_token = login_body["refreshToken"]
     assert login_body["tokenType"] == "Bearer"
     assert login_body["actor"]["userId"] == str(db_auth_runtime.user_id)
     assert login_body["actor"]["userId"] == str(UUID(login_body["actor"]["userId"]))
@@ -180,9 +181,28 @@ def test_db_backed_login_current_and_logout_survive_auth_store_recreation(
     }
 
     with _recreated_client() as client:
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+        old_refresh_replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert refreshed.status_code == 200
+    refreshed_body = refreshed.json()
+    refreshed_access_token = refreshed_body["accessToken"]
+    refreshed_refresh_token = refreshed_body["refreshToken"]
+    assert refreshed_access_token != access_token
+    assert refreshed_refresh_token != refresh_token
+    assert refreshed_body["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert old_refresh_replay.status_code == 401
+
+    with _recreated_client() as client:
         logout = client.delete(
             "/api/v1/sessions/current",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {refreshed_access_token}"},
         )
 
     assert logout.status_code == 204
@@ -190,11 +210,16 @@ def test_db_backed_login_current_and_logout_survive_auth_store_recreation(
     with _recreated_client() as client:
         after_logout = client.get(
             "/api/v1/sessions/current",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {refreshed_access_token}"},
+        )
+        refresh_after_logout = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refreshed_refresh_token},
         )
 
     assert after_logout.status_code == 401
-    assert access_token not in after_logout.text
+    assert refresh_after_logout.status_code == 401
+    assert refreshed_access_token not in after_logout.text
 
     settings = get_settings()
     factory = sync_session_factory_for_settings(settings)
@@ -215,6 +240,9 @@ def test_db_backed_login_current_and_logout_survive_auth_store_recreation(
     assert stored_session.session_token_hash.startswith(TOKEN_HASH_PREFIX)
     assert stored_session.refresh_token_hash.startswith(TOKEN_HASH_PREFIX)
     assert access_token not in stored_token_fields
+    assert refresh_token not in stored_token_fields
+    assert refreshed_access_token not in stored_token_fields
+    assert refreshed_refresh_token not in stored_token_fields
     assert stored_session.status == "revoked"
 
 
@@ -241,3 +269,61 @@ def test_sqlalchemy_session_store_rejects_plaintext_token_fields(
 
     with factory() as session:
         assert session.execute(select(Session)).scalars().all() == []
+
+
+def test_sqlalchemy_refresh_rotation_rejects_stale_expected_hash(
+    db_auth_runtime: DbAuthRuntime,
+) -> None:
+    settings = get_settings()
+    factory: sessionmaker[OrmSession] = sync_session_factory_for_settings(settings)
+    store = SqlAlchemySessionTokenStore(factory)
+    session_id = str(uuid4())
+    old_access_hash = f"{TOKEN_HASH_PREFIX}old-access"
+    old_refresh_hash = f"{TOKEN_HASH_PREFIX}old-refresh"
+    first_access_hash = f"{TOKEN_HASH_PREFIX}first-access"
+    first_refresh_hash = f"{TOKEN_HASH_PREFIX}first-refresh"
+    second_access_hash = f"{TOKEN_HASH_PREFIX}second-access"
+    second_refresh_hash = f"{TOKEN_HASH_PREFIX}second-refresh"
+
+    stored = store.store_session(
+        SessionStorageRecord(
+            id=session_id,
+            user_id=str(db_auth_runtime.user_id),
+            client_kind=AuthClientKind.ANDROID,
+            session_version=1,
+            issued_at=BASE_TIME,
+            expires_at=BASE_TIME + timedelta(hours=1),
+            session_token_hash=old_access_hash,
+            refresh_token_hash=old_refresh_hash,
+        )
+    )
+
+    first_rotation = store.rotate_android_session_tokens(
+        session_id=stored.id,
+        old_refresh_token_hash=old_refresh_hash,
+        new_session_token_hash=first_access_hash,
+        new_refresh_token_hash=first_refresh_hash,
+        rotated_at=BASE_TIME + timedelta(minutes=1),
+    )
+    stale_second_rotation = store.rotate_android_session_tokens(
+        session_id=stored.id,
+        old_refresh_token_hash=old_refresh_hash,
+        new_session_token_hash=second_access_hash,
+        new_refresh_token_hash=second_refresh_hash,
+        rotated_at=BASE_TIME + timedelta(minutes=2),
+    )
+
+    assert first_rotation is not None
+    assert first_rotation.session_token_hash == first_access_hash
+    assert first_rotation.refresh_token_hash == first_refresh_hash
+    assert stale_second_rotation is None
+
+    with factory() as session:
+        row = session.execute(
+            select(Session).where(Session.id == UUID(session_id))
+        ).scalar_one()
+
+    assert row.session_token_hash == first_access_hash
+    assert row.refresh_token_hash == first_refresh_hash
+    assert row.session_token_hash != second_access_hash
+    assert row.refresh_token_hash != second_refresh_hash

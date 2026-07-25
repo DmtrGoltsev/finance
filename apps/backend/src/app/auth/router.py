@@ -31,6 +31,7 @@ from .service import neutral_login_failure_response
 
 USER_REGISTRATION_ROUTE = "/users"
 LOGIN_SESSION_ROUTE = "/sessions"
+REFRESH_SESSION_ROUTE = "/sessions/refresh"
 CURRENT_SESSION_ROUTE = "/sessions/current"
 PASSWORD_RESET_REQUEST_ROUTE = "/password-resets"
 INVITE_REQUEST_ROUTE = "/invites/requests"
@@ -98,6 +99,10 @@ class UserRegistrationRequest(ApiModel):
         return value.strip() or None
 
 
+class RefreshSessionRequest(ApiModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
+
+
 class ActorMembershipResponse(BaseModel):
     householdId: str
     status: str
@@ -112,6 +117,7 @@ class ActorContextResponse(BaseModel):
 class BearerSessionResponse(BaseModel):
     tokenType: Literal["Bearer"] = "Bearer"
     accessToken: str
+    refreshToken: str
     expiresAt: str
     actor: ActorContextResponse
 
@@ -236,6 +242,33 @@ async def create_user(
     )
 
 
+@router.post(REFRESH_SESSION_ROUTE, status_code=status.HTTP_200_OK)
+async def refresh_session(
+    payload: RefreshSessionRequest,
+    request: Request,
+    auth_service: AuthSessionDependency,
+) -> JSONResponse:
+    """Rotate Android bearer/refresh token material for an active session."""
+
+    request_id = request_id_for(request)
+    result = auth_service.refresh_android_session(
+        payload.refresh_token,
+        request_id=request_id,
+    )
+    if not result.refreshed or result.issued_session is None or result.actor is None:
+        return error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            request_id=request_id,
+            headers=NO_STORE_HEADERS,
+        )
+
+    return bearer_session_response(
+        issued=result.issued_session,
+        actor=result.actor,
+        status_code=status.HTTP_200_OK,
+    )
+
+
 @router.get(CURRENT_SESSION_ROUTE)
 async def get_current_session(actor: CurrentActor) -> JSONResponse:
     return JSONResponse(
@@ -302,13 +335,27 @@ def session_creation_response(
         )
         return response
 
+    return bearer_session_response(
+        issued=issued,
+        actor=actor,
+        status_code=status.HTTP_201_CREATED,
+    )
+
+
+def bearer_session_response(
+    *,
+    issued,
+    actor: Actor,
+    status_code: int,
+) -> JSONResponse:
     response_body = BearerSessionResponse(
         accessToken=issued.session_token or "",
+        refreshToken=issued.refresh_token or "",
         expiresAt=issued.storage_record.expires_at.isoformat(),
         actor=actor_context_response(actor),
     )
     return JSONResponse(
-        status_code=status.HTTP_201_CREATED,
+        status_code=status_code,
         content=response_body.model_dump(),
         headers=NO_STORE_HEADERS,
     )
