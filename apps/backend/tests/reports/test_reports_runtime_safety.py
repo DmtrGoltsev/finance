@@ -45,6 +45,13 @@ def _summary_by_currency(body: dict[str, Any]) -> dict[str, dict[str, str]]:
     }
 
 
+def _summary_investments_total(body: dict[str, Any], currency: str) -> str:
+    return _summary_by_currency(body).get(
+        currency,
+        {"investmentsTotal": "0.0000"},
+    )["investmentsTotal"]
+
+
 def _drilldown_ids(body: dict[str, Any]) -> set[str]:
     return {item["id"] for item in body["data"]["items"]}
 
@@ -391,6 +398,102 @@ def test_report_totals_keep_transfers_and_asset_ops_out_of_spending(
     } == {"expense"}
 
 
+def test_summary_investments_total_uses_monthly_transfers_into_investment_accounts(
+    transaction_graph: dict[str, Any],
+) -> None:
+    owner = transaction_graph["actors"]["owner_a"]
+    base_params = {
+        "reportMode": "shared_family_report",
+        "householdId": transaction_graph["households"]["hh_ab"],
+        "timezone": "Europe/Moscow",
+    }
+    july_params = {
+        **base_params,
+        "startDate": "2026-07-01",
+        "endDate": "2026-07-31",
+    }
+    june_params = {
+        **base_params,
+        "startDate": "2026-06-01",
+        "endDate": "2026-06-30",
+    }
+
+    with _client_for_actor(owner) as client:
+        category = client.post(
+            "/api/v1/asset-categories",
+            json={
+                "name": "July Shared Investments",
+                "scopeType": "household",
+                "householdId": transaction_graph["households"]["hh_ab"],
+                "currency": "RUB",
+                "assetType": "brokerage",
+                "manualAmount": "0.0000",
+                "isInvestment": True,
+            },
+        )
+        assert category.status_code == 201, category.text
+        category_id = category.json()["data"]["id"]
+
+        linked = client.patch(
+            f"/api/v1/accounts/{transaction_graph['accounts']['acc_ab_savings']}",
+            json={"assetCategoryId": category_id},
+        )
+        july_before_transfer = client.get("/api/v1/reports/summary", params=july_params)
+        ordinary_account = client.post(
+            "/api/v1/accounts",
+            json={
+                "name": "Shared RUB Ordinary",
+                "accountType": "cash",
+                "ownershipType": "shared",
+                "householdId": transaction_graph["households"]["hh_ab"],
+                "currency": "RUB",
+                "initialBalance": "100.0000",
+            },
+        )
+        assert ordinary_account.status_code == 201, ordinary_account.text
+        ordinary_account_id = ordinary_account.json()["data"]["id"]
+
+        july_investment_transfer = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "transfer",
+                "accountId": transaction_graph["accounts"]["acc_ab_cash"],
+                "counterpartyAccountId": transaction_graph["accounts"]["acc_ab_savings"],
+                "amount": "40.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-07-10",
+                "sourceType": "manual",
+            },
+        )
+        july_ordinary_transfer = client.post(
+            "/api/v1/transactions",
+            json={
+                "transactionType": "transfer",
+                "accountId": transaction_graph["accounts"]["acc_ab_savings"],
+                "counterpartyAccountId": ordinary_account_id,
+                "amount": "7.0000",
+                "currency": "RUB",
+                "transactionDate": "2026-07-11",
+                "sourceType": "manual",
+            },
+        )
+        july_summary = client.get("/api/v1/reports/summary", params=july_params)
+        june_summary = client.get("/api/v1/reports/summary", params=june_params)
+
+    assert linked.status_code == 200, linked.text
+    assert july_before_transfer.status_code == 200, july_before_transfer.text
+    assert _summary_investments_total(july_before_transfer.json(), "RUB") == "0.0000"
+    assert july_investment_transfer.status_code == 201, july_investment_transfer.text
+    assert july_ordinary_transfer.status_code == 201, july_ordinary_transfer.text
+    assert july_summary.status_code == 200, july_summary.text
+    assert june_summary.status_code == 200, june_summary.text
+
+    july_rub = _summary_by_currency(july_summary.json())["RUB"]
+    assert july_rub["transferTotal"] == "47.0000"
+    assert july_rub["investmentsTotal"] == "40.0000"
+    assert _summary_investments_total(june_summary.json(), "RUB") == "0.0000"
+
+
 def test_account_balances_include_asset_categories_manual_amount_and_investments(
     transaction_graph: dict[str, Any],
 ) -> None:
@@ -443,7 +546,7 @@ def test_account_balances_include_asset_categories_manual_amount_and_investments
         {"currency": "RUB", "investmentsTotal": "200.0000"}
     ]
     assert summary.status_code == 200
-    assert _summary_by_currency(summary.json())["RUB"]["investmentsTotal"] == "200.0000"
+    assert _summary_by_currency(summary.json())["RUB"]["investmentsTotal"] == "0.0000"
     assert changed_balance.status_code == 200, changed_balance.text
     assert historical_after_balance_change.status_code == 200
     historical_group = historical_after_balance_change.json()["data"]["assetCategoryGroups"][0]
@@ -678,7 +781,7 @@ def test_personal_report_without_household_id_succeeds_for_summary_and_account_b
     rub = _summary_by_currency(summary.json())["RUB"]
     assert rub["incomeTotal"] == "11.0000"
     assert rub["expenseTotal"] == "12.0000"
-    assert rub["investmentsTotal"] == "150.0000"
+    assert rub["investmentsTotal"] == "0.0000"
     assert _account_ids(balances.json()) == owner_personal_accounts
 
     group = balances_data["assetCategoryGroups"][0]

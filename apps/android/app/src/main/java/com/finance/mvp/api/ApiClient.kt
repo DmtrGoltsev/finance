@@ -671,15 +671,9 @@ class LiveFinanceApiClient(
             ?.toObjectList()
             ?.map(::parseAssetCategoryGroup)
             ?: emptyList()
-        val investmentsByCurrency = accountBalancesData
-            ?.optJSONArray("investmentsByCurrency")
-            ?.toObjectList()
-            ?.map(::parseMoneyAmount)
-            ?.ifEmpty { reportData?.investmentTotalsByCurrency().orEmpty() }
-            ?: reportData?.investmentTotalsByCurrency()
-            ?: emptyList()
+        val investmentsByCurrency = reportData?.investmentTotalsByCurrency().orEmpty()
         val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
-            ?: accountBalancesData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
+            ?: investmentsByCurrency.firstOrNull()
         val reportTransferCount = session.householdId?.let { householdId ->
             request(
                 path = "/api/v1/reports/transactions",

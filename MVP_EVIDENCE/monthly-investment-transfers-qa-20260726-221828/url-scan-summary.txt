@@ -1,0 +1,5 @@
+﻿extract_exit=0
+prod_marker_scan_exit=0
+local_marker_scan_exit=1
+local_marker_absent=True
+prod_marker_present=True
