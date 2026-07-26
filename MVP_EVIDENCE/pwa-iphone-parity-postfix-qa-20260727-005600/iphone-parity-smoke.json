@@ -1,0 +1,263 @@
+{
+  "ok": true,
+  "pwaUrl": "http://127.0.0.1:5173/",
+  "device": "Playwright Chromium iPhone 14",
+  "mockData": true,
+  "screenshots": [
+    "01-login.png",
+    "02-home.png",
+    "03-quick-add.png",
+    "04-category-overlay.png",
+    "05-analytics.png",
+    "06-top-categories-all.png",
+    "07-top-categories-all-scrolled.png"
+  ],
+  "checks": [
+    {
+      "name": "login form visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "login no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "screenshot 01-login",
+      "ok": true,
+      "details": "screenshots\\01-login.png"
+    },
+    {
+      "name": "home heading visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "home no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "mobile bottom nav inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":0,\"top\":597,\"right\":390,\"bottom\":664,\"width\":390,\"height\":67},\"containsHit\":true,\"hit\":{\"tag\":\"svg\",\"testId\":null,\"className\":\"lucide lucide-landmark\",\"text\":\"\"}}"
+    },
+    {
+      "name": "mobile bottom nav center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"svg\",\"testId\":null,\"className\":\"lucide lucide-landmark\",\"text\":\"\"}"
+    },
+    {
+      "name": "mobile quick add FAB inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":318,\"top\":534,\"right\":372,\"bottom\":588,\"width\":54,\"height\":54},\"containsHit\":true,\"hit\":{\"tag\":\"path\",\"testId\":null,\"className\":\"\",\"text\":\"\"}}"
+    },
+    {
+      "name": "mobile quick add FAB center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"path\",\"testId\":null,\"className\":\"\",\"text\":\"\"}"
+    },
+    {
+      "name": "screenshot 02-home",
+      "ok": true,
+      "details": "screenshots\\02-home.png"
+    },
+    {
+      "name": "quick add sheet visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "quick add no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "quick add sheet inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":0,\"top\":79.6875,\"right\":390,\"bottom\":664,\"width\":390,\"height\":584.3125},\"containsHit\":true,\"hit\":{\"tag\":\"FORM\",\"testId\":null,\"className\":\"quickSheet\",\"text\":\"ДобавитьРасходДоходИнвестицияПереводАктивСуммаКуда сохранитьЛичноеОбщееСчетВыбер\"}}"
+    },
+    {
+      "name": "quick add sheet center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"FORM\",\"testId\":null,\"className\":\"quickSheet\",\"text\":\"ДобавитьРасходДоходИнвестицияПереводАктивСуммаКуда сохранитьЛичноеОбщееСчетВыбер\"}"
+    },
+    {
+      "name": "quick add more inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":27,\"top\":612.6875,\"right\":363,\"bottom\":654.6875,\"width\":336,\"height\":42},\"containsHit\":true,\"hit\":{\"tag\":\"SUMMARY\",\"testId\":\"quick-add-more\",\"className\":\"\",\"text\":\"Еще\"}}"
+    },
+    {
+      "name": "quick add more center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"SUMMARY\",\"testId\":\"quick-add-more\",\"className\":\"\",\"text\":\"Еще\"}"
+    },
+    {
+      "name": "quick add submit after sheet scroll inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":16,\"top\":603.6875,\"right\":374,\"bottom\":645.6875,\"width\":358,\"height\":42},\"containsHit\":true,\"hit\":{\"tag\":\"BUTTON\",\"testId\":\"quick-add-submit\",\"className\":\"submitButton\",\"text\":\"Готово\"}}"
+    },
+    {
+      "name": "quick add submit after sheet scroll center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"BUTTON\",\"testId\":\"quick-add-submit\",\"className\":\"submitButton\",\"text\":\"Готово\"}"
+    },
+    {
+      "name": "screenshot 03-quick-add",
+      "ok": true,
+      "details": "screenshots\\03-quick-add.png"
+    },
+    {
+      "name": "category picker dialog visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "category overlay no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "category picker sheet inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":0,\"top\":347,\"right\":390,\"bottom\":664,\"width\":390,\"height\":317},\"containsHit\":true,\"hit\":{\"tag\":\"SPAN\",\"testId\":null,\"className\":\"\",\"text\":\"Продукты\"}}"
+    },
+    {
+      "name": "category picker sheet center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"SPAN\",\"testId\":null,\"className\":\"\",\"text\":\"Продукты\"}"
+    },
+    {
+      "name": "category search inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":16,\"top\":434,\"right\":374,\"bottom\":478,\"width\":358,\"height\":44},\"containsHit\":true,\"hit\":{\"tag\":\"INPUT\",\"testId\":null,\"className\":\"\",\"text\":\"\"}}"
+    },
+    {
+      "name": "category search center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"INPUT\",\"testId\":null,\"className\":\"\",\"text\":\"\"}"
+    },
+    {
+      "name": "category option Продукты inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":16,\"top\":490,\"right\":374,\"bottom\":538,\"width\":358,\"height\":48},\"containsHit\":true,\"hit\":{\"tag\":\"SPAN\",\"testId\":null,\"className\":\"\",\"text\":\"Продукты\"}}"
+    },
+    {
+      "name": "category option Продукты center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"SPAN\",\"testId\":null,\"className\":\"\",\"text\":\"Продукты\"}"
+    },
+    {
+      "name": "screenshot 04-category-overlay",
+      "ok": true,
+      "details": "screenshots\\04-category-overlay.png"
+    },
+    {
+      "name": "analytics heading visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "analytics no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "analytics card count",
+      "ok": true,
+      "details": "count=4"
+    },
+    {
+      "name": "first analytics card inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":16,\"top\":435.796875,\"right\":374,\"bottom\":527.796875,\"width\":358,\"height\":92},\"containsHit\":true,\"hit\":{\"tag\":\"STRONG\",\"testId\":null,\"className\":\"\",\"text\":\"185 000 ₽\"}}"
+    },
+    {
+      "name": "first analytics card center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"STRONG\",\"testId\":null,\"className\":\"\",\"text\":\"185 000 ₽\"}"
+    },
+    {
+      "name": "last analytics card after scroll inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":16,\"top\":285.796875,\"right\":374,\"bottom\":377.796875,\"width\":358,\"height\":92},\"containsHit\":true,\"hit\":{\"tag\":\"STRONG\",\"testId\":null,\"className\":\"\",\"text\":\"22 000 ₽\"}}"
+    },
+    {
+      "name": "last analytics card after scroll center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"STRONG\",\"testId\":null,\"className\":\"\",\"text\":\"22 000 ₽\"}"
+    },
+    {
+      "name": "mobile bottom nav on analytics inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":0,\"top\":597,\"right\":390,\"bottom\":664,\"width\":390,\"height\":67},\"containsHit\":true,\"hit\":{\"tag\":\"svg\",\"testId\":null,\"className\":\"lucide lucide-landmark\",\"text\":\"\"}}"
+    },
+    {
+      "name": "mobile bottom nav on analytics center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"svg\",\"testId\":null,\"className\":\"lucide lucide-landmark\",\"text\":\"\"}"
+    },
+    {
+      "name": "screenshot 05-analytics",
+      "ok": true,
+      "details": "screenshots\\05-analytics.png"
+    },
+    {
+      "name": "home heading after analytics visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "top categories all dialog visible",
+      "ok": true,
+      "details": ""
+    },
+    {
+      "name": "top categories all uses server breakdown",
+      "ok": true,
+      "details": "fallbackWarnings=0"
+    },
+    {
+      "name": "top categories all no horizontal overflow",
+      "ok": true,
+      "details": "{\"innerWidth\":390,\"clientWidth\":390,\"scrollWidth\":390,\"bodyScrollWidth\":390}"
+    },
+    {
+      "name": "top categories all sheet inside viewport",
+      "ok": true,
+      "details": "{\"viewport\":{\"width\":390,\"height\":664},\"rect\":{\"left\":0,\"top\":12,\"right\":390,\"bottom\":664,\"width\":390,\"height\":652},\"containsHit\":true,\"hit\":{\"tag\":\"DIV\",\"testId\":null,\"className\":\"listStack\",\"text\":\"ПродуктыРасходы · 219 200 ₽ДомРасходы · 19 100 ₽ТранспортРасходы · 14 200 ₽Здоро\"}}"
+    },
+    {
+      "name": "top categories all sheet center hit-test",
+      "ok": true,
+      "details": "{\"tag\":\"DIV\",\"testId\":null,\"className\":\"listStack\",\"text\":\"ПродуктыРасходы · 219 200 ₽ДомРасходы · 19 100 ₽ТранспортРасходы · 14 200 ₽Здоро\"}"
+    },
+    {
+      "name": "screenshot 06-top-categories-all",
+      "ok": true,
+      "details": "screenshots\\06-top-categories-all.png"
+    },
+    {
+      "name": "top categories all dialog content scrolls",
+      "ok": true,
+      "details": "{\"clientHeight\":570,\"scrollHeight\":2594,\"before\":0,\"after\":2024,\"canScroll\":true}"
+    },
+    {
+      "name": "top categories all modal overlays FAB",
+      "ok": true,
+      "details": "{\"tag\":\"DIV\",\"className\":\"listRow\",\"testId\":null,\"text\":\"Scroll QAРасходы · 1770 ₽\",\"insideDialog\":true,\"insideModal\":true}"
+    },
+    {
+      "name": "top categories all modal overlays bottom nav",
+      "ok": true,
+      "details": "{\"tag\":\"DIV\",\"className\":\"listStack\",\"testId\":null,\"text\":\"ПродуктыРасходы · 219 200 ₽ДомРасходы · 19 100 ₽ТранспортРасходы · 14 200 ₽Здоро\",\"insideDialog\":true,\"insideModal\":true}"
+    },
+    {
+      "name": "screenshot 07-top-categories-all-scrolled",
+      "ok": true,
+      "details": "screenshots\\07-top-categories-all-scrolled.png"
+    }
+  ],
+  "errors": []
+}

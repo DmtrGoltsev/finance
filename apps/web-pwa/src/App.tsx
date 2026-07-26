@@ -24,6 +24,7 @@ import {
   Plus,
   ReceiptText,
   RotateCcw,
+  Search,
   Settings,
   Shield,
   ShoppingCart,
@@ -43,6 +44,7 @@ import {
   type FormEvent,
   type ReactNode
 } from "react";
+import { createPortal } from "react-dom";
 import { financeApiClient, isApiRequestError, type FinanceApiClient } from "./api/client";
 import type {
   AccountKind,
@@ -61,6 +63,7 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
+  CategoryBreakdownItem,
   MoneyAmount,
   OperationSummary,
   PlanningAllocation,
@@ -85,7 +88,7 @@ type SectionId =
 type ViewMode = "personal" | "shared" | "overview";
 type VisibilityMode = "personal" | "shared";
 type DraftVisibilityMode = VisibilityMode | "";
-type QuickKind = "expense" | "income" | "transfer" | "asset";
+type QuickKind = "expense" | "income" | "investment" | "transfer" | "asset";
 
 type QuickAddInput = {
   kind: QuickKind;
@@ -120,6 +123,13 @@ type AssetCategoryFormInput = {
   assetType: AssetCategoryType;
   iconKey: string;
   version?: number;
+};
+
+type CategoryTotal = {
+  name: string;
+  amount: MoneyAmount;
+  color: string;
+  transactionCount?: number;
 };
 
 type AccountEditFormInput = {
@@ -534,13 +544,21 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       }
     }
 
-    if (input.kind === "transfer") {
+    if (input.kind === "transfer" || input.kind === "investment") {
       if (
         !destinationAccount ||
         accountOwnership(destinationAccount) !== expectedOwnership ||
+        destinationAccount.id === sourceAccount?.id ||
         destinationAccount.balance.currency !== currency
       ) {
         setSaveStatus("Для перевода нужны два совместимых счета одного scope и валюты");
+        return;
+      }
+      if (
+        input.kind === "investment" &&
+        !isInvestmentAccount(destinationAccount, snapshot.assetCategories)
+      ) {
+        setSaveStatus("Выберите инвестиционный счет для зачисления");
         return;
       }
     }
@@ -577,14 +595,14 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         ownershipType: input.visibility === "shared" ? "shared" : "personal",
         householdId: sharedHouseholdId
       });
-    } else if (input.kind === "transfer") {
+    } else if (input.kind === "transfer" || input.kind === "investment") {
       await client.createDemoTransfer({
         fromAccountId: input.accountId,
         toAccountId: input.toAccountId,
         currency,
         amount: input.amount,
-        occurredAt: new Date(`${transactionDate}T12:00:00`).toISOString(),
-        description: input.comment || "Перевод"
+        transactionDate,
+        description: input.comment || (input.kind === "investment" ? "Инвестиция" : "Перевод")
       });
     } else {
       await client.createDemoOperation({
@@ -702,6 +720,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
             client={client}
             snapshot={snapshot}
             report={activeReport}
+            range={selectedMonthRange}
             viewMode={viewMode}
             onAdd={() => setQuickAddOpen(true)}
             onNavigateToPlanning={() => { setActiveSection("analytics"); setAnalyticsTab("planning"); }}
@@ -773,6 +792,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       {isQuickAddOpen && (
         <QuickAdd
           allAccounts={snapshot.accounts.filter((account) => account.status !== "deleted")}
+          assetCategories={snapshot.assetCategories}
           categories={snapshot.categories.filter((category) => category.status !== "deleted")}
           canUseShared={Boolean(snapshot.session.householdId)}
           defaultVisibility={viewMode === "overview" ? "" : viewMode}
@@ -1037,6 +1057,7 @@ function MoneyDashboard({
   client,
   snapshot,
   report,
+  range,
   viewMode,
   onAdd,
   onNavigateToPlanning
@@ -1044,6 +1065,7 @@ function MoneyDashboard({
   client: FinanceApiClient;
   snapshot: DashboardSnapshot;
   report: ReportSummary;
+  range: { startDate: string; endDate: string };
   viewMode: ViewMode;
   onAdd: () => void;
   onNavigateToPlanning: () => void;
@@ -1056,6 +1078,32 @@ function MoneyDashboard({
   const groups = groupAssets(accounts, currency);
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const recentItems = recentTimeline(operations, transfers, accounts).slice(0, 6);
+  const [allCategoriesOpen, setAllCategoriesOpen] = useState(false);
+  const [allCategories, setAllCategories] = useState<CategoryTotal[]>([]);
+  const [allCategoriesStatus, setAllCategoriesStatus] = useState<
+    "idle" | "loading" | "server" | "fallback"
+  >("idle");
+
+  const openAllCategories = async () => {
+    setAllCategoriesOpen(true);
+    setAllCategoriesStatus("loading");
+    try {
+      const reportMode = reportModeForView(viewMode);
+      const breakdown = await client.getCategoryBreakdown({
+        reportMode,
+        householdId: reportMode === "personal" ? null : snapshot.session.householdId,
+        currency,
+        startDate: range.startDate,
+        endDate: range.endDate
+      });
+      setAllCategories(categoryTotalsFromBreakdown(breakdown, snapshot.categories, currency));
+      setAllCategoriesStatus("server");
+    } catch {
+      const fallbackOperations = filterOperationsByDateRange(operations, range);
+      setAllCategories(categoryTotals(fallbackOperations, snapshot.categories, currency));
+      setAllCategoriesStatus("fallback");
+    }
+  };
 
   return (
     <section className="screenStack" aria-labelledby="money-title">
@@ -1093,6 +1141,9 @@ function MoneyDashboard({
         <section className="plainSection" aria-labelledby="top-categories-title">
           <div className="sectionHead compact">
             <h3 id="top-categories-title">Топ категорий</h3>
+            <button className="ghostButton compact" type="button" onClick={() => void openAllCategories()}>
+              Все
+            </button>
           </div>
           <div className="listStack">
             {topCategories.map((category) => (
@@ -1121,6 +1172,13 @@ function MoneyDashboard({
           items={recentItems}
         />
       </section>
+      {allCategoriesOpen && (
+        <TopCategoriesDialog
+          categories={allCategories}
+          status={allCategoriesStatus}
+          onClose={() => setAllCategoriesOpen(false)}
+        />
+      )}
     </section>
   );
 }
@@ -1548,23 +1606,14 @@ function PendingCaptureDraftsPanel({
                     ))}
                   </select>
                 </label>
-                <label className="field compactField">
-                  <span>Категория</span>
-                  <select
-                    aria-label={`Категория ${draft.id}`}
-                    value={form.categoryId}
-                    onChange={(event) =>
-                      updateDraftForm(draft.id, { categoryId: event.target.value })
-                    }
-                  >
-                    <option value="">Выберите</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <CategoryPickerField
+                  ariaLabel={`Категория ${draft.id}`}
+                  categories={categories}
+                  onSelected={(nextCategoryId) =>
+                    updateDraftForm(draft.id, { categoryId: nextCategoryId })
+                  }
+                  selectedId={form.categoryId}
+                />
               </div>
 
               <div className="draftActions">
@@ -1855,25 +1904,16 @@ function ScreenshotOcrCapture({
                 <strong>{formatMoney(row.candidate.amount)}</strong>
                 <span>{row.candidate.operationCount} операций</span>
               </div>
-              <label className="field compactField">
-                <span>Категория</span>
-                <select
-                  aria-label={`Категория для ${row.candidate.externalLabel}`}
-                  value={row.categoryId}
-                  onChange={(event) =>
-                    updateRow(row.candidate.idempotencyKey, {
-                      categoryId: event.target.value
-                    })
-                  }
-                >
-                  <option value="">Выберите</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <CategoryPickerField
+                ariaLabel={`Категория для ${row.candidate.externalLabel}`}
+                categories={categories}
+                onSelected={(nextCategoryId) =>
+                  updateRow(row.candidate.idempotencyKey, {
+                    categoryId: nextCategoryId
+                  })
+                }
+                selectedId={row.categoryId}
+              />
             </article>
           ))}
           <button className="submitButton" disabled={!canConfirm} type="button" onClick={confirmRows}>
@@ -2576,11 +2616,10 @@ function AnalyticsPage({
     range
   );
   const currency = accounts[0]?.balance.currency ?? report.income.currency;
-  const analyticsReport =
-    viewMode === "personal" ? reportFromOperations("personal", operations, currency, range) : report;
+  const analyticsReport = report;
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const groups = groupAssets(accounts, currency);
-  const investmentsTotal = snapshot.investmentsTotal ?? { value: 0, currency };
+  const investmentsTotal = analyticsReport.investmentsTotal ?? { value: 0, currency };
 
   return (
     <section className="screenStack" aria-labelledby="analytics-title">
@@ -3930,6 +3969,7 @@ function SettingsPage({
 
 function QuickAdd({
   allAccounts,
+  assetCategories,
   canUseShared,
   categories,
   defaultVisibility,
@@ -3938,6 +3978,7 @@ function QuickAdd({
   saveStatus
 }: {
   allAccounts: AccountSummary[];
+  assetCategories: AssetCategory[];
   canUseShared: boolean;
   categories: CategorySummary[];
   defaultVisibility: DraftVisibilityMode;
@@ -3964,7 +4005,11 @@ function QuickAdd({
       account.status !== "archived" &&
       accountOwnership(account) === visibility
   );
-  const operationAccounts = kind === "expense" ? writableAccounts.filter(isPaymentAccount) : writableAccounts;
+  const operationAccounts =
+    kind === "expense" ? writableAccounts.filter(isPaymentAccount) : writableAccounts;
+  const investmentSourceAccounts = writableAccounts
+    .filter(isPaymentAccount)
+    .filter((account) => !isInvestmentAccount(account, assetCategories));
   const sourceAccount = writableAccounts.find((account) => account.id === accountId);
   const transferTargets = writableAccounts.filter(
     (account) =>
@@ -3972,8 +4017,21 @@ function QuickAdd({
       Boolean(sourceAccount) &&
       account.balance.currency === sourceAccount?.balance.currency
   );
-  const accountOptions = kind === "transfer" ? writableAccounts : operationAccounts;
-  const selectedTransferTarget = transferTargets.find((account) => account.id === toAccountId);
+  const investmentTargets = writableAccounts.filter(
+    (account) =>
+      account.id !== accountId &&
+      Boolean(sourceAccount) &&
+      account.balance.currency === sourceAccount?.balance.currency &&
+      isInvestmentAccount(account, assetCategories)
+  );
+  const accountOptions =
+    kind === "transfer"
+      ? writableAccounts
+      : kind === "investment"
+        ? investmentSourceAccounts
+        : operationAccounts;
+  const targetOptions = kind === "investment" ? investmentTargets : transferTargets;
+  const selectedTransferTarget = targetOptions.find((account) => account.id === toAccountId);
 
   const filteredCategories = categories.filter((category) => {
     if (category.status === "deleted" || category.status === "archived") {
@@ -4002,12 +4060,12 @@ function QuickAdd({
     if (
       kind !== "asset" &&
       accountId &&
-      !operationAccounts.some((account) => account.id === accountId)
+      !accountOptions.some((account) => account.id === accountId)
     ) {
       setAccountId("");
       setToAccountId("");
     }
-  }, [accountId, kind, operationAccounts]);
+  }, [accountId, accountOptions, kind]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -4045,7 +4103,9 @@ function QuickAdd({
   const hasVisibility = visibility === "personal" || visibility === "shared";
   const isSharedBlocked = visibility === "shared" && !canUseShared;
   const transferNeedsCompatibleTarget =
-    kind === "transfer" && Boolean(accountId) && transferTargets.length === 0;
+    (kind === "transfer" || kind === "investment") &&
+    Boolean(accountId) &&
+    targetOptions.length === 0;
   const hasValidOperationCategory =
     (kind !== "expense" && kind !== "income") || Boolean(selectedCategory);
   const canSubmit =
@@ -4054,7 +4114,7 @@ function QuickAdd({
     !isSharedBlocked &&
     hasValidOperationCategory &&
       (kind === "asset" ||
-      (kind === "transfer"
+      (kind === "transfer" || kind === "investment"
         ? Boolean(accountId) && Boolean(selectedTransferTarget) && !transferNeedsCompatibleTarget
         : Boolean(accountId)));
 
@@ -4076,6 +4136,10 @@ function QuickAdd({
           <ChoiceButton active={kind === "income"} onClick={() => setKind("income")}>
             <ArrowDownLeft size={17} aria-hidden="true" />
             Доход
+          </ChoiceButton>
+          <ChoiceButton active={kind === "investment"} onClick={() => setKind("investment")}>
+            <TrendingUp size={17} aria-hidden="true" />
+            Инвестиция
           </ChoiceButton>
           <ChoiceButton active={kind === "transfer"} onClick={() => setKind("transfer")}>
             <ArrowLeftRight size={17} aria-hidden="true" />
@@ -4164,7 +4228,7 @@ function QuickAdd({
           </div>
         ) : (
           <label className="field">
-            <span>{kind === "transfer" ? "Откуда" : "Счет"}</span>
+            <span>{kind === "transfer" || kind === "investment" ? "Откуда" : "Счет"}</span>
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
               <option value="">Выберите счет</option>
               {accountOptions.map((account) => (
@@ -4179,12 +4243,14 @@ function QuickAdd({
           <EmptyState text="В выбранном scope нет счета для записи. Сначала добавьте актив или выберите другой scope." />
         )}
 
-        {kind === "transfer" && (
+        {(kind === "transfer" || kind === "investment") && (
           <label className="field">
-            <span>Куда</span>
+            <span>{kind === "investment" ? "Инвестсчет" : "Куда"}</span>
             <select value={toAccountId} onChange={(event) => setToAccountId(event.target.value)}>
-              <option value="">Выберите совместимый счет</option>
-              {transferTargets.map((account) => (
+              <option value="">
+                {kind === "investment" ? "Выберите инвестиционный счет" : "Выберите совместимый счет"}
+              </option>
+              {targetOptions.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -4194,22 +4260,18 @@ function QuickAdd({
         )}
         {transferNeedsCompatibleTarget && (
           <p className="formError">
-            Для перевода нужны два счета одного scope и валюты. Создайте совместимый счет или выберите другой.
+            {kind === "investment"
+              ? "Для инвестиции нужен инвестиционный счет того же scope и валюты. Привяжите счет к инвестиционной категории в Активы."
+              : "Для перевода нужны два счета одного scope и валюты. Создайте совместимый счет или выберите другой."}
           </p>
         )}
 
         {(kind === "expense" || kind === "income") && (
-          <label className="field">
-            <span>Категория</span>
-            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="">Без категории</option>
-              {filteredCategories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <CategoryPickerField
+            categories={filteredCategories}
+            onSelected={setCategoryId}
+            selectedId={categoryId}
+          />
         )}
 
         <details className="moreFields">
@@ -4257,6 +4319,140 @@ function ChoiceButton({
     <button className={active ? "selected" : ""} type="button" onClick={onClick}>
       {children}
     </button>
+  );
+}
+
+function CategoryPickerField({
+  allowEmpty = false,
+  ariaLabel,
+  categories,
+  emptyLabel = "Выберите категорию",
+  label = "Категория",
+  onSelected,
+  selectedId
+}: {
+  allowEmpty?: boolean;
+  ariaLabel?: string;
+  categories: CategorySummary[];
+  emptyLabel?: string;
+  label?: string;
+  onSelected: (categoryId: string) => void;
+  selectedId: string;
+}) {
+  const [isOpen, setOpen] = useState(false);
+  const selectedCategory = categories.find((category) => category.id === selectedId);
+
+  return (
+    <div className="field compactField categoryPickerField">
+      <span>{label}</span>
+      <button
+        aria-haspopup="dialog"
+        aria-label={ariaLabel ?? label}
+        className="pickerButton"
+        type="button"
+        onClick={() => setOpen(true)}
+      >
+        <Tag size={17} aria-hidden="true" />
+        <span>{selectedCategory?.name ?? emptyLabel}</span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      {isOpen && (
+        <CategoryPickerDialog
+          allowEmpty={allowEmpty}
+          categories={categories}
+          onClose={() => setOpen(false)}
+          onSelected={(categoryId) => {
+            onSelected(categoryId);
+            setOpen(false);
+          }}
+          selectedId={selectedId}
+          title={ariaLabel ?? label}
+        />
+      )}
+    </div>
+  );
+}
+
+function CategoryPickerDialog({
+  allowEmpty = false,
+  categories,
+  onClose,
+  onSelected,
+  selectedId,
+  title
+}: {
+  allowEmpty?: boolean;
+  categories: CategorySummary[];
+  onClose: () => void;
+  onSelected: (categoryId: string) => void;
+  selectedId: string;
+  title: string;
+}) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = normalizeSearchText(query);
+  const filteredCategories = normalizedQuery
+    ? categories.filter((category) => normalizeSearchText(category.name).includes(normalizedQuery))
+    : categories;
+
+  return (
+    <div className="modalLayer categoryPickerLayer" role="presentation">
+      <section
+        className="quickSheet categoryPickerSheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="sheetHead">
+          <h3>{title}</h3>
+          <button type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={19} aria-hidden="true" />
+          </button>
+        </div>
+        <label className="field">
+          <span>Поиск</span>
+          <div className="searchInputWrap">
+            <Search size={17} aria-hidden="true" />
+            <input
+              aria-label="Поиск категории"
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+        </label>
+        <div className="categoryPickerList">
+          {allowEmpty && (
+            <button
+              className={!selectedId ? "categoryPickerOption selected" : "categoryPickerOption"}
+              type="button"
+              onClick={() => onSelected("")}
+            >
+              <span className="colorDot emptyDot" />
+              <span>Без категории</span>
+              {!selectedId && <Check size={17} aria-hidden="true" />}
+            </button>
+          )}
+          {filteredCategories.map((category) => {
+            const isSelected = category.id === selectedId;
+            return (
+              <button
+                className={isSelected ? "categoryPickerOption selected" : "categoryPickerOption"}
+                key={category.id}
+                type="button"
+                onClick={() => onSelected(category.id)}
+              >
+                <span className="colorDot" style={{ backgroundColor: category.color || "#2563eb" }} />
+                <span>{category.name}</span>
+                {isSelected && <Check size={17} aria-hidden="true" />}
+              </button>
+            );
+          })}
+          {filteredCategories.length === 0 && (
+            <EmptyState text="Категорий по этому поиску нет." />
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -4393,18 +4589,59 @@ function AssetGroupRow({
 function CategoryTotalRow({
   category
 }: {
-  category: { name: string; amount: MoneyAmount; color: string };
+  category: CategoryTotal;
 }) {
   return (
     <div className="listRow">
       <span className="colorDot" style={{ backgroundColor: category.color }} />
       <div>
         <strong>{shortCategoryName(category.name)}</strong>
-        <span>Расходы</span>
+        <span>
+          Расходы{category.transactionCount !== undefined ? ` · ${category.transactionCount}` : ""}
+        </span>
       </div>
       <b>{formatMoney(category.amount)}</b>
     </div>
   );
+}
+
+function TopCategoriesDialog({
+  categories,
+  status,
+  onClose
+}: {
+  categories: CategoryTotal[];
+  status: "idle" | "loading" | "server" | "fallback";
+  onClose: () => void;
+}) {
+  const dialog = (
+    <div className="modalLayer topCategoriesLayer" role="presentation">
+      <section className="quickSheet" role="dialog" aria-modal="true" aria-label="Все категории трат">
+        <div className="sheetHead">
+          <h3>Все категории трат</h3>
+          <button type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={19} aria-hidden="true" />
+          </button>
+        </div>
+        {status === "loading" && <p className="formHint">Загружаем разбивку с сервера...</p>}
+        {status === "fallback" && (
+          <p className="formError">
+            Серверная разбивка недоступна. Показаны только уже загруженные операции.
+          </p>
+        )}
+        <div className="listStack">
+          {categories.map((category) => (
+            <CategoryTotalRow key={category.name} category={category} />
+          ))}
+          {status !== "loading" && categories.length === 0 && (
+            <EmptyState text="В выбранном месяце нет расходов по категориям." />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 function BarRow({
@@ -4427,6 +4664,7 @@ type TimelineItem =
       type: "operation";
       id: string;
       date: string;
+      version?: number;
       title: string;
       subtitle: string;
       amount: MoneyAmount;
@@ -4435,6 +4673,7 @@ type TimelineItem =
       type: "transfer";
       id: string;
       date: string;
+      version?: number;
       title: string;
       subtitle: string;
       amount: MoneyAmount;
@@ -4820,18 +5059,13 @@ function OperationEditModal({
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>Категория</span>
-          <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
-          >
-            <option value="">Без категории</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </label>
+        <CategoryPickerField
+          allowEmpty
+          categories={categories}
+          emptyLabel="Без категории"
+          onSelected={setCategoryId}
+          selectedId={categoryId}
+        />
         <label className="field">
           <span>Дата</span>
           <input
@@ -4863,6 +5097,22 @@ function isPaymentAccount(account: AccountSummary): boolean {
     account.status !== "deleted" &&
     account.status !== "archived" &&
     account.isPaymentAccount !== false
+  );
+}
+
+function isInvestmentAccount(
+  account: AccountSummary,
+  assetCategories: AssetCategory[]
+): boolean {
+  if (!account.assetCategoryId) {
+    return false;
+  }
+
+  return assetCategories.some(
+    (category) =>
+      category.id === account.assetCategoryId &&
+      category.recordStatus === "active" &&
+      category.isInvestment
   );
 }
 
@@ -4954,7 +5204,7 @@ function categoryTotals(
   operations: OperationSummary[],
   categories: CategorySummary[],
   currency: CurrencyCode
-) {
+): CategoryTotal[] {
   const totals = new Map<string, { name: string; amount: MoneyAmount; color: string }>();
   for (const operation of operations) {
     if (operation.amount.value >= 0) {
@@ -4976,6 +5226,27 @@ function categoryTotals(
   return [...totals.values()].sort((left, right) => right.amount.value - left.amount.value);
 }
 
+function categoryTotalsFromBreakdown(
+  breakdown: CategoryBreakdownItem[],
+  categories: CategorySummary[],
+  currency: CurrencyCode
+): CategoryTotal[] {
+  return breakdown
+    .map((item, index) => {
+      const category = categories.find((candidate) => candidate.id === item.categoryId);
+      return {
+        name: item.categoryName || category?.name || "Без категории",
+        amount: {
+          value: Math.abs(item.amount.value),
+          currency: item.amount.currency || currency
+        },
+        color: category?.color || categoryPalette[index % categoryPalette.length],
+        transactionCount: item.transactionCount
+      };
+    })
+    .sort((left, right) => right.amount.value - left.amount.value);
+}
+
 function recentTimeline(
   operations: OperationSummary[],
   transfers: TransferSummary[],
@@ -4986,6 +5257,7 @@ function recentTimeline(
     type: "operation",
     id: operation.id,
     date: operation.date,
+    version: operation.version,
     title: operation.title,
     subtitle: `${formatDate(operation.date)} · ${scopeLabelForAccount(accountById.get(operation.accountId))} · ${operation.categoryName} · ${operation.accountName}`,
     amount: operation.amount
@@ -4994,14 +5266,17 @@ function recentTimeline(
     type: "transfer",
     id: transfer.id,
     date: transfer.date,
+    version: transfer.version,
     title: "Перевод между счетами",
     subtitle: `${formatDate(transfer.date)} · ${scopeLabelForAccount(accountById.get(transfer.accountId))} · ${transfer.fromAccountName} → ${transfer.toAccountName}`,
     amount: transfer.amount
   }));
 
-  return [...operationItems, ...transferItems].sort(
-    (left, right) => new Date(left.date).getTime() - new Date(right.date).getTime()
-  );
+  return [...operationItems, ...transferItems].sort((left, right) => {
+    const dateOrder = new Date(right.date).getTime() - new Date(left.date).getTime();
+    const versionOrder = (right.version ?? 0) - (left.version ?? 0);
+    return dateOrder || versionOrder || left.id.localeCompare(right.id);
+  });
 }
 
 function sectionTitle(section: SectionId): string {
@@ -5048,6 +5323,10 @@ function shortCategoryName(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
+function normalizeSearchText(value: string): string {
+  return value.trim().toLocaleLowerCase("ru-RU");
+}
+
 function reportForView(
   snapshot: DashboardSnapshot,
   mode: ViewMode,
@@ -5056,6 +5335,10 @@ function reportForView(
   const currency = snapshot.accounts[0]?.balance.currency ?? "RUB";
 
   if (mode === "personal") {
+    const serverReport = snapshot.reports.find((report) => report.mode === "personal");
+    if (serverReport) {
+      return serverReport;
+    }
     const accounts = visibleAccounts(snapshot.accounts, "personal");
     const visiblePersonalOperations = visibleOperations(snapshot.operations, accounts);
     const operations = range
@@ -5066,6 +5349,14 @@ function reportForView(
 
   const reportMode = reportModeByView[mode];
   return snapshot.reports.find((report) => report.mode === reportMode) ?? emptyReport(mode, currency);
+}
+
+function reportModeForView(mode: ViewMode): ReportMode {
+  if (mode === "personal") {
+    return "personal";
+  }
+
+  return reportModeByView[mode];
 }
 
 function reportFromOperations(
@@ -5098,7 +5389,7 @@ function reportFromOperations(
 }
 
 function emptyReport(mode: ViewMode, currency: CurrencyCode): ReportSummary {
-  const reportMode = mode === "shared" ? reportModeByView.shared : reportModeByView.overview;
+  const reportMode = reportModeForView(mode);
   const titles: Record<ViewMode, string> = {
     personal: "Личное",
     shared: "Общее",
@@ -5111,6 +5402,7 @@ function emptyReport(mode: ViewMode, currency: CurrencyCode): ReportSummary {
     periodLabel: "Текущий месяц",
     income: { value: 0, currency },
     expense: { value: 0, currency },
-    balanceDelta: { value: 0, currency }
+    balanceDelta: { value: 0, currency },
+    investmentsTotal: { value: 0, currency }
   };
 }

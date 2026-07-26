@@ -160,7 +160,7 @@ describe("LiveFinanceApiClient", () => {
       title: "Покупка актива",
       amount: { value: 50, currency: "USD" }
     });
-    expect(snapshot.reports).toHaveLength(2);
+    expect(snapshot.reports).toHaveLength(3);
     expect(
       fetcher.mock.calls.some(([url]) =>
         /\/api\/v1\/imports\//.test(String(url))
@@ -421,6 +421,62 @@ describe("LiveFinanceApiClient", () => {
     expect(operation.date).toBe("2026-06-05");
   });
 
+  it("creates transfers with transactionDate instead of synthesized occurredAt", async () => {
+    document.cookie = "finance_csrf=csrf-transfer; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      expect(path).toBe("/api/v1/transactions");
+      expect(init?.method).toBe("POST");
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-transfer");
+      const parsed = JSON.parse(String(init?.body));
+      expect(parsed).toEqual({
+        transactionType: "transfer",
+        accountId: "account-1",
+        counterpartyAccountId: "account-2",
+        amount: "125.0000",
+        currency: "RUB",
+        transactionDate: "2026-06-05",
+        description: "Инвестиция",
+        sourceType: "manual"
+      });
+      expect(parsed).not.toHaveProperty("occurredAt");
+
+      return jsonResponse({
+        data: {
+          id: "transfer-1",
+          transactionType: "transfer",
+          accountId: "account-1",
+          counterpartyAccountId: "account-2",
+          categoryId: null,
+          amount: "125.0000",
+          currency: "RUB",
+          occurredAt: "2026-06-05T00:00:00Z",
+          transactionDate: "2026-06-05",
+          description: "Инвестиция",
+          sourceType: "manual",
+          version: 1
+        }
+      });
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const transfer = await client.createDemoTransfer({
+      fromAccountId: "account-1",
+      toAccountId: "account-2",
+      currency: "RUB",
+      amount: 125,
+      transactionDate: "2026-06-05",
+      description: "Инвестиция"
+    });
+
+    expect(transfer.date).toBe("2026-06-05");
+  });
+
   it("creates and updates category payload fields supported by the API", async () => {
     document.cookie = "finance_csrf=csrf-category; path=/";
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -576,6 +632,164 @@ describe("LiveFinanceApiClient", () => {
     });
   });
 
+  it("maps monthly investments from report summary totals, not account balances net worth", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({ actor: actor() });
+      }
+      if (path === "/api/v1/accounts") {
+        return jsonResponse({
+          items: [
+            {
+              id: "account-1",
+              name: "Brokerage",
+              accountType: "brokerage",
+              ownershipType: "personal",
+              ownerUserId: "user-1",
+              householdId: null,
+              currency: "USD",
+              currentBalance: "999.00"
+            }
+          ]
+        });
+      }
+      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/api/v1/asset-categories") {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/reports/account-balances?")) {
+        return jsonResponse({
+          data: {
+            assetCategoryGroups: [],
+            investmentsByCurrency: [],
+            totalsByCurrency: [{ currency: "USD", netWorthTotal: "999.0000" }]
+          }
+        });
+      }
+      if (path.startsWith("/api/v1/reports/summary?")) {
+        const params = new URLSearchParams(path.split("?")[1]);
+        return jsonResponse({
+          data: {
+            reportMode: params.get("reportMode"),
+            currency: "USD",
+            totalsByCurrency: [
+              {
+                currency: "USD",
+                incomeTotal: "0.0000",
+                expenseTotal: "0.0000",
+                netTotal: "0.0000",
+                investmentsTotal: "40.0000"
+              }
+            ]
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot();
+    const personalReport = snapshot.reports.find((report) => report.mode === "personal");
+
+    expect(snapshot.investmentsTotal).toMatchObject({ value: 999, currency: "USD" });
+    expect(personalReport?.investmentsTotal).toMatchObject({ value: 40, currency: "USD" });
+  });
+
+  it("fetches personal summary and account balances without householdId when viewer has no household", async () => {
+    const summaryUrls: string[] = [];
+    const balanceUrls: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      expect(init?.credentials).toBe("include");
+
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({
+          actor: {
+            userId: "user-1",
+            sessionId: "session-1",
+            memberships: []
+          }
+        });
+      }
+      if (path === "/api/v1/accounts") {
+        return jsonResponse({
+          items: [
+            {
+              id: "account-1",
+              name: "Personal Card",
+              accountType: "card",
+              ownershipType: "personal",
+              ownerUserId: "user-1",
+              householdId: null,
+              currency: "RUB",
+              currentBalance: "100.00"
+            }
+          ]
+        });
+      }
+      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/api/v1/asset-categories") {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/reports/account-balances?")) {
+        balanceUrls.push(path);
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("householdId")).toBeNull();
+        return jsonResponse({
+          data: {
+            assetCategoryGroups: [],
+            investmentsByCurrency: [],
+            totalsByCurrency: []
+          }
+        });
+      }
+      if (path.startsWith("/api/v1/reports/summary?")) {
+        summaryUrls.push(path);
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("householdId")).toBeNull();
+        return jsonResponse({
+          data: {
+            reportMode: "personal",
+            currency: "RUB",
+            incomeTotal: "10.0000",
+            expenseTotal: "3.0000",
+            netTotal: "7.0000"
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot();
+
+    expect(summaryUrls).toHaveLength(1);
+    expect(balanceUrls).toHaveLength(1);
+    expect(snapshot.session.householdId).toBeNull();
+    expect(snapshot.reports).toHaveLength(1);
+    expect(snapshot.reports[0]).toMatchObject({
+      mode: "personal",
+      income: { value: 10, currency: "RUB" },
+      expense: { value: 3, currency: "RUB" }
+    });
+  });
+
   it("passes selected date boundaries to live report summary requests", async () => {
     const reportUrls: string[] = [];
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -633,7 +847,67 @@ describe("LiveFinanceApiClient", () => {
       endDate: "2026-06-30"
     });
 
-    expect(reportUrls).toHaveLength(2);
+    expect(reportUrls).toHaveLength(3);
+  });
+
+  it("retrieves category breakdown expenses sorted by amount", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      expect(init?.credentials).toBe("include");
+
+      if (path.startsWith("/api/v1/reports/category-breakdown?")) {
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("startDate")).toBe("2026-06-01");
+        expect(params.get("endDate")).toBe("2026-06-30");
+        return jsonResponse({
+          data: {
+            items: [],
+            expensesByCategory: [
+              {
+                categoryId: "cat-small",
+                categoryName: "Транспорт",
+                categoryType: "expense",
+                categoryScope: "personal",
+                currency: "RUB",
+                amount: "15.0000",
+                transactionCount: 1,
+                shareOfVisibleTotal: "0.176"
+              },
+              {
+                categoryId: "cat-big",
+                categoryName: "Продукты",
+                categoryType: "expense",
+                categoryScope: "personal",
+                currency: "RUB",
+                amount: "70.0000",
+                transactionCount: 2,
+                shareOfVisibleTotal: "0.824"
+              }
+            ]
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const breakdown = await client.getCategoryBreakdown({
+      reportMode: "personal",
+      currency: "RUB",
+      startDate: "2026-06-01",
+      endDate: "2026-06-30"
+    });
+
+    expect(breakdown.map((item) => item.categoryName)).toEqual(["Продукты", "Транспорт"]);
+    expect(breakdown[0]).toMatchObject({
+      amount: { value: 70, currency: "RUB" },
+      transactionCount: 2
+    });
   });
 
   it("adds the CSRF header to unsafe cookie-authenticated requests", async () => {
@@ -1365,6 +1639,12 @@ describe("LiveFinanceApiClient", () => {
       }
 
       if (path === "/api/v1/planning/income-sources/is-1" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          amount: "55000.0000",
+          description: "Updated salary"
+        });
+        expect(parsed).not.toHaveProperty("effectiveDate");
         return jsonResponse({
           data: {
             id: "is-1",
@@ -1499,7 +1779,8 @@ describe("LiveFinanceApiClient", () => {
     const updatedIncome = await client.updatePlanningIncomeSource({
       incomeSourceId: "is-1",
       amount: 55000,
-      description: "Updated salary"
+      description: "Updated salary",
+      effectiveDate: "2026-07-05"
     });
     expect(updatedIncome.amount.value).toBe(55000);
 
