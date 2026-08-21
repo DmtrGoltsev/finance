@@ -87,7 +87,7 @@ struct CaptureDraftReviewCard: View {
                     .foregroundColor(.secondary)
             } else if !drafts.isEmpty || !screenshotAggregateDrafts.isEmpty {
                 if accounts.isEmpty || categories.isEmpty {
-                    Text("Для проверки OCR-черновиков выберите Личное или Общее: Мой обзор не сохраняет операции и категории.")
+                    Text("Войдите, чтобы проверить и подтвердить OCR-черновики.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {

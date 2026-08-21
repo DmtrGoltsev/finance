@@ -9,7 +9,6 @@ struct FinanceAppView: View {
     @State private var dashboard: FinanceDashboard?
     @State private var isLoading = false
     @State private var selectedTab = 0
-    @State private var selectedMode: FinanceMode = .personal
     @State private var message: String?
     @State private var isAuthenticated = false
     @State private var showQuickAdd = false
@@ -60,8 +59,6 @@ struct FinanceAppView: View {
             TabView(selection: $selectedTab) {
                 HomeTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     onOpenPlanning: { selectedTab = 4 },
                     syncOverview: syncOverview,
                     isSyncing: isSyncing,
@@ -75,11 +72,8 @@ struct FinanceAppView: View {
 
                 OperationsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
                     apiClient: apiClient,
-                    householdId: dashboard?.session.householdId,
                     onRefreshDashboard: loadDashboard
                 )
                 .tabItem {
@@ -90,8 +84,6 @@ struct FinanceAppView: View {
 
                 AssetsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
                     syncService: syncService,
                     localScope: currentLocalScope,
@@ -106,8 +98,6 @@ struct FinanceAppView: View {
 
                 CategoriesTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
                     syncService: syncService,
                     localScope: currentLocalScope,
@@ -116,14 +106,12 @@ struct FinanceAppView: View {
                 )
                 .tabItem {
                     Image(systemName: "tag")
-                        .accessibilityLabel("Категории")
+                        .accessibilityLabel("Категории расходов")
                 }
                 .tag(3)
 
                 AnalyticsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
                     syncService: syncService,
                     localScope: currentLocalScope,
@@ -177,7 +165,6 @@ struct FinanceAppView: View {
         .sheet(isPresented: $showQuickAdd) {
             QuickAddSheet(
                 dashboard: dashboard,
-                selectedMode: selectedMode,
                 errorMessage: quickAddError,
                 onDismiss: { showQuickAdd = false },
                 onSubmit: { draft in Task { await submitQuickAdd(draft) } }
@@ -441,7 +428,6 @@ struct FinanceAppView: View {
         await wipeProtectedStores()
         dashboard = nil
         selectedTab = 0
-        selectedMode = .personal
         showQuickAdd = false
         quickAddError = nil
         showSyncSheet = false
@@ -462,7 +448,7 @@ struct FinanceAppView: View {
 
     private func wipeForAccountSwitchIfNeeded(newSession: SessionStatus) async {
         guard let currentSession = dashboard?.session,
-              currentSession.userId != newSession.userId || currentSession.householdId != newSession.householdId else {
+              currentSession.userId != newSession.userId else {
             return
         }
         await wipeProtectedStores()
@@ -658,10 +644,6 @@ struct FinanceAppView: View {
     }
 
     private func submitQuickAdd(_ draft: QuickAddDraft) async {
-        guard draft.visibility != .overview else {
-            quickAddError = "Мой обзор только показывает видимые вам данные. Выберите Личное или Общее перед сохранением."
-            return
-        }
         let normalizedAmount = draft.amount
         guard Decimal(string: normalizedAmount) != nil else {
             quickAddError = "Проверьте сумму"
@@ -677,8 +659,7 @@ struct FinanceAppView: View {
 
             switch draft.type {
             case .expense, .income:
-                let scopedAccounts = accounts
-                    .filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
+                let scopedAccounts = accounts.filter { $0.status == .active && $0.ownershipType == .personal }
                 let operationAccounts = draft.type == .expense
                     ? scopedAccounts.filter { $0.isPaymentAccount }
                     : scopedAccounts
@@ -688,12 +669,14 @@ struct FinanceAppView: View {
                 } else if let first = operationAccounts.first {
                     source = first
                 } else {
-                    quickAddError = "В режиме \(draft.visibility.title) нет активного счёта."
+                    quickAddError = draft.type == .expense
+                        ? "Нет активного счёта, отмеченного для оплаты."
+                        : "Нет активного счёта."
                     isLoading = false
                     return
                 }
 
-                let scopedCategories = categories.filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
+                let scopedCategories = categories.filter { $0.scope == .personal && $0.status == .active }
                 let category = scopedCategories.first { $0.id == draft.categoryId }
                 if category == nil {
                     quickAddError = "Выберите категорию"
@@ -708,18 +691,28 @@ struct FinanceAppView: View {
                     categoryId: draft.categoryId.isEmpty ? nil : draft.categoryId,
                     amount: normalizedAmount,
                     currency: source.currency,
-                    occurredAt: DateHelpers.nowISO(),
+                    occurredAt: nil,
                     transactionDate: draft.transactionDate,
                     description: nil,
                     sourceType: "manual"
                 )
                 queuedOffline = try await createTransactionOnlineOrQueue(request)
 
-            case .transfer:
-                let scopedAccounts = accounts
-                    .filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
-                guard let source = scopedAccounts.first(where: { $0.id == draft.accountId }) ?? scopedAccounts.first,
-                      let dest = scopedAccounts.first(where: { $0.id == draft.destinationAccountId }) else {
+            case .transfer, .investment:
+                let scopedAccounts = accounts.filter { $0.status == .active && $0.ownershipType == .personal }
+                let investmentCategoryIds = Set((dashboard?.assetCategories ?? [])
+                    .filter { $0.scopeType == .personal && $0.recordStatus == .active && $0.isInvestment }
+                    .map(\.id))
+                let sourceCandidates = draft.type == .investment
+                    ? scopedAccounts.filter(\.isPaymentAccount)
+                    : scopedAccounts
+                let destinationCandidates = draft.type == .investment
+                    ? scopedAccounts.filter { $0.assetCategoryId.map(investmentCategoryIds.contains) == true }
+                    : scopedAccounts
+                guard let source = sourceCandidates.first(where: { $0.id == draft.accountId }) ?? sourceCandidates.first,
+                      let dest = destinationCandidates.first(where: { $0.id == draft.destinationAccountId }),
+                      source.id != dest.id,
+                      source.currency == dest.currency else {
                     quickAddError = "Выберите оба счёта для перевода"
                     isLoading = false
                     return
@@ -731,7 +724,7 @@ struct FinanceAppView: View {
                     categoryId: nil,
                     amount: normalizedAmount,
                     currency: source.currency,
-                    occurredAt: DateHelpers.nowISO(),
+                    occurredAt: nil,
                     transactionDate: draft.transactionDate,
                     description: nil,
                     sourceType: "manual"
@@ -742,11 +735,11 @@ struct FinanceAppView: View {
             showQuickAdd = false
             if queuedOffline {
                 await refreshLocalSnapshotAndOverview()
-                message = "Сохранено локально в \(draft.visibility.title.lowercased()), ожидает синхронизации"
+                message = "Сохранено локально, ожидает синхронизации"
                 isLoading = false
             } else {
                 await loadDashboard()
-                message = "Сохранено в \(draft.visibility.title.lowercased())"
+                message = "Операция сохранена"
             }
         } catch {
             quickAddError = error.localizedDescription

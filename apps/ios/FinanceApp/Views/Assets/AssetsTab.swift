@@ -2,8 +2,6 @@ import SwiftUI
 
 struct AssetsTab: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
     let syncService: FinanceSyncService
     let localScope: LocalStoreScope?
@@ -17,14 +15,14 @@ struct AssetsTab: View {
     @State private var isLoading = false
 
     private var visibleAccounts: [Account] {
-        dashboard?.accountsFor(selectedMode) ?? []
+        dashboard?.personalAccounts ?? []
     }
 
     private var visibleGroups: [AssetCategoryGroup] {
         let accountIds = Set(visibleAccounts.map(\.id))
         return dashboard?.assetCategoryGroups.filter { group in
             let linked = visibleAccounts.filter { $0.assetCategoryId == group.assetCategoryId }
-            return !linked.isEmpty || Decimal(string: group.manualAmount) ?? .zero != .zero
+            return group.scopeType == .personal && (!linked.isEmpty || Decimal(string: group.manualAmount) ?? .zero != .zero)
         } ?? []
     }
 
@@ -33,7 +31,7 @@ struct AssetsTab: View {
     }
 
     private var assetCategories: [AssetCategory] {
-        dashboard?.assetCategories ?? []
+        dashboard?.assetCategories.filter { $0.scopeType == .personal } ?? []
     }
 
     private var viewerUserId: String? {
@@ -43,8 +41,6 @@ struct AssetsTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                ModeChips(selectedMode: selectedMode, onModeSelected: onModeSelected)
-
                 Button {
                     showAssetCategorySheet = true
                 } label: {
@@ -127,7 +123,6 @@ struct AssetsTab: View {
         }
         .sheet(isPresented: $showAssetCategorySheet) {
             AssetCategorySheet(
-                householdId: dashboard?.session.householdId,
                 onDismiss: { showAssetCategorySheet = false },
                 onCreate: { request in
                     await createAssetCategory(request)
@@ -139,7 +134,6 @@ struct AssetsTab: View {
             AddAccountSheet(
                 assetCategoryId: addAccountCategoryId,
                 assetCategories: assetCategories,
-                householdId: dashboard?.session.householdId,
                 onDismiss: {
                     showAddAccountSheet = false
                     addAccountCategoryId = nil
@@ -341,8 +335,8 @@ struct AssetsTab: View {
             id: "local-\(UUID().uuidString)",
             name: request.name,
             scopeType: request.scopeType,
-            ownerUserId: request.scopeType == .personal ? viewerUserId : nil,
-            householdId: request.householdId,
+            ownerUserId: viewerUserId,
+            householdId: nil,
             currency: request.currency,
             assetType: request.assetType ?? .bank,
             iconKey: request.iconKey,
@@ -376,8 +370,8 @@ struct AssetsTab: View {
             name: request.name,
             accountType: request.accountType,
             ownershipType: request.ownershipType,
-            ownerUserId: request.ownershipType == .personal ? viewerUserId : nil,
-            householdId: request.householdId,
+            ownerUserId: viewerUserId,
+            householdId: nil,
             assetCategoryId: request.assetCategoryId,
             currency: request.currency,
             initialBalance: request.initialBalance,

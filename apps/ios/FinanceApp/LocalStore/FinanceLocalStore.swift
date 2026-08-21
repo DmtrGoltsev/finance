@@ -16,14 +16,14 @@ struct LocalStoreScope: Codable, Hashable, Sendable {
     static func fromSession(_ session: SessionStatus, fallbackUserId: String) -> LocalStoreScope {
         LocalStoreScope(
             viewerUserId: session.userId ?? fallbackUserId,
-            sessionId: session.sessionId,
-            householdId: session.householdId,
+            sessionId: nil,
+            householdId: nil,
             accessVersion: nil
         )
     }
 
     var storageKey: String {
-        [viewerUserId, sessionId, householdId, accessVersion]
+        [viewerUserId, accessVersion]
             .compactMap { $0?.nilIfBlank }
             .joined(separator: "_")
             .map { char in

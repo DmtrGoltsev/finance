@@ -1,12 +1,10 @@
 import SwiftUI
 
 struct AssetCategorySheet: View {
-    let householdId: String?
     let onDismiss: () -> Void
     let onCreate: (AssetCategoryCreateRequest) async -> Void
 
     @State private var name = ""
-    @State private var scopeType: AssetCategoryScope = .personal
     @State private var currency: CurrencyCode = .RUB
     @State private var assetType: AccountType = .bank
     @State private var manualAmount = "0"
@@ -27,29 +25,6 @@ struct AssetCategorySheet: View {
                     TextField("Название", text: $name)
                 } header: {
                     Text("Новая категория активов")
-                }
-
-                Section {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(AssetCategoryScope.allCases, id: \.self) { scope in
-                                Button {
-                                    scopeType = scope
-                                } label: {
-                                    Text(scope == .personal ? "Личное" : "Общее")
-                                        .font(.subheadline)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(scopeType == scope ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                        .foregroundColor(scopeType == scope ? FinanceColors.onPrimary : FinanceColors.primary)
-                                        .clipShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Доступ")
                 }
 
                 Section {
@@ -162,8 +137,8 @@ struct AssetCategorySheet: View {
         errorMessage = nil
         let request = AssetCategoryCreateRequest(
             name: trimmed,
-            scopeType: scopeType,
-            householdId: scopeType == .household ? householdId : nil,
+            scopeType: .personal,
+            householdId: nil,
             currency: currency,
             assetType: assetType,
             iconKey: iconKey,
@@ -173,8 +148,4 @@ struct AssetCategorySheet: View {
         await onCreate(request)
         isLoading = false
     }
-}
-
-extension AssetCategoryScope: CaseIterable {
-    public static let allCases: [AssetCategoryScope] = [.personal, .household]
 }

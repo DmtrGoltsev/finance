@@ -2,16 +2,12 @@ import SwiftUI
 
 struct CategoryManagementCard: View {
     let categories: [Category]
-    let hasHousehold: Bool
-    let householdId: String?
     let apiClient: FinanceApiClient
     let syncService: FinanceSyncService
     let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
     let onLocalSnapshotChanged: () async -> Void
 
-    @State private var selectedType: CategoryType = .expense
-    @State private var selectedScope: CategoryScope = .personal
     @State private var newCategoryName = ""
     @State private var showArchived = false
     @State private var message: String?
@@ -19,13 +15,13 @@ struct CategoryManagementCard: View {
 
     private var activeCategories: [Category] {
         categories
-            .filter { $0.type == selectedType && $0.status == .active }
+            .filter { $0.type == .expense && $0.scope == .personal && $0.status == .active }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var archivedCategories: [Category] {
         categories
-            .filter { $0.type == selectedType && $0.status == .archived }
+            .filter { $0.type == .expense && $0.scope == .personal && $0.status == .archived }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -34,68 +30,11 @@ struct CategoryManagementCard: View {
             HStack(spacing: 10) {
                 IconBubble(systemName: "tag", color: FinanceColors.analyticsAccent, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Категории")
+                    Text("Категории расходов")
                         .font(.headline)
                     Text("Добавление, список и быстрые правки")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Тип")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach([CategoryType.expense, .income], id: \.self) { type in
-                            Button {
-                                selectedType = type
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: type == .expense ? "minus.circle" : "plus.circle")
-                                        .font(.system(size: 12))
-                                    Text(type == .expense ? "Расходы" : "Доходы")
-                                        .font(.subheadline)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(selectedType == type ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                .foregroundColor(selectedType == type ? FinanceColors.onPrimary : FinanceColors.primary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Режим")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        let scopes: [CategoryScope] = hasHousehold ? [.personal, .household] : [.personal]
-                        ForEach(scopes, id: \.self) { scope in
-                            Button {
-                                selectedScope = scope
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: scope == .personal ? "person" : "person.2")
-                                        .font(.system(size: 12))
-                                    Text(scope == .personal ? "Личное" : "Общее")
-                                        .font(.subheadline)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(selectedScope == scope ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                .foregroundColor(selectedScope == scope ? FinanceColors.onPrimary : FinanceColors.primary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
                 }
             }
 
@@ -179,9 +118,9 @@ struct CategoryManagementCard: View {
         isLoading = true
         let request = CategoryCreateRequest(
             name: trimmed,
-            type: selectedType,
-            scope: selectedScope,
-            householdId: selectedScope == .household ? householdId : nil,
+            type: .expense,
+            scope: .personal,
+            householdId: nil,
             iconKey: nil,
             color: nil
         )
@@ -322,8 +261,8 @@ struct CategoryManagementCard: View {
             name: request.name,
             type: request.type,
             scope: request.scope,
-            ownerUserId: request.scope == .personal ? localScope?.viewerUserId : nil,
-            householdId: request.householdId,
+            ownerUserId: localScope?.viewerUserId,
+            householdId: nil,
             iconKey: request.iconKey,
             color: request.color,
             status: .active,

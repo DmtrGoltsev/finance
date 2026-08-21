@@ -2,7 +2,6 @@ import SwiftUI
 
 struct QuickAddSheet: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
     let errorMessage: String?
     let onDismiss: () -> Void
     let onSubmit: (QuickAddDraft) -> Void
@@ -13,16 +12,16 @@ struct QuickAddSheet: View {
     @State private var destinationAccountId = ""
     @State private var categoryId = ""
     @State private var transactionDate: String = DateHelpers.todayDateOnly()
-    @State private var visibility: FinanceMode?
 
     enum QuickEntryType: String, CaseIterable {
-        case expense, income, transfer
+        case expense, income, transfer, investment
 
         var title: String {
             switch self {
             case .expense: return "Расход"
             case .income: return "Доход"
             case .transfer: return "Перевод"
+            case .investment: return "Инвестиция"
             }
         }
 
@@ -31,6 +30,7 @@ struct QuickAddSheet: View {
             case .expense: return "minus.circle"
             case .income: return "plus.circle"
             case .transfer: return "arrow.left.arrow.right"
+            case .investment: return "chart.line.uptrend.xyaxis"
             }
         }
 
@@ -39,6 +39,7 @@ struct QuickAddSheet: View {
             case .expense: return .expense
             case .income: return .income
             case .transfer: return .transfer
+            case .investment: return .transfer
             }
         }
     }
@@ -60,20 +61,7 @@ struct QuickAddSheet: View {
                             .foregroundColor(FinanceColors.error)
                     }
 
-                    if selectedMode == .overview {
-                        Text("Мой обзор read-only: перед сохранением выберите Личное или Общее.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Text("Куда сохранить")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    writableModeChips
-
-                    if type != .transfer {
+                    if type == .expense || type == .income {
                         accountPicker
                         categoryPicker
                     } else {
@@ -81,9 +69,7 @@ struct QuickAddSheet: View {
                         transferDestinationPicker
                     }
 
-                    if type == .expense || type == .income {
-                        DatePickerField(label: "Дата операции", date: $transactionDate)
-                    }
+                    DatePickerField(label: "Дата операции", date: $transactionDate)
 
                     if let reason = disabledReason {
                         Text(reason)
@@ -107,12 +93,6 @@ struct QuickAddSheet: View {
                 }
             }
         }
-        .onAppear {
-            if visibility == nil {
-                let writableModes = Self.writableModes(hasHousehold: !(dashboard?.session.householdId?.isEmpty ?? true))
-                visibility = writableModes.contains(selectedMode) ? selectedMode : writableModes.first
-            }
-        }
     }
 
     private var typeChips: some View {
@@ -134,35 +114,6 @@ struct QuickAddSheet: View {
                         .padding(.vertical, 6)
                         .background(type == t ? FinanceColors.primary : FinanceColors.primaryContainer)
                         .foregroundColor(type == t ? .white : FinanceColors.primary)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private var writableModeChips: some View {
-        let modes = Self.writableModes(hasHousehold: !(dashboard?.session.householdId?.isEmpty ?? true))
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(modes, id: \.self) { mode in
-                    Button {
-                        visibility = mode
-                        accountId = ""
-                        destinationAccountId = ""
-                        categoryId = ""
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: mode.sfSymbol)
-                                .font(.system(size: 12))
-                            Text(mode.title)
-                                .font(.subheadline)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(visibility == mode ? FinanceColors.primary : FinanceColors.primaryContainer)
-                        .foregroundColor(visibility == mode ? .white : FinanceColors.primary)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -210,45 +161,16 @@ struct QuickAddSheet: View {
     }
 
     private var categoryPicker: some View {
-        let cats = filteredCategories
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Категория")
-                .font(.caption)
-                .fontWeight(.medium)
-            if cats.isEmpty {
-                Text("Нет категории в выбранном scope. Создайте её в разделе «Категории».")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(cats) { cat in
-                            Button {
-                                categoryId = cat.id
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "tag")
-                                        .font(.system(size: 10))
-                                    Text(cat.name)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(categoryId == cat.id ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                .foregroundColor(categoryId == cat.id ? .white : FinanceColors.primary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-        }
+        SearchableCategoryPickerButton(
+            title: "Категория",
+            emptyMessage: "Нет подходящих категорий. Создайте расходную категорию в разделе «Категории расходов».",
+            categories: filteredCategories,
+            selectedCategoryId: $categoryId
+        )
     }
 
     private var transferSourcePicker: some View {
-        let accounts = scopedAccounts
+        let accounts = sourceAccounts
         return VStack(alignment: .leading, spacing: 6) {
             Text("Со счёта")
                 .font(.caption)
@@ -289,7 +211,7 @@ struct QuickAddSheet: View {
     private var transferDestinationPicker: some View {
         let destinations = compatibleDestinations
         return VStack(alignment: .leading, spacing: 6) {
-            Text("На счёт")
+            Text(type == .investment ? "На инвестиционный счёт" : "На счёт")
                 .font(.caption)
                 .fontWeight(.medium)
             if destinations.isEmpty {
@@ -329,6 +251,7 @@ struct QuickAddSheet: View {
         case .expense: return "Сохранить расход"
         case .income: return "Сохранить доход"
         case .transfer: return "Сохранить перевод"
+        case .investment: return "Сохранить инвестицию"
         }
     }
 
@@ -338,33 +261,34 @@ struct QuickAddSheet: View {
         guard Decimal(string: normalizedAmount) != nil else {
             return "Укажите сумму перед сохранением."
         }
-        guard let vis = visibility, vis != .overview else {
-            return "Мой обзор read-only. Выберите Личное или Общее."
-        }
-        if type != .transfer {
+        if type == .expense || type == .income {
             if operationAccounts.isEmpty {
-                return "В режиме \(vis.title) нет активного счёта. Создайте счёт в «Активы»."
+                return type == .expense
+                    ? "Нет активного счёта, отмеченного для оплаты. Измените счёт в «Активы»."
+                    : "Нет активного счёта. Создайте счёт в «Активы»."
             }
             if filteredCategories.isEmpty {
-                return "В режиме \(vis.title) нет категории для \(type.title.lowercased()). Создайте категорию."
+                return "Нет категории для \(type.title.lowercased()). Создайте категорию."
             }
         } else {
-            if scopedAccounts.isEmpty {
-                return "В режиме \(vis.title) нет активного счёта для перевода."
+            if sourceAccounts.isEmpty {
+                return "Нет активного счёта для перевода."
+            }
+            if type == .investment && investmentAccounts.isEmpty {
+                return "Нет инвестиционного счёта. Отметьте категорию актива как инвестиционную и добавьте к ней счёт."
             }
         }
         return nil
     }
 
-    private var scopedAccounts: [Account] {
-        guard let vis = visibility else { return [] }
+    private var personalAccounts: [Account] {
         let all = dashboard?.accounts ?? []
         return all.filter { $0.status == .active && !$0.id.isEmpty }
-            .filteredByMode(vis, householdId: dashboard?.session.householdId)
+            .filter { $0.ownershipType == .personal }
     }
 
     private var operationAccounts: [Account] {
-        let scoped = scopedAccounts
+        let scoped = personalAccounts
         if type == .expense {
             return scoped.filter { $0.isPaymentAccount }
         }
@@ -372,27 +296,41 @@ struct QuickAddSheet: View {
     }
 
     private var filteredCategories: [Category] {
-        guard let vis = visibility else { return [] }
         let all = dashboard?.categories ?? []
         return all
             .filter { $0.type.rawValue == type.apiValue.rawValue && $0.status == .active }
-            .filteredByMode(vis, householdId: dashboard?.session.householdId)
+            .filter { $0.scope == .personal }
+    }
+
+    private var investmentAccounts: [Account] {
+        let investmentCategoryIds = Set((dashboard?.assetCategories ?? [])
+            .filter { $0.scopeType == .personal && $0.recordStatus == .active && $0.isInvestment }
+            .map(\.id))
+        return personalAccounts.filter { account in
+            account.assetCategoryId.map(investmentCategoryIds.contains) == true
+        }
+    }
+
+    private var sourceAccounts: [Account] {
+        type == .investment ? personalAccounts.filter(\.isPaymentAccount) : personalAccounts
     }
 
     private var compatibleDestinations: [Account] {
-        let source = scopedAccounts.first { $0.id == accountId }
+        let source = sourceAccounts.first { $0.id == accountId }
         guard let src = source else { return [] }
-        return scopedAccounts.filter { candidate in
+        let candidates = type == .investment ? investmentAccounts : personalAccounts
+        return candidates.filter { candidate in
             candidate.id != src.id &&
-            candidate.currency == src.currency &&
-            candidate.ownershipType == src.ownershipType
+            candidate.currency == src.currency
         }
     }
 
     private func submit() {
         let normalizedAmount = amount.trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: ",", with: ".")
-        let firstAccountId = operationAccounts.first?.id ?? ""
+        let firstAccountId = (type == .expense || type == .income
+            ? operationAccounts.first
+            : sourceAccounts.first)?.id ?? ""
         let firstCategoryId = filteredCategories.first?.id ?? ""
 
         let draft = QuickAddDraft(
@@ -401,14 +339,9 @@ struct QuickAddSheet: View {
             accountId: accountId.isEmpty ? firstAccountId : accountId,
             destinationAccountId: destinationAccountId,
             categoryId: categoryId.isEmpty ? firstCategoryId : categoryId,
-            visibility: visibility ?? selectedMode,
             transactionDate: transactionDate
         )
         onSubmit(draft)
-    }
-
-    static func writableModes(hasHousehold: Bool) -> [FinanceMode] {
-        hasHousehold ? [.personal, .shared] : [.personal]
     }
 }
 
@@ -418,32 +351,5 @@ struct QuickAddDraft {
     let accountId: String
     let destinationAccountId: String
     let categoryId: String
-    let visibility: FinanceMode
     let transactionDate: String
-}
-
-extension Array where Element == Account {
-    func filteredByMode(_ mode: FinanceMode, householdId: String?) -> [Account] {
-        switch mode {
-        case .personal:
-            return filter { $0.ownershipType == .personal }
-        case .shared:
-            return filter { $0.ownershipType == .shared && $0.householdId == householdId }
-        case .overview:
-            return self
-        }
-    }
-}
-
-extension Array where Element == Category {
-    func filteredByMode(_ mode: FinanceMode, householdId: String?) -> [Category] {
-        switch mode {
-        case .personal:
-            return filter { $0.scope == .personal }
-        case .shared:
-            return filter { $0.scope == .household && $0.householdId == householdId }
-        case .overview:
-            return self
-        }
-    }
 }

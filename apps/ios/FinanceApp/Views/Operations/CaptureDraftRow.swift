@@ -133,55 +133,12 @@ struct CaptureDraftRow: View {
                 }
             }
 
-            Text("Категория")
-                .font(.caption)
-                .fontWeight(.medium)
-
-            if expenseCategories.isEmpty {
-                Text("Нет активных категорий расходов")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(expenseCategories) { category in
-                            Button {
-                                selectedCategoryId = category.id
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "tag")
-                                        .font(.caption2)
-                                    Text(category.name)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    selectedCategoryId == category.id
-                                        ? FinanceColors.expense.opacity(0.15)
-                                        : Color.secondary.opacity(0.08)
-                                )
-                                .foregroundColor(
-                                    selectedCategoryId == category.id
-                                        ? FinanceColors.expense
-                                        : .primary
-                                )
-                                .clipShape(Capsule())
-                                .overlay(
-                                    Capsule()
-                                        .stroke(
-                                            selectedCategoryId == category.id
-                                                ? FinanceColors.expense
-                                                : Color.secondary.opacity(0.2),
-                                            lineWidth: 1
-                                        )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            SearchableCategoryPickerButton(
+                title: "Категория",
+                emptyMessage: "Нет активных категорий расходов",
+                categories: expenseCategories,
+                selectedCategoryId: $selectedCategoryId
+            )
 
             HStack(spacing: 8) {
                 Button {

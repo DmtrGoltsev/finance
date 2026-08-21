@@ -10,11 +10,11 @@ struct RecentOperationsCard: View {
                 .font(.headline)
 
             if transactions.isEmpty {
-                Text("В выбранном scope движений пока нет. Быстрое добавление предложит Личное или Общее перед сохранением.")
+                Text("Операций пока нет. Добавьте первую операцию кнопкой плюс.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                ForEach(transactions.suffix(4)) { transaction in
+                ForEach(transactions.prefix(4)) { transaction in
                     compactRow(transaction)
                 }
             }

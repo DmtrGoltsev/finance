@@ -2,19 +2,16 @@ import SwiftUI
 
 struct HomeTab: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let onOpenPlanning: () -> Void
     let syncOverview: LocalSyncOverview
     let isSyncing: Bool
     let onSyncTapped: () -> Void
 
     var body: some View {
-        let view = dashboard?.viewFor(selectedMode)
+        let view = dashboard?.personalView()
 
         ScrollView {
             VStack(spacing: 12) {
-                ModeChips(selectedMode: selectedMode, onModeSelected: onModeSelected)
                 SyncStatusRow(
                     overview: syncOverview,
                     isSyncing: isSyncing,
@@ -22,7 +19,7 @@ struct HomeTab: View {
                 )
 
                 if let v = view {
-                    PlanningEntryCard(selectedMode: selectedMode, onOpenPlanning: onOpenPlanning)
+                    PlanningEntryCard(onOpenPlanning: onOpenPlanning)
                     CapitalCard(view: v)
                     AssetChips(summaries: v.assetSummaries)
                     MonthExpenseCard(view: v)

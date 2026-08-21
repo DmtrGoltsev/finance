@@ -3,8 +3,6 @@ import SwiftUI
 
 extension FinanceDashboard {
     struct DashboardViewData {
-        let mode: FinanceMode
-        let scopeTitle: String
         let visibleAccounts: [Account]
         let visibleTransactions: [Transaction]
         let primaryCurrency: CurrencyCode
@@ -38,9 +36,9 @@ extension FinanceDashboard {
         let title: String
     }
 
-    func viewFor(_ mode: FinanceMode) -> DashboardViewData {
-        let visibleAccounts = accountsFor(mode)
-        let visibleTransactions = transactionsFor(mode)
+    func personalView() -> DashboardViewData {
+        let visibleAccounts = personalAccounts
+        let visibleTransactions = personalTransactions
         let currency = visibleAccounts.first?.currency ?? .RUB
 
         let capital = visibleAccounts
@@ -77,13 +75,9 @@ extension FinanceDashboard {
             currency: currency
         )
 
-        let recent = visibleTransactions
-            .sorted { sortDateKey($0) < sortDateKey($1) }
-            .suffix(4)
+        let recent = visibleTransactions.sorted(by: transactionComesBefore).prefix(4)
 
         return DashboardViewData(
-            mode: mode,
-            scopeTitle: mode.title,
             visibleAccounts: visibleAccounts,
             visibleTransactions: visibleTransactions,
             primaryCurrency: currency,
@@ -99,26 +93,27 @@ extension FinanceDashboard {
         )
     }
 
-    func accountsFor(_ mode: FinanceMode) -> [Account] {
-        switch mode {
-        case .personal:
-            return accounts.filter { $0.ownershipType == .personal && $0.status == .active }
-        case .shared:
-            let hhId = session.householdId
-            return accounts.filter { $0.ownershipType == .shared && $0.householdId == hhId && $0.status == .active }
-        case .overview:
-            return accounts.filter { $0.status == .active }
-        }
+    var personalAccounts: [Account] {
+        accounts.filter { $0.ownershipType == .personal && $0.status == .active }
     }
 
-    func transactionsFor(_ mode: FinanceMode) -> [Transaction] {
-        let visibleAccounts = accountsFor(mode)
-        let accountIds = Set(visibleAccounts.map(\.id))
+    var personalTransactions: [Transaction] {
+        let accountIds = Set(personalAccounts.map(\.id))
         return transactions.filter { accountIds.contains($0.accountId) }
     }
 
     func sortDateKey(_ transaction: Transaction) -> String {
         transaction.transactionDate ?? String(transaction.occurredAt.prefix(10))
+    }
+
+    func transactionComesBefore(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        let lhsDate = sortDateKey(lhs)
+        let rhsDate = sortDateKey(rhs)
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        let lhsVersion = lhs.version ?? 0
+        let rhsVersion = rhs.version ?? 0
+        if lhsVersion != rhsVersion { return lhsVersion > rhsVersion }
+        return lhs.id > rhs.id
     }
 }
 
@@ -148,8 +143,6 @@ private extension FinanceDashboard {
                 )
             }
             .sorted { Decimal(string: $0.amount) ?? .zero > Decimal(string: $1.amount) ?? .zero }
-            .prefix(3)
-            .map { $0 }
     }
 
     func categoryIcon(_ category: Category?) -> String {

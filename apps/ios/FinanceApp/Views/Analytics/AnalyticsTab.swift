@@ -2,8 +2,6 @@ import SwiftUI
 
 struct AnalyticsTab: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
     let syncService: FinanceSyncService
     let localScope: LocalStoreScope?
@@ -20,8 +18,6 @@ struct AnalyticsTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                ModeChips(selectedMode: selectedMode, onModeSelected: onModeSelected)
-
                 AnalyticsSubsectionPicker(selected: $selectedSubsection)
 
                 switch selectedSubsection {
@@ -30,8 +26,6 @@ struct AnalyticsTab: View {
                 case .planning:
                     PlanningView(
                         dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: onModeSelected,
                         apiClient: apiClient,
                         syncService: syncService,
                         localScope: localScope,
@@ -57,7 +51,7 @@ struct AnalyticsTab: View {
             if isLoadingReport {
                 ProgressView("Загружаем отчёт...")
             } else {
-                let currency = dashboard?.viewFor(selectedMode).primaryCurrency ?? .RUB
+                let currency = dashboard?.personalView().primaryCurrency ?? .RUB
 
                 AnalyticsSummaryCard(
                     totals: reportSummary?.totalsByCurrency ?? dashboard?.totals ?? [],
@@ -67,8 +61,8 @@ struct AnalyticsTab: View {
 
                 CategoryBreakdownCard(
                     breakdown: categoryBreakdown,
-                    transactions: dashboard?.viewFor(selectedMode).visibleTransactions ?? [],
-                    categories: dashboard?.categories ?? [],
+                    transactions: dashboard?.personalTransactions ?? [],
+                    categories: dashboard?.categories.filter { $0.scope == .personal } ?? [],
                     currency: currency
                 )
 
@@ -81,28 +75,26 @@ struct AnalyticsTab: View {
     }
 
     private func loadReport() async {
-        guard let mode = reportMode else { return }
         isLoadingReport = true
         defer { isLoadingReport = false }
         do {
-            let hhId = householdId
             let tz = TimeZone.current.identifier
             async let summary = apiClient.getReportSummary(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
                 accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let breakdown = apiClient.getReportCategoryBreakdown(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
                 accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let balances = apiClient.getReportAccountBalances(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
@@ -118,28 +110,7 @@ struct AnalyticsTab: View {
         }
     }
 
-    private var reportMode: ReportMode? {
-        switch selectedMode {
-        case .personal: return .personal
-        case .shared: return .shared_family_report
-        case .overview: return .combined_viewer_overview
-        }
-    }
-
-    private var householdId: String? {
-        selectedMode == .shared ? dashboard?.session.householdId : nil
-    }
-
     private func investmentAmount(for currency: CurrencyCode) -> String {
-        if let amount = accountBalances?.investmentsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
-            return amount
-        }
-        if let amount = dashboard?.investmentsByCurrency.first(where: { $0.currency == currency })?.amount {
-            return amount
-        }
-        if let total = dashboard?.investmentsTotal, total.currency == currency {
-            return total.amount
-        }
         if let amount = reportSummary?.totalsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
             return amount
         }
