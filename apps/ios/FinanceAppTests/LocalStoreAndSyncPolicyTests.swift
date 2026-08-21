@@ -785,10 +785,14 @@ final class LocalStoreAndSyncPolicyTests: XCTestCase {
         let fileURL = root.appendingPathComponent("\(scope.storageKey).json")
         XCTAssertEqual(try root.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         XCTAssertEqual(try fileURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
-#if os(iOS)
+#if os(iOS) && !targetEnvironment(simulator)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
 #endif
+        XCTAssertEqual(
+            FileBackedFinanceLocalStore.snapshotFileProtection,
+            .completeUntilFirstUserAuthentication
+        )
         XCTAssertTrue(FileBackedFinanceLocalStore.snapshotWritingOptions.contains(.atomic))
         XCTAssertTrue(FileBackedFinanceLocalStore.snapshotWritingOptions.contains(
             .completeFileProtectionUntilFirstUserAuthentication
@@ -814,7 +818,7 @@ final class LocalStoreAndSyncPolicyTests: XCTestCase {
         var fileValues = URLResourceValues()
         fileValues.isExcludedFromBackup = false
         try fileForValues.setResourceValues(fileValues)
-#if os(iOS)
+#if os(iOS) && !targetEnvironment(simulator)
         try FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.none],
             ofItemAtPath: fileURL.path
@@ -829,10 +833,14 @@ final class LocalStoreAndSyncPolicyTests: XCTestCase {
         XCTAssertEqual(loaded.syncState.cursor, 42)
         XCTAssertEqual(try root.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         XCTAssertEqual(try fileURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
-#if os(iOS)
+#if os(iOS) && !targetEnvironment(simulator)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
 #endif
+        XCTAssertEqual(
+            FileBackedFinanceLocalStore.snapshotFileProtection,
+            .completeUntilFirstUserAuthentication
+        )
     }
 
     func testOCRRemainsOnlineOnlyAndOutsideSyncEntityTypes() {

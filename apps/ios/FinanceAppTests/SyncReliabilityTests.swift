@@ -166,6 +166,9 @@ final class SyncReliabilityTests: XCTestCase {
     }
 
     func testLive403MapsToForbiddenWithoutClearingIdentityOrCredentials() async throws {
+        let context = try makeContext("live-403")
+        defer { context.cleanup() }
+        let pendingMutation = try await enqueuePersonalCategory(in: context)
         let tokenStore = CSRFTokenStore.shared
         let identityStore = SessionIdentityStore.shared
         tokenStore.clear()
@@ -173,7 +176,6 @@ final class SyncReliabilityTests: XCTestCase {
         defer {
             tokenStore.clear()
             identityStore.clear()
-            URLProtocol.unregisterClass(StubURLProtocol.self)
         }
         tokenStore.saveCsrfToken("csrf-kept")
         tokenStore.saveSessionExpiry("2026-08-22T10:00:00.000Z")
@@ -184,10 +186,12 @@ final class SyncReliabilityTests: XCTestCase {
             userId: "user-a"
         ))))
         StubURLProtocol.response = .init(statusCode: 403, body: #"{"message":"Forbidden"}"#)
-        _ = URLProtocol.registerClass(StubURLProtocol.self)
 
         do {
-            _ = try await LiveApiClient(baseURL: "https://finance-tests.invalid").sessionStatus()
+            _ = try await LiveApiClient(
+                baseURL: "https://finance-tests.invalid",
+                session: makeStubbedSession()
+            ).sessionStatus()
             XCTFail("Expected HTTP 403")
         } catch let error as FinanceApiError {
             guard case .httpError(let statusCode, _) = error else {
@@ -197,7 +201,10 @@ final class SyncReliabilityTests: XCTestCase {
             XCTAssertFalse(error.isAuthError)
         }
         XCTAssertEqual(tokenStore.csrfToken, "csrf-kept")
+        XCTAssertEqual(tokenStore.sessionExpiry, "2026-08-22T10:00:00.000Z")
         XCTAssertEqual(identityStore.load()?.userId, "user-a")
+        let snapshot = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+        XCTAssertEqual(snapshot.pendingMutations.map(\.clientMutationId), [pendingMutation.clientMutationId])
     }
 
     func testLive401ClearsCredentialsAndRequiresIdentityWipe() async throws {
@@ -205,21 +212,28 @@ final class SyncReliabilityTests: XCTestCase {
         tokenStore.clear()
         defer {
             tokenStore.clear()
-            URLProtocol.unregisterClass(StubURLProtocol.self)
         }
         tokenStore.saveCsrfToken("csrf-to-clear")
         tokenStore.saveSessionExpiry("2026-08-22T10:00:00.000Z")
         StubURLProtocol.response = .init(statusCode: 401, body: #"{"message":"Unauthorized"}"#)
-        _ = URLProtocol.registerClass(StubURLProtocol.self)
 
         do {
-            _ = try await LiveApiClient(baseURL: "https://finance-tests.invalid").sessionStatus()
+            _ = try await LiveApiClient(
+                baseURL: "https://finance-tests.invalid",
+                session: makeStubbedSession()
+            ).sessionStatus()
             XCTFail("Expected unauthorized")
         } catch {
             XCTAssertTrue(SessionRestorePolicy.isConfirmedInvalidIdentity(error))
         }
         XCTAssertNil(tokenStore.csrfToken)
         XCTAssertNil(tokenStore.sessionExpiry)
+    }
+
+    private func makeStubbedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        return URLSession(configuration: configuration)
     }
 
     func testNetworkColdStartPreservesPendingQueueThroughRealSyncService() async throws {

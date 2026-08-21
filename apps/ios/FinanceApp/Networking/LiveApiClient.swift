@@ -9,9 +9,17 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         self.init(baseURL: environment.apiBaseURL.absoluteString, tokenStore: tokenStore)
     }
 
-    init(baseURL: String = AppEnvironment.current.apiBaseURL.absoluteString, tokenStore: CSRFTokenStore = .shared) {
+    init(
+        baseURL: String = AppEnvironment.current.apiBaseURL.absoluteString,
+        tokenStore: CSRFTokenStore = .shared,
+        session: URLSession? = nil
+    ) {
         self.builder = RequestBuilder(baseURL: baseURL)
         self.tokenStore = tokenStore
+        if let session {
+            self.session = session
+            return
+        }
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpShouldSetCookies = true

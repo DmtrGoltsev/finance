@@ -256,6 +256,7 @@ protocol FinanceLocalStore: Sendable {
 }
 
 actor FileBackedFinanceLocalStore: FinanceLocalStore {
+    static let snapshotFileProtection = FileProtectionType.completeUntilFirstUserAuthentication
     static let snapshotWritingOptions: Data.WritingOptions = [
         .atomic,
         .completeFileProtectionUntilFirstUserAuthentication,
@@ -1177,7 +1178,7 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
 
     private func protectAndExcludeFromBackup(_ url: URL) throws {
         try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            [.protectionKey: Self.snapshotFileProtection],
             ofItemAtPath: url.path
         )
         var protectedURL = url
