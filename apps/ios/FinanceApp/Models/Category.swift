@@ -21,6 +21,8 @@ struct Category: Codable, Identifiable, Sendable {
     let version: Int?
 }
 
+typealias FinanceCategory = Category
+
 struct CategoryCreateRequest: Codable, Sendable {
     let name: String
     let type: CategoryType
