@@ -956,7 +956,7 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
         pendingMutationId: String? = nil
     ) -> LocalRecordMetadata {
         let now = Date().ISO8601Format()
-        LocalRecordMetadata(
+        return LocalRecordMetadata(
             entityType: entityType,
             entityId: entityId,
             serverVersion: version,
