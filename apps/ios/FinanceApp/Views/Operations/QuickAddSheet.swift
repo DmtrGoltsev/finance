@@ -129,7 +129,7 @@ struct QuickAddSheet: View {
                 .font(.caption)
                 .fontWeight(.medium)
             if accounts.isEmpty {
-                Text("Нет активных счетов в выбранном scope")
+                Text("Нет активных счетов")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {

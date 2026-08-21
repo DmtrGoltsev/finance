@@ -115,7 +115,6 @@ struct PlanningIncomeSourceCreateRequest: Codable, Sendable {
     let source: String
     let description: String?
     let dayOfMonth: Int
-    let effectiveDate: String?
 }
 
 struct PlanningIncomeSourceUpdateRequest: Codable, Sendable {
@@ -123,7 +122,6 @@ struct PlanningIncomeSourceUpdateRequest: Codable, Sendable {
     let source: String?
     let description: String?
     let dayOfMonth: Int?
-    let effectiveDate: String?
     let version: Int?
 }
 

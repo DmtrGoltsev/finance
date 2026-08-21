@@ -7,7 +7,7 @@ struct MonthExpenseCard: View {
         HStack(spacing: 12) {
             IconBubble(systemName: "receipt", color: FinanceColors.expense)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Расходы месяца \u{2022} \(view.scopeTitle)")
+                Text("Расходы месяца")
                     .font(.caption)
                 Text(MoneyHelpers.format(view.monthExpenses, currency: view.primaryCurrency))
                     .font(.title2)

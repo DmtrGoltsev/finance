@@ -40,11 +40,10 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
             tokenStore.saveSessionExpiry(expiry)
         }
         let actor = loginResp.actor
-        let householdId = actor?.memberships.first(where: { $0.status == "active" })?.householdId
         return SessionStatus(
             isAuthenticated: actor != nil,
             displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
-            householdId: householdId,
+            householdId: nil,
             userId: actor?.userId,
             sessionId: actor?.sessionId
         )
@@ -68,11 +67,10 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
            loginResp.csrfToken != nil, loginResp.actor != nil {
             tokenStore.saveCsrfToken(loginResp.csrfToken!)
             if let expiry = loginResp.expiresAt { tokenStore.saveSessionExpiry(expiry) }
-            let householdId = loginResp.actor?.memberships.first(where: { $0.status == "active" })?.householdId
             return .authenticated(SessionStatus(
                 isAuthenticated: true,
                 displayName: nil,
-                householdId: householdId,
+                householdId: nil,
                 userId: loginResp.actor?.userId,
                 sessionId: loginResp.actor?.sessionId
             ))
@@ -101,30 +99,44 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         var query = [String: String]()
         if let v = limit { query["limit"] = String(v) }
         if let v = cursor { query["cursor"] = v }
-        if let v = ownershipType { query["ownershipType"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
+        query["ownershipType"] = OwnershipType.personal.rawValue
         if let v = status { query["status"] = v.rawValue }
         if let v = q { query["q"] = v }
         if let v = sort { query["sort"] = v }
         let url = builder.makeURL(path: "/api/v1/accounts", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapPageEnvelope(Account.self, from: data)
+        let result = try ResponseParser.unwrapPageEnvelope(Account.self, from: data)
+        return (result.items.filter(isPersonalAccount), result.page)
     }
 
     func getAccount(accountId: String) async throws -> Account {
         let url = builder.makeURL(path: "/api/v1/accounts/\(accountId)")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        let account = try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        guard isPersonalAccount(account) else { throw FinanceApiError.notFound }
+        return account
     }
 
     func createAccount(_ request: AccountCreateRequest) async throws -> Account {
-        let body = try ResponseParser.encode(request)
+        let personalRequest = AccountCreateRequest(
+            name: request.name,
+            accountType: request.accountType,
+            ownershipType: .personal,
+            householdId: nil,
+            assetCategoryId: request.assetCategoryId,
+            currency: request.currency,
+            initialBalance: request.initialBalance,
+            isPaymentAccount: request.isPaymentAccount
+        )
+        let body = try ResponseParser.encode(personalRequest)
         let url = builder.makeURL(path: "/api/v1/accounts")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req, expectedCodes: [200, 201])
-        return try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        let account = try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        guard isPersonalAccount(account) else { throw FinanceApiError.notFound }
+        return account
     }
 
     func updateAccount(accountId: String, _ request: AccountUpdateRequest) async throws -> Account {
@@ -132,7 +144,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/accounts/\(accountId)")
         let req = builder.makeURLRequest(url: url, method: "PATCH", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        let account = try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        guard isPersonalAccount(account) else { throw FinanceApiError.notFound }
+        return account
     }
 
     func deleteAccount(accountId: String) async throws {
@@ -145,25 +159,29 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/accounts/\(accountId)/archive")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        let account = try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        guard isPersonalAccount(account) else { throw FinanceApiError.notFound }
+        return account
     }
 
     func restoreAccount(accountId: String) async throws -> Account {
         let url = builder.makeURL(path: "/api/v1/accounts/\(accountId)/restore")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        let account = try ResponseParser.unwrapDataEnvelope(Account.self, from: data)
+        guard isPersonalAccount(account) else { throw FinanceApiError.notFound }
+        return account
     }
 
     func autocompleteAccounts(q: String, limit: Int? = nil, ownershipType: OwnershipType? = nil, householdId: String? = nil) async throws -> [AccountAutocompleteItem] {
         var query = ["q": q]
         if let v = limit { query["limit"] = String(v) }
-        if let v = ownershipType { query["ownershipType"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
+        query["ownershipType"] = OwnershipType.personal.rawValue
         let url = builder.makeURL(path: "/api/v1/accounts/autocomplete", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
         return try ResponseParser.unwrapItemsOnly(AccountAutocompleteItem.self, from: data)
+            .filter { $0.ownershipType == .personal && $0.householdId == nil }
     }
 
     // MARK: - Asset Categories
@@ -172,30 +190,44 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         var query = [String: String]()
         if let v = limit { query["limit"] = String(v) }
         if let v = cursor { query["cursor"] = v }
-        if let v = scopeType { query["scopeType"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
+        query["scopeType"] = AssetCategoryScope.personal.rawValue
         if let v = recordStatus { query["recordStatus"] = v.rawValue }
         if let v = isInvestment { query["isInvestment"] = String(v) }
         if let v = q { query["q"] = v }
         let url = builder.makeURL(path: "/api/v1/asset-categories", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapPageEnvelope(AssetCategory.self, from: data)
+        let result = try ResponseParser.unwrapPageEnvelope(AssetCategory.self, from: data)
+        return (result.items.filter(isPersonalAssetCategory), result.page)
     }
 
     func getAssetCategory(assetCategoryId: String) async throws -> AssetCategory {
         let url = builder.makeURL(path: "/api/v1/asset-categories/\(assetCategoryId)")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        guard isPersonalAssetCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func createAssetCategory(_ request: AssetCategoryCreateRequest) async throws -> AssetCategory {
-        let body = try ResponseParser.encode(request)
+        let personalRequest = AssetCategoryCreateRequest(
+            name: request.name,
+            scopeType: .personal,
+            householdId: nil,
+            currency: request.currency,
+            assetType: request.assetType,
+            iconKey: request.iconKey,
+            manualAmount: request.manualAmount,
+            isInvestment: request.isInvestment
+        )
+        let body = try ResponseParser.encode(personalRequest)
         let url = builder.makeURL(path: "/api/v1/asset-categories")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req, expectedCodes: [200, 201])
-        return try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        guard isPersonalAssetCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func updateAssetCategory(assetCategoryId: String, _ request: AssetCategoryUpdateRequest) async throws -> AssetCategory {
@@ -203,7 +235,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/asset-categories/\(assetCategoryId)")
         let req = builder.makeURLRequest(url: url, method: "PATCH", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        guard isPersonalAssetCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func deleteAssetCategory(assetCategoryId: String) async throws {
@@ -216,14 +250,18 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/asset-categories/\(assetCategoryId)/archive")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        guard isPersonalAssetCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func restoreAssetCategory(assetCategoryId: String) async throws -> AssetCategory {
         let url = builder.makeURL(path: "/api/v1/asset-categories/\(assetCategoryId)/restore")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(AssetCategory.self, from: data)
+        guard isPersonalAssetCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     // MARK: - Transactions
@@ -235,8 +273,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         if let v = accountId { query["accountId"] = v }
         if let v = categoryId { query["categoryId"] = v }
         if let v = transactionType { query["transactionType"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
-        if let v = ownershipType { query["ownershipType"] = v.rawValue }
+        query["ownershipType"] = OwnershipType.personal.rawValue
         if let v = startDate { query["startDate"] = v }
         if let v = endDate { query["endDate"] = v }
         if let v = status { query["status"] = v.rawValue }
@@ -245,17 +282,29 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/transactions", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapPageEnvelope(Transaction.self, from: data)
+        let result = try ResponseParser.unwrapPageEnvelope(Transaction.self, from: data)
+        return (result.items, result.page)
     }
 
     func getTransaction(transactionId: String) async throws -> Transaction {
         let url = builder.makeURL(path: "/api/v1/transactions/\(transactionId)")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(Transaction.self, from: data)
+        let transaction = try ResponseParser.unwrapDataEnvelope(Transaction.self, from: data)
+        try await validatePersonalTransactionReferences(
+            accountId: transaction.accountId,
+            counterpartyAccountId: transaction.counterpartyAccountId,
+            categoryId: transaction.categoryId
+        )
+        return transaction
     }
 
     func createTransaction(_ request: TransactionCreateRequest) async throws -> Transaction {
+        try await validatePersonalTransactionReferences(
+            accountId: request.accountId,
+            counterpartyAccountId: request.counterpartyAccountId,
+            categoryId: request.categoryId
+        )
         let body = try ResponseParser.encode(request)
         let url = builder.makeURL(path: "/api/v1/transactions")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
@@ -264,6 +313,14 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     func updateTransaction(transactionId: String, _ request: TransactionUpdateRequest) async throws -> Transaction {
+        if request.accountId != nil || request.counterpartyAccountId != nil || request.categoryId != nil {
+            let current = try await getTransaction(transactionId: transactionId)
+            try await validatePersonalTransactionReferences(
+                accountId: request.accountId ?? current.accountId,
+                counterpartyAccountId: request.counterpartyAccountId ?? current.counterpartyAccountId,
+                categoryId: request.categoryId ?? current.categoryId
+            )
+        }
         let body = try ResponseParser.encode(request)
         let url = builder.makeURL(path: "/api/v1/transactions/\(transactionId)")
         let req = builder.makeURLRequest(url: url, method: "PATCH", body: body, csrfToken: csrfToken)
@@ -290,31 +347,43 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         var query = [String: String]()
         if let v = limit { query["limit"] = String(v) }
         if let v = cursor { query["cursor"] = v }
-        if let v = scope { query["scope"] = v.rawValue }
+        query["scope"] = CategoryScope.personal.rawValue
         if let v = type { query["type"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
         if let v = status { query["status"] = v.rawValue }
         if let v = q { query["q"] = v }
         if let v = sort { query["sort"] = v }
         let url = builder.makeURL(path: "/api/v1/categories", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapPageEnvelope(Category.self, from: data)
+        let result = try ResponseParser.unwrapPageEnvelope(Category.self, from: data)
+        return (result.items.filter(isPersonalCategory), result.page)
     }
 
     func getCategory(categoryId: String) async throws -> Category {
         let url = builder.makeURL(path: "/api/v1/categories/\(categoryId)")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        guard isPersonalCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func createCategory(_ request: CategoryCreateRequest) async throws -> Category {
-        let body = try ResponseParser.encode(request)
+        let personalRequest = CategoryCreateRequest(
+            name: request.name,
+            type: request.type,
+            scope: .personal,
+            householdId: nil,
+            iconKey: request.iconKey,
+            color: request.color
+        )
+        let body = try ResponseParser.encode(personalRequest)
         let url = builder.makeURL(path: "/api/v1/categories")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req, expectedCodes: [200, 201])
-        return try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        guard isPersonalCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func updateCategory(categoryId: String, _ request: CategoryUpdateRequest) async throws -> Category {
@@ -322,7 +391,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/categories/\(categoryId)")
         let req = builder.makeURLRequest(url: url, method: "PATCH", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        guard isPersonalCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func deleteCategory(categoryId: String) async throws {
@@ -335,26 +406,30 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/categories/\(categoryId)/archive")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        guard isPersonalCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func restoreCategory(categoryId: String) async throws -> Category {
         let url = builder.makeURL(path: "/api/v1/categories/\(categoryId)/restore")
         let req = builder.makeURLRequest(url: url, method: "POST", csrfToken: csrfToken)
         let data = try await performRequest(req)
-        return try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        let category = try ResponseParser.unwrapDataEnvelope(Category.self, from: data)
+        guard isPersonalCategory(category) else { throw FinanceApiError.notFound }
+        return category
     }
 
     func autocompleteCategories(q: String, limit: Int? = nil, scope: CategoryScope? = nil, type: CategoryType? = nil, householdId: String? = nil) async throws -> [CategoryAutocompleteItem] {
         var query = ["q": q]
         if let v = limit { query["limit"] = String(v) }
-        if let v = scope { query["scope"] = v.rawValue }
+        query["scope"] = CategoryScope.personal.rawValue
         if let v = type { query["type"] = v.rawValue }
-        if let v = householdId { query["householdId"] = v }
         let url = builder.makeURL(path: "/api/v1/categories/autocomplete", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
         return try ResponseParser.unwrapItemsOnly(CategoryAutocompleteItem.self, from: data)
+            .filter { $0.scope == .personal && $0.householdId == nil }
     }
 
     // MARK: - Capture Drafts
@@ -402,7 +477,6 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/capture-drafts/screenshot-ocr")
         var fields = [String: String]()
         if let v = capturedAt { fields["capturedAt"] = v }
-        if let v = householdId { fields["householdId"] = v }
         let req = builder.makeMultipartRequest(
             url: url, fields: fields, fileData: imageData,
             fileName: "screenshot.jpg", contentType: contentType,
@@ -413,8 +487,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     func putCategoryMapping(externalLabel: String, categoryId: String, householdId: String?) async throws -> CategoryMappingResult {
-        var body: [String: String] = ["externalLabel": externalLabel, "categoryId": categoryId]
-        if let v = householdId { body["householdId"] = v }
+        let body: [String: String] = ["externalLabel": externalLabel, "categoryId": categoryId]
         let bodyData = try ResponseParser.encode(body)
         let url = builder.makeURL(path: "/api/v1/capture-drafts/category-mappings")
         let req = builder.makeURLRequest(url: url, method: "PUT", body: bodyData, csrfToken: csrfToken)
@@ -437,7 +510,12 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/reports/category-breakdown", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(ReportCategoryBreakdown.self, from: data)
+        let report = try ResponseParser.unwrapDataEnvelope(ReportCategoryBreakdown.self, from: data)
+        return ReportCategoryBreakdown(
+            scope: report.scope,
+            period: report.period,
+            items: report.items.filter { $0.categoryScope != .household }
+        )
     }
 
     func getReportAccountBalances(reportMode: ReportMode, householdId: String? = nil, startDate: String, endDate: String, timezone: String, accountIds: [String]? = nil, currency: CurrencyCode? = nil) async throws -> ReportAccountBalances {
@@ -445,7 +523,19 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/reports/account-balances", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(ReportAccountBalances.self, from: data)
+        let report = try ResponseParser.unwrapDataEnvelope(ReportAccountBalances.self, from: data)
+        return ReportAccountBalances(
+            scope: report.scope,
+            asOfDate: report.asOfDate,
+            timezone: report.timezone,
+            items: report.items.filter { $0.ownershipType == .personal && $0.householdId == nil },
+            balanceGroups: report.balanceGroups,
+            assetsByType: report.assetsByType,
+            assetCategoryGroups: report.assetCategoryGroups.filter { $0.scopeType == .personal && $0.householdId == nil },
+            legacyAssetTypeGroups: report.legacyAssetTypeGroups,
+            totalsByCurrency: report.totalsByCurrency,
+            investmentsByCurrency: report.investmentsByCurrency
+        )
     }
 
     func getReportCashFlow(reportMode: ReportMode, householdId: String? = nil, startDate: String, endDate: String, timezone: String, bucket: ReportBucket? = nil, accountIds: [String]? = nil, categoryIds: [String]? = nil, transactionTypes: [TransactionType]? = nil, currency: CurrencyCode? = nil) async throws -> ReportCashFlow {
@@ -465,19 +555,29 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/reports/transactions", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(ReportTransactionDrillDown.self, from: data)
+        let report = try ResponseParser.unwrapDataEnvelope(ReportTransactionDrillDown.self, from: data)
+        let personalAccountIds = try await personalAccountIdsForFiltering()
+        return ReportTransactionDrillDown(
+            scope: report.scope,
+            period: report.period,
+            items: report.items.filter { transaction in
+                personalAccountIds.contains(transaction.accountId) &&
+                transaction.counterpartyAccountId.map(personalAccountIds.contains) != false
+            },
+            page: report.page
+        )
     }
 
     // MARK: - Planning
 
     func getPlanningPlan(scope: PlanningScope, month: String, householdId: String? = nil) async throws -> PlanningPlan? {
-        var query = ["scope": scope.rawValue, "month": month]
-        if let v = householdId { query["householdId"] = v }
+        let query = ["scope": PlanningScope.personal.rawValue, "month": month]
         let url = builder.makeURL(path: "/api/v1/planning/plans", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         do {
             let data = try await performRequest(request, expectedCodes: [200, 404])
-            if let plan = try? ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data) {
+            if let plan = try? ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data),
+               plan.scope == .personal, plan.householdId == nil {
                 return plan
             }
             return nil
@@ -488,27 +588,37 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     func listPlanningPlanHistory(scope: PlanningScope, householdId: String? = nil) async throws -> [PlanningPlan] {
-        var query = ["scope": scope.rawValue]
-        if let v = householdId { query["householdId"] = v }
+        let query = ["scope": PlanningScope.personal.rawValue]
         let url = builder.makeURL(path: "/api/v1/planning/plans/history", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
         return try ResponseParser.unwrapItemsOnly(PlanningPlan.self, from: data)
+            .filter { $0.scope == .personal && $0.householdId == nil }
     }
 
     func createPlanningPlan(_ request: PlanningPlanCreateRequest) async throws -> PlanningPlan {
-        let body = try ResponseParser.encode(request)
+        let personalRequest = PlanningPlanCreateRequest(
+            scope: .personal,
+            month: request.month,
+            currency: request.currency,
+            householdId: nil
+        )
+        let body = try ResponseParser.encode(personalRequest)
         let url = builder.makeURL(path: "/api/v1/planning/plans")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req, expectedCodes: [200, 201])
-        return try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        let plan = try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        guard plan.scope == .personal && plan.householdId == nil else { throw FinanceApiError.notFound }
+        return plan
     }
 
     func getPlanningPlan(planId: String) async throws -> PlanningPlan {
         let url = builder.makeURL(path: "/api/v1/planning/plans/\(planId)")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        let plan = try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        guard plan.scope == .personal && plan.householdId == nil else { throw FinanceApiError.notFound }
+        return plan
     }
 
     func copyPlanningPlan(planId: String, _ request: PlanningPlanCopyRequest) async throws -> PlanningPlan {
@@ -516,7 +626,9 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let url = builder.makeURL(path: "/api/v1/planning/plans/\(planId)/copy")
         let req = builder.makeURLRequest(url: url, method: "POST", body: body, csrfToken: csrfToken)
         let data = try await performRequest(req, expectedCodes: [200, 201])
-        return try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        let plan = try ResponseParser.unwrapDataEnvelope(PlanningPlan.self, from: data)
+        guard plan.scope == .personal && plan.householdId == nil else { throw FinanceApiError.notFound }
+        return plan
     }
 
     func createPlanningIncomeSource(planId: String, _ request: PlanningIncomeSourceCreateRequest) async throws -> PlanningIncomeSource {
@@ -603,36 +715,57 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
 
         let (accounts, _) = try await accountsResult
         let (categories, _) = try await categoriesResult
-        let (transactions, _) = try await transactionsResult
+        let personalAccountIds = Set(accounts.map(\.id))
+        let (loadedTransactions, _) = try await transactionsResult
+        let transactions = loadedTransactions.filter { transaction in
+            personalAccountIds.contains(transaction.accountId) &&
+            transaction.counterpartyAccountId.map(personalAccountIds.contains) != false
+        }
         let assetCategories = (try? await assetCategoriesResult.0) ?? []
 
         let currency = accounts.first?.currency ?? .RUB
-        let reportMode: ReportMode = sessionStatus.householdId != nil ? .combined_viewer_overview : .personal
-
         let reportQuery: [String: String] = [
-            "reportMode": reportMode.rawValue,
+            "reportMode": ReportMode.personal.rawValue,
             "startDate": startDate ?? "",
             "endDate": endDate ?? "",
             "timezone": TimeZone.current.identifier,
             "currency": currency.rawValue,
         ].merging(dateQuery) { _, new in new }
 
-        let totals = (try? await fetchTotals(reportQuery: reportQuery)) ?? []
-        let balancesData = try? await fetchAccountBalances(reportQuery: reportQuery)
+        let reportSummary = try? await getReportSummary(
+            reportMode: .personal,
+            householdId: nil,
+            startDate: startDate ?? "",
+            endDate: endDate ?? "",
+            timezone: TimeZone.current.identifier,
+            accountIds: nil,
+            categoryIds: nil,
+            transactionTypes: nil,
+            currency: currency
+        )
+        let totals = reportSummary?.totalsByCurrency ?? []
+        let balancesData = try? await getReportAccountBalances(
+            reportMode: .personal,
+            householdId: nil,
+            startDate: startDate ?? "",
+            endDate: endDate ?? "",
+            timezone: TimeZone.current.identifier,
+            accountIds: nil,
+            currency: currency
+        )
 
         let assetCategoryGroups = balancesData?.assetCategoryGroups ?? []
-        let investmentsByCurrency = balancesData?.investmentsByCurrency.map { MoneyAmount(currency: $0.currency, amount: $0.investmentsTotal) } ?? []
-        let investmentsTotal = balancesData?.totalsByCurrency.first.map { MoneyAmount(currency: $0.currency, amount: $0.netWorthTotal) }
-
-        let reportTransferCount: Int
-        if let householdId = sessionStatus.householdId {
-            var txQuery = reportQuery
-            txQuery["householdId"] = householdId
-            txQuery["transactionTypes"] = "transfer"
-            reportTransferCount = (try? await fetchTransferCount(query: txQuery)) ?? 0
-        } else {
-            reportTransferCount = 0
+        let investmentsByCurrency = totals.compactMap { total in
+            total.investmentsTotal.map { MoneyAmount(currency: total.currency, amount: $0) }
         }
+        let investmentsTotal = totals
+            .first(where: { $0.currency == currency })?
+            .investmentsTotal
+            .map { MoneyAmount(currency: currency, amount: $0) }
+
+        var txQuery = reportQuery
+        txQuery["transactionTypes"] = "transfer"
+        let reportTransferCount = (try? await fetchTransferCount(query: txQuery)) ?? 0
 
         let dashboard = FinanceDashboard()
         dashboard.session = sessionStatus
@@ -705,11 +838,10 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         } else {
             actor = nil
         }
-        let householdId = actor?.memberships.first(where: { $0.status == "active" })?.householdId
         return SessionStatus(
             isAuthenticated: actor != nil,
             displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
-            householdId: householdId,
+            householdId: nil,
             userId: actor?.userId,
             sessionId: actor?.sessionId
         )
@@ -717,12 +849,11 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
 
     private func reportQuery(reportMode: ReportMode, householdId: String? = nil, startDate: String, endDate: String, timezone: String, accountIds: [String]? = nil, categoryIds: [String]? = nil, transactionTypes: [TransactionType]? = nil, currency: CurrencyCode? = nil) -> [String: String] {
         var query = [
-            "reportMode": reportMode.rawValue,
+            "reportMode": ReportMode.personal.rawValue,
             "startDate": startDate,
             "endDate": endDate,
             "timezone": timezone,
         ]
-        if let v = householdId { query["householdId"] = v }
         if let v = accountIds { query["accountIds"] = v.joined(separator: ",") }
         if let v = categoryIds { query["categoryIds"] = v.joined(separator: ",") }
         if let v = transactionTypes { query["transactionTypes"] = v.map(\.rawValue).joined(separator: ",") }
@@ -751,5 +882,44 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let data = try await performRequest(request)
         let drill = try ResponseParser.unwrapDataEnvelope(ReportTransactionDrillDown.self, from: data)
         return drill.items.count
+    }
+
+    private func personalAccountIdsForFiltering() async throws -> Set<String> {
+        let (accounts, _) = try await listAccounts(
+            limit: 500,
+            cursor: nil,
+            ownershipType: .personal,
+            householdId: nil,
+            status: nil,
+            q: nil,
+            sort: nil
+        )
+        return Set(accounts.map(\.id))
+    }
+
+    private func isPersonalAccount(_ account: Account) -> Bool {
+        account.ownershipType == .personal && account.householdId == nil
+    }
+
+    private func isPersonalCategory(_ category: Category) -> Bool {
+        category.scope == .personal && category.householdId == nil
+    }
+
+    private func isPersonalAssetCategory(_ category: AssetCategory) -> Bool {
+        category.scopeType == .personal && category.householdId == nil
+    }
+
+    private func validatePersonalTransactionReferences(
+        accountId: String,
+        counterpartyAccountId: String?,
+        categoryId: String?
+    ) async throws {
+        _ = try await getAccount(accountId: accountId)
+        if let counterpartyAccountId {
+            _ = try await getAccount(accountId: counterpartyAccountId)
+        }
+        if let categoryId {
+            _ = try await getCategory(categoryId: categoryId)
+        }
     }
 }

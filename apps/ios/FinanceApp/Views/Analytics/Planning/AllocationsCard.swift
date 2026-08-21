@@ -3,7 +3,6 @@ import SwiftUI
 struct AllocationsCard: View {
     let plan: PlanningPlan
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
     let isLoading: Bool
     let onCreate: (PlanningAllocationCreateRequest) async -> Void
     let onUpdate: (PlanningAllocation, PlanningAllocationUpdateRequest) async -> Void
@@ -13,14 +12,12 @@ struct AllocationsCard: View {
 
     private var categories: [Category] {
         (dashboard?.categories ?? [])
-            .filter { $0.status == .active && $0.type == .expense }
-            .filteredByPlanningMode(selectedMode, householdId: dashboard?.session.householdId)
+            .filter { $0.status == .active && $0.type == .expense && $0.scope == .personal }
     }
 
     private var investments: [AssetCategory] {
         (dashboard?.assetCategories ?? [])
-            .filter { $0.recordStatus == .active && $0.isInvestment }
-            .filteredByPlanningMode(selectedMode, householdId: dashboard?.session.householdId)
+            .filter { $0.recordStatus == .active && $0.isInvestment && $0.scopeType == .personal }
     }
 
     private var usedTargetIds: Set<String> {
@@ -66,13 +63,13 @@ struct AllocationsCard: View {
             .disabled(!canCreate)
 
             if !canCreate {
-                Text("Чтобы добавить распределение, выберите цель текущего режима и укажите сумму или процент.")
+                Text("Чтобы добавить распределение, выберите цель и укажите сумму или процент.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
             if plan.allocations.isEmpty {
-                Text("В плане \(localizedPlanningScope(plan.scope)) пока нет распределений. Добавьте расходную или инвестиционную цель.")
+                Text("В плане пока нет распределений. Добавьте расходную или инвестиционную цель.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             } else {
@@ -94,7 +91,6 @@ struct AllocationsCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
-
 struct PlanningTargetOption: Identifiable {
     let id: String
     let title: String
@@ -148,29 +144,5 @@ struct PlanningAllocationDraft {
             goalDueMonth: savingsEnabled ? goalDueMonth : nil,
             version: version
         )
-    }
-}
-
-private extension Array where Element == Category {
-    func filteredByPlanningMode(_ mode: FinanceMode, householdId: String?) -> [Category] {
-        filter { cat in
-            switch mode {
-            case .personal: return cat.scope != .household
-            case .shared: return cat.scope == .household && cat.householdId == householdId
-            case .overview: return true
-            }
-        }
-    }
-}
-
-private extension Array where Element == AssetCategory {
-    func filteredByPlanningMode(_ mode: FinanceMode, householdId: String?) -> [AssetCategory] {
-        filter { cat in
-            switch mode {
-            case .personal: return cat.scopeType != .household
-            case .shared: return cat.scopeType == .household && cat.householdId == householdId
-            case .overview: return true
-            }
-        }
     }
 }

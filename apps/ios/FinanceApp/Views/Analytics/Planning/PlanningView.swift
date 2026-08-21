@@ -2,8 +2,6 @@ import SwiftUI
 
 struct PlanningView: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
     let syncService: FinanceSyncService
     let localScope: LocalStoreScope?
@@ -16,84 +14,73 @@ struct PlanningView: View {
     @State private var message: String?
 
     private var boundedMonth: String { coercePlanningMonth(month) }
-    private var resolvedScope: PlanningScopeInfo? { selectedMode.toPlanningScope(dashboard?.session.householdId) }
-    private var currency: CurrencyCode { planningCurrency(dashboard, mode: selectedMode) }
+    private let planningScope: PlanningScope = .personal
+    private var currency: CurrencyCode { planningCurrency(dashboard) }
 
     var body: some View {
         VStack(spacing: 12) {
             PlanningScopeCard(
-                selectedMode: selectedMode,
-                hasHousehold: !(dashboard?.session.householdId?.isEmpty ?? true),
                 month: boundedMonth,
                 currency: currency,
-                onModeSelected: onModeSelected,
                 onMonthSelected: { month = coercePlanningMonth($0) }
             )
 
-            if selectedMode == .overview {
-                PlanningOverviewGate(onModeSelected: onModeSelected)
-            } else if resolvedScope == nil {
-                PlanningMessageCard(text: "Общее планирование недоступно без активного общего бюджета. Выберите Личное или подключите общий бюджет.")
-            } else {
-                if let msg = message, !msg.isEmpty {
-                    PlanningMessageCard(text: msg)
-                }
+            if let msg = message, !msg.isEmpty {
+                PlanningMessageCard(text: msg)
+            }
 
-                PlanningPlanCard(
-                    plan: plan,
-                    month: boundedMonth,
+            PlanningPlanCard(
+                plan: plan,
+                month: boundedMonth,
+                currency: currency,
+                isLoading: isLoading,
+                onRefresh: { await loadPlanningState() },
+                onCreatePlan: { await createPlan() }
+            )
+
+            if let currentPlan = plan {
+                IncomeSourcesCard(
+                    plan: currentPlan,
                     currency: currency,
                     isLoading: isLoading,
-                    onRefresh: { await loadPlanningState() },
-                    onCreatePlan: { await createPlan() }
+                    onCreate: { request in await createIncomeSource(planId: currentPlan.id, request: request) },
+                    onUpdate: { source, request in await updateIncomeSource(source: source, request: request) },
+                    onConfirm: { source in await confirmIncomeSource(source: source) },
+                    onDelete: { source in await deleteIncomeSource(source: source) }
                 )
 
-                if let currentPlan = plan {
-                    IncomeSourcesCard(
-                        plan: currentPlan,
-                        currency: currency,
-                        isLoading: isLoading,
-                        onCreate: { request in await createIncomeSource(planId: currentPlan.id, request: request) },
-                        onUpdate: { source, request in await updateIncomeSource(source: source, request: request) },
-                        onConfirm: { source in await confirmIncomeSource(source: source) },
-                        onDelete: { source in await deleteIncomeSource(source: source) }
-                    )
-
-                    AllocationsCard(
-                        plan: currentPlan,
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        isLoading: isLoading,
-                        onCreate: { request in await createAllocation(planId: currentPlan.id, request: request) },
-                        onUpdate: { allocation, request in await updateAllocation(allocation: allocation, request: request) },
-                        onDelete: { allocation in await deleteAllocation(allocation: allocation) }
-                    )
-                }
-
-                PlanningHistoryCard(
-                    history: history,
-                    currentMonth: boundedMonth,
+                AllocationsCard(
+                    plan: currentPlan,
+                    dashboard: dashboard,
                     isLoading: isLoading,
-                    onCopy: { historyPlan in await copyPlan(historyPlan) }
+                    onCreate: { request in await createAllocation(planId: currentPlan.id, request: request) },
+                    onUpdate: { allocation, request in await updateAllocation(allocation: allocation, request: request) },
+                    onDelete: { allocation in await deleteAllocation(allocation: allocation) }
                 )
             }
+
+            PlanningHistoryCard(
+                history: history,
+                currentMonth: boundedMonth,
+                isLoading: isLoading,
+                onCopy: { historyPlan in await copyPlan(historyPlan) }
+            )
         }
         .onChange(of: boundedMonth) { _, _ in Task { await loadPlanningState() } }
         .task { await loadPlanningState() }
     }
 
     private func loadPlanningState(successMessage: String? = nil) async {
-        guard let scope = resolvedScope else { return }
         isLoading = true
         message = nil
         do {
-            let fetched = try await apiClient.getPlanningPlan(scope: scope.apiScope, month: boundedMonth, householdId: scope.householdId)
+            let fetched = try await apiClient.getPlanningPlan(scope: planningScope, month: boundedMonth, householdId: nil)
             if let fetched = fetched {
                 plan = try await apiClient.getPlanningPlan(planId: fetched.id)
             } else {
                 plan = nil
             }
-            history = (try? await apiClient.listPlanningPlanHistory(scope: scope.apiScope, householdId: scope.householdId)) ?? []
+            history = (try? await apiClient.listPlanningPlanHistory(scope: planningScope, householdId: nil)) ?? []
             message = successMessage
         } catch {
             if OfflineMutationFallback.canQueue(after: error) {
@@ -107,8 +94,7 @@ struct PlanningView: View {
     }
 
     private func createPlan() async {
-        guard let scope = resolvedScope else { return }
-        let request = PlanningPlanCreateRequest(scope: scope.apiScope, month: boundedMonth, currency: currency, householdId: scope.householdId)
+        let request = PlanningPlanCreateRequest(scope: planningScope, month: boundedMonth, currency: currency, householdId: nil)
         isLoading = true
         do {
             _ = try await apiClient.createPlanningPlan(request)
@@ -380,7 +366,7 @@ struct PlanningView: View {
             request: payload,
             planId: planId,
             month: plan?.month ?? boundedMonth,
-            planningScope: plan?.scope ?? resolvedScope?.apiScope
+            planningScope: .personal
         )
     }
 
@@ -399,7 +385,7 @@ struct PlanningView: View {
             baseVersion: baseVersion,
             planId: planId,
             month: plan?.month ?? boundedMonth,
-            planningScope: plan?.scope ?? resolvedScope?.apiScope
+            planningScope: .personal
         )
     }
 
@@ -409,7 +395,7 @@ struct PlanningView: View {
             scope: request.scope,
             month: request.month,
             currency: request.currency,
-            householdId: request.householdId,
+            householdId: nil,
             summary: planningSummary(incomeSources: [], allocations: [], previousMonthSurplus: "0"),
             incomeSources: [],
             allocations: [],
@@ -425,7 +411,7 @@ struct PlanningView: View {
             source: request.source,
             description: request.description,
             dayOfMonth: request.dayOfMonth,
-            effectiveDate: request.effectiveDate,
+            effectiveDate: planningEffectiveDate(month: plan?.month ?? boundedMonth, day: request.dayOfMonth),
             confirmationState: .planned,
             confirmedAt: nil,
             version: nil
@@ -440,7 +426,10 @@ struct PlanningView: View {
             source: request.source ?? source.source,
             description: request.description ?? source.description,
             dayOfMonth: request.dayOfMonth ?? source.dayOfMonth,
-            effectiveDate: request.effectiveDate ?? source.effectiveDate,
+            effectiveDate: planningEffectiveDate(
+                month: plan?.month ?? boundedMonth,
+                day: request.dayOfMonth ?? source.dayOfMonth
+            ),
             confirmationState: source.confirmationState,
             confirmedAt: source.confirmedAt,
             version: source.version
@@ -553,7 +542,6 @@ struct PlanningView: View {
     }
 
     private func localPlanningPlan(from snapshot: FinanceLocalSnapshot) -> PlanningPlan? {
-        guard let planningScope = resolvedScope?.apiScope else { return nil }
         let tombstonedPlans = tombstonedIds(in: snapshot, entityType: .planningPlans)
         let localPlan = snapshot.planningPlans
             .map(\.entity)
@@ -574,7 +562,6 @@ struct PlanningView: View {
     }
 
     private func localPlanningHistory(from snapshot: FinanceLocalSnapshot) -> [PlanningPlan] {
-        guard let planningScope = resolvedScope?.apiScope else { return history }
         let tombstonedPlans = tombstonedIds(in: snapshot, entityType: .planningPlans)
         let localPlans = snapshot.planningPlans
             .map(\.entity)
@@ -608,7 +595,7 @@ struct PlanningView: View {
             scope: current.scope,
             month: current.month,
             currency: current.currency,
-            householdId: current.householdId,
+            householdId: nil,
             summary: planningSummary(
                 incomeSources: incomeSources,
                 allocations: allocations,
@@ -661,25 +648,8 @@ struct PlanningView: View {
     }
 }
 
-private struct PlanningScopeInfo {
-    let apiScope: PlanningScope
-    let householdId: String?
-}
-
-private extension FinanceMode {
-    func toPlanningScope(_ householdId: String?) -> PlanningScopeInfo? {
-        switch self {
-        case .personal: return PlanningScopeInfo(apiScope: .personal, householdId: nil)
-        case .shared:
-            guard let hhId = householdId, !hhId.isEmpty else { return nil }
-            return PlanningScopeInfo(apiScope: .household, householdId: hhId)
-        case .overview: return nil
-        }
-    }
-}
-
-private func planningCurrency(_ dashboard: FinanceDashboard?, mode: FinanceMode) -> CurrencyCode {
-    let accounts = dashboard?.viewFor(mode).visibleAccounts ?? []
+private func planningCurrency(_ dashboard: FinanceDashboard?) -> CurrencyCode {
+    let accounts = dashboard?.personalAccounts ?? []
     return accounts.first?.currency
         ?? dashboard?.totals.first?.currency
         ?? .RUB
@@ -708,11 +678,16 @@ func localizedPlanningMonth(_ ym: String) -> String {
     DateHelpers.displayMonth(ym)
 }
 
-func localizedPlanningScope(_ scope: PlanningScope) -> String {
-    switch scope {
-    case .personal: return "Личное"
-    case .household: return "Общее"
+private func planningEffectiveDate(month: String, day: Int) -> String? {
+    let parts = month.split(separator: "-")
+    guard parts.count == 2,
+          let year = Int(parts[0]),
+          let monthNumber = Int(parts[1]),
+          let firstDay = Calendar.current.date(from: DateComponents(year: year, month: monthNumber, day: 1)),
+          let dayRange = Calendar.current.range(of: .day, in: .month, for: firstDay) else {
+        return nil
     }
+    return String(format: "%04d-%02d-%02d", year, monthNumber, min(max(day, 1), dayRange.count))
 }
 
 func localizedTargetType(_ type: AllocationTargetType) -> String {
@@ -769,31 +744,6 @@ struct PlanningMessageCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(UIColor.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-struct PlanningOverviewGate: View {
-    let onModeSelected: (FinanceMode) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Обзор не создаёт единый план")
-                .font(.headline)
-            Text("Планирование работает в одном режиме. Выберите личный или общий план, чтобы не смешивать бюджеты.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            HStack(spacing: 8) {
-                Button("Личное") { onModeSelected(.personal) }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-                Button("Общее") { onModeSelected(.shared) }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(16)
-        .background(Color(UIColor.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

@@ -320,8 +320,18 @@ actor FinanceSyncService {
     }
 
     private func pushPending(scope: LocalStoreScope, deviceId: String, limit: Int) async throws -> SyncPushSummary {
-        let pending = try await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)
-        guard !pending.isEmpty else { return SyncPushSummary() }
+        let loadedPending = try await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)
+        let blocked = loadedPending.filter { !isPersonalOnlyMutation($0) }
+        for mutation in blocked {
+            try await localStore.markRejected(
+                scope: scope,
+                deviceId: deviceId,
+                mutationId: mutation.clientMutationId,
+                issue: personalOnlyRejection(for: mutation)
+            )
+        }
+        let pending = loadedPending.filter(isPersonalOnlyMutation)
+        guard !pending.isEmpty else { return SyncPushSummary(rejected: blocked.count) }
 
         for mutation in pending {
             try await localStore.recordAttempt(scope: scope, deviceId: deviceId, mutationId: mutation.clientMutationId)
@@ -331,7 +341,7 @@ actor FinanceSyncService {
             SyncPushRequest(deviceId: deviceId, mutations: pending.map { $0.toSyncMutationRequest() })
         )
 
-        var summary = SyncPushSummary(pushed: pending.count)
+        var summary = SyncPushSummary(pushed: pending.count, rejected: blocked.count)
         let mutationsById = Dictionary(uniqueKeysWithValues: pending.map { ($0.clientMutationId, $0) })
         for result in response.results {
             guard let mutation = mutationsById[result.clientMutationId] else { continue }
@@ -374,7 +384,66 @@ actor FinanceSyncService {
                 entityTypes: entityTypes
             )
         )
-        try await localStore.applyPullResponse(scope: scope, deviceId: deviceId, response: response)
-        return response
+        let personalResponse = SyncPullResponse(
+            changes: response.changes.filter(isPersonalOnlyChange),
+            nextCursor: response.nextCursor,
+            hasMore: response.hasMore,
+            serverTime: response.serverTime
+        )
+        try await localStore.applyPullResponse(scope: scope, deviceId: deviceId, response: personalResponse)
+        return personalResponse
+    }
+
+    private func isPersonalOnlyMutation(_ mutation: PendingMutation) -> Bool {
+        guard let payload = mutation.payload else { return true }
+        return isPersonalOnlyPayload(payload, entityType: mutation.entityType)
+    }
+
+    private func isPersonalOnlyChange(_ change: SyncChange) -> Bool {
+        guard let payload = change.payload else { return true }
+        return isPersonalOnlyPayload(payload, entityType: change.entityType)
+    }
+
+    private func isPersonalOnlyPayload(
+        _ payload: [String: SyncJSONValue],
+        entityType: SyncEntityType
+    ) -> Bool {
+        let hasNoHousehold = payload["householdId"] == nil || payload["householdId"] == .null
+        switch entityType {
+        case .accounts:
+            return hasNoHousehold && stringValue(payload["ownershipType"]).map { $0 == OwnershipType.personal.rawValue } != false
+        case .categories:
+            return hasNoHousehold && stringValue(payload["scope"]).map { $0 == CategoryScope.personal.rawValue } != false
+        case .assetCategories:
+            return hasNoHousehold && stringValue(payload["scopeType"]).map { $0 == AssetCategoryScope.personal.rawValue } != false
+        case .planningPlans:
+            return hasNoHousehold && stringValue(payload["scope"]).map { $0 == PlanningScope.personal.rawValue } != false
+        case .transactions, .investmentMigrations, .planningIncomeSources, .planningAllocations:
+            return hasNoHousehold
+        }
+    }
+
+    private func stringValue(_ value: SyncJSONValue?) -> String? {
+        guard case .string(let string)? = value else { return nil }
+        return string
+    }
+
+    private func personalOnlyRejection(for mutation: PendingMutation) -> SyncIssue {
+        let now = Date().ISO8601Format()
+        return SyncIssue(
+            id: "issue-\(mutation.clientMutationId)",
+            mutationId: mutation.clientMutationId,
+            entityType: mutation.entityType,
+            entityId: mutation.entityId,
+            operation: mutation.operation,
+            status: .rejected,
+            decision: .editOrDiscardOnly,
+            title: "Изменение не синхронизировано",
+            safeDescription: "Приложение ведёт только личные финансы. Старое изменение другого типа можно удалить и создать заново.",
+            errorCode: "PERSONAL_ONLY_SCOPE",
+            attempts: mutation.attemptCount,
+            createdAt: now,
+            updatedAt: now
+        )
     }
 }

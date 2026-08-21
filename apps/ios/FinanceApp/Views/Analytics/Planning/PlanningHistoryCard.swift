@@ -28,7 +28,7 @@ struct PlanningHistoryCard: View {
                                 Text(localizedPlanningMonth(plan.month))
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                Text("\(localizedPlanningScope(plan.scope)) • \(plan.currency.rawValue)")
+                                Text(plan.currency.rawValue)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

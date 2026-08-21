@@ -489,7 +489,7 @@ struct FinanceAppView: View {
         guard let scope = currentLocalScope, let dashboard else { return }
         do {
             let snapshot = try await syncService.localSnapshot(scope: scope)
-            dashboard.transactions = mergedEntities(
+            let mergedTransactions = mergedEntities(
                 existing: dashboard.transactions,
                 localRecords: snapshot.transactions,
                 tombstones: snapshot.tombstones,
@@ -500,19 +500,24 @@ struct FinanceAppView: View {
                 localRecords: snapshot.accounts,
                 tombstones: snapshot.tombstones,
                 entityType: .accounts
-            )
+            ).filter { $0.ownershipType == .personal && $0.householdId == nil }
             dashboard.categories = mergedEntities(
                 existing: dashboard.categories,
                 localRecords: snapshot.categories,
                 tombstones: snapshot.tombstones,
                 entityType: .categories
-            )
+            ).filter { $0.scope == .personal && $0.householdId == nil }
             dashboard.assetCategories = mergedEntities(
                 existing: dashboard.assetCategories,
                 localRecords: snapshot.assetCategories,
                 tombstones: snapshot.tombstones,
                 entityType: .assetCategories
-            )
+            ).filter { $0.scopeType == .personal && $0.householdId == nil }
+            let personalAccountIds = Set(dashboard.accounts.map(\.id))
+            dashboard.transactions = mergedTransactions.filter { transaction in
+                personalAccountIds.contains(transaction.accountId) &&
+                transaction.counterpartyAccountId.map(personalAccountIds.contains) != false
+            }
             dashboard.assetCategoryGroups = rebuiltAssetCategoryGroups(
                 existing: dashboard.assetCategoryGroups,
                 categories: dashboard.assetCategories,
@@ -557,7 +562,7 @@ struct FinanceAppView: View {
             existingById[group.assetCategoryId] = group
         }
         return categories
-            .filter { $0.recordStatus == .active }
+            .filter { $0.recordStatus == .active && $0.scopeType == .personal && $0.householdId == nil }
             .map { category in
                 let linked = accounts.filter {
                     $0.assetCategoryId == category.id &&
@@ -574,7 +579,7 @@ struct FinanceAppView: View {
                     assetCategoryId: category.id,
                     name: category.name,
                     scopeType: category.scopeType,
-                    householdId: category.householdId,
+                    householdId: nil,
                     currency: category.currency,
                     manualAmount: category.manualAmount,
                     accountsTotal: MoneyHelpers.decimalToString(accountsTotal),

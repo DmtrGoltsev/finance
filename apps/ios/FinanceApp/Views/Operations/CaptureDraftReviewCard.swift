@@ -103,7 +103,7 @@ struct CaptureDraftReviewCard: View {
                     }
                 }
             } else if screenshotAggregateDrafts.isEmpty {
-                Text("В выбранном scope нет черновиков на проверку. Отправьте скрин в backend OCR или обновите список.")
+                Text("Нет черновиков на проверку. Отправьте скриншот в OCR или обновите список.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

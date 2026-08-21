@@ -6,12 +6,6 @@ struct SearchableCategoryPickerButton: View {
     let categories: [Category]
     @Binding var selectedCategoryId: String
 
-    @State private var isPresented = false
-
-    private var selectedCategory: Category? {
-        categories.first { $0.id == selectedCategoryId }
-    }
-
     var body: some View {
         SearchableCategoryPickerControl(
             title: title,
