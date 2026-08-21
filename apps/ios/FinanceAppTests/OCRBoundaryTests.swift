@@ -1,19 +1,27 @@
+import Foundation
 import XCTest
 @testable import FinanceApp
 
 final class OCRBoundaryTests: XCTestCase {
     func testOCRCandidateCreatesReviewDraftWithoutImageOrRawOCRPayload() throws {
-        let candidate = ScreenshotOcrCandidate(
-            candidateType: "expense",
-            externalLabel: "Супермаркеты",
-            amount: "123.45",
-            currency: .RUB,
-            operationCount: 1,
-            description: "Покупка",
-            confidence: "0.95",
-            idempotencyKey: "candidate-1",
-            evidenceHash: "sha256:abc",
-            suggestedCategoryId: "food"
+        let candidate = try JSONDecoder().decode(
+            ScreenshotOcrCandidate.self,
+            from: Data(
+                """
+                {
+                  "candidateType": "categoryAggregate",
+                  "categoryAggregate": { "externalLabel": "Супермаркеты" },
+                  "amount": "123.45",
+                  "currency": "RUB",
+                  "operationCount": 1,
+                  "description": "Покупка",
+                  "confidence": "0.95",
+                  "idempotencyKey": "candidate-1",
+                  "evidenceHash": "sha256:abc",
+                  "suggestedCategoryId": "food"
+                }
+                """.utf8
+            )
         )
 
         let request = candidate.toCreateRequest(categoryId: "food")
