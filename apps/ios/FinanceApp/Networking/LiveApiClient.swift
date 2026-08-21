@@ -847,7 +847,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         )
     }
 
-    private func reportQuery(reportMode: ReportMode, householdId: String? = nil, startDate: String, endDate: String, timezone: String, accountIds: [String]? = nil, categoryIds: [String]? = nil, transactionTypes: [TransactionType]? = nil, currency: CurrencyCode? = nil) -> [String: String] {
+    func reportQuery(reportMode: ReportMode, householdId: String? = nil, startDate: String, endDate: String, timezone: String, accountIds: [String]? = nil, categoryIds: [String]? = nil, transactionTypes: [TransactionType]? = nil, currency: CurrencyCode? = nil) -> [String: String] {
         var query = [
             "reportMode": ReportMode.personal.rawValue,
             "startDate": startDate,

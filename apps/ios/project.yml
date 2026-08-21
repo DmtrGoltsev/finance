@@ -35,3 +35,46 @@ targets:
         INFOPLIST_FILE: FinanceApp/Info.plist
     info:
       path: FinanceApp/Info.plist
+
+  FinanceAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FinanceAppTests
+    dependencies:
+      - target: FinanceApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceAppTests
+        GENERATE_INFOPLIST_FILE: true
+
+  FinanceAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: FinanceAppUITests
+    dependencies:
+      - target: FinanceApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceAppUITests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: FinanceApp
+
+schemes:
+  FinanceApp:
+    build:
+      targets:
+        FinanceApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: FinanceAppTests
+          parallelizable: false
+        - name: FinanceAppUITests
+          parallelizable: false
+    archive:
+      config: Release

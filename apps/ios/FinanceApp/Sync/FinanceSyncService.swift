@@ -321,7 +321,7 @@ actor FinanceSyncService {
 
     private func pushPending(scope: LocalStoreScope, deviceId: String, limit: Int) async throws -> SyncPushSummary {
         let loadedPending = try await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)
-        let blocked = loadedPending.filter { !isPersonalOnlyMutation($0) }
+        let blocked = loadedPending.filter { !Self.isPersonalOnlyMutation($0) }
         for mutation in blocked {
             try await localStore.markRejected(
                 scope: scope,
@@ -330,7 +330,7 @@ actor FinanceSyncService {
                 issue: personalOnlyRejection(for: mutation)
             )
         }
-        let pending = loadedPending.filter(isPersonalOnlyMutation)
+        let pending = loadedPending.filter { Self.isPersonalOnlyMutation($0) }
         guard !pending.isEmpty else { return SyncPushSummary(rejected: blocked.count) }
 
         for mutation in pending {
@@ -394,7 +394,7 @@ actor FinanceSyncService {
         return personalResponse
     }
 
-    private func isPersonalOnlyMutation(_ mutation: PendingMutation) -> Bool {
+    static func isPersonalOnlyMutation(_ mutation: PendingMutation) -> Bool {
         guard let payload = mutation.payload else { return true }
         return isPersonalOnlyPayload(payload, entityType: mutation.entityType)
     }
@@ -404,7 +404,7 @@ actor FinanceSyncService {
         return isPersonalOnlyPayload(payload, entityType: change.entityType)
     }
 
-    private func isPersonalOnlyPayload(
+    private static func isPersonalOnlyPayload(
         _ payload: [String: SyncJSONValue],
         entityType: SyncEntityType
     ) -> Bool {
@@ -423,7 +423,7 @@ actor FinanceSyncService {
         }
     }
 
-    private func stringValue(_ value: SyncJSONValue?) -> String? {
+    private static func stringValue(_ value: SyncJSONValue?) -> String? {
         guard case .string(let string)? = value else { return nil }
         return string
     }

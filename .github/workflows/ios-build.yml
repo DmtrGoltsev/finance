@@ -2,58 +2,131 @@ name: iOS Build
 
 on:
   push:
-    branches: [glm]
+    branches:
+      - codex/ios-native-personal-parity-20260820
+    paths:
+      - "apps/ios/**"
+      - ".github/workflows/ios-build.yml"
+  pull_request:
     paths:
       - "apps/ios/**"
       - ".github/workflows/ios-build.yml"
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-test:
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
+      - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         working-directory: apps/ios
-        run: xcodegen generate
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts
+          xcodegen generate 2>&1 | tee ci-artifacts/xcodegen.log
 
       - name: Verify project
         working-directory: apps/ios
-        run: ls -la FinanceApp.xcodeproj
-
-      - name: Build
-        working-directory: apps/ios
         run: |
+          xcodebuild -list -project FinanceApp.xcodeproj -json \
+            > ci-artifacts/project-list.json
+          cat ci-artifacts/project-list.json
+
+      - name: Build Debug and Release, then run XCTest
+        working-directory: apps/ios
+        env:
+          FINANCE_RELEASE_API_BASE_URL: https://finance.invalid/finance-api
+        run: |
+          set +e
+          set -o pipefail
+
           xcodebuild build \
             -project FinanceApp.xcodeproj \
             -scheme FinanceApp \
             -destination 'generic/platform=iOS' \
             -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-Debug" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            2>&1 | tee build.log
+            FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+            2>&1 | tee ci-artifacts/debug-build.log
+          DEBUG_STATUS=${PIPESTATUS[0]}
 
-      - name: Check build result
-        working-directory: apps/ios
-        run: |
-          if grep -q "BUILD SUCCEEDED" build.log; then
-            echo "BUILD SUCCEEDED"
+          xcodebuild build \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceApp \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-Release" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+            2>&1 | tee ci-artifacts/release-build.log
+          RELEASE_STATUS=${PIPESTATUS[0]}
+
+          xcrun simctl list devices available -j > ci-artifacts/simulators.json
+          SIMULATOR_UDID=$(ruby -rjson -e '
+            data = JSON.parse(File.read(ARGV[0]))
+            device = data.fetch("devices").values.flatten.find do |item|
+              item["isAvailable"] && item.fetch("name", "").start_with?("iPhone")
+            end
+            abort "No available iPhone simulator" unless device
+            print device.fetch("udid")
+          ' ci-artifacts/simulators.json)
+          SIMULATOR_STATUS=$?
+
+          if [ "$SIMULATOR_STATUS" -eq 0 ]; then
+            xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+            xcodebuild test \
+              -project FinanceApp.xcodeproj \
+              -scheme FinanceApp \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -configuration Debug \
+              -derivedDataPath "$RUNNER_TEMP/FinanceApp-Tests" \
+              -resultBundlePath ci-artifacts/FinanceAppTests.xcresult \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+              2>&1 | tee ci-artifacts/xctest.log
+            TEST_STATUS=${PIPESTATUS[0]}
           else
-            echo "BUILD FAILED"
-            grep -E "error:" build.log || true
+            TEST_STATUS=$SIMULATOR_STATUS
+            echo "No available iPhone simulator" | tee ci-artifacts/xctest.log
+          fi
+
+          printf 'debug=%s\nrelease=%s\ntest=%s\n' \
+            "$DEBUG_STATUS" "$RELEASE_STATUS" "$TEST_STATUS" \
+            | tee ci-artifacts/status.txt
+
+          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
             exit 1
           fi
 
-      - name: Upload build log
+      - name: Package CI evidence
+        if: always()
+        working-directory: apps/ios
+        run: |
+          tar -czf ios-ci-evidence.tar.gz ci-artifacts
+
+      - name: Upload iOS build and test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-log
-          path: apps/ios/build.log
-          retention-days: 7
+          name: ios-build-test-evidence-${{ github.run_id }}
+          path: |
+            apps/ios/ios-ci-evidence.tar.gz
+            apps/ios/ci-artifacts/*.log
+            apps/ios/ci-artifacts/*.txt
+            apps/ios/ci-artifacts/*.json
+            apps/ios/ci-artifacts/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14

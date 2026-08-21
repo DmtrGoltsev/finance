@@ -287,7 +287,7 @@ struct QuickAddSheet: View {
             .filter { $0.ownershipType == .personal }
     }
 
-    private var operationAccounts: [Account] {
+    var operationAccounts: [Account] {
         let scoped = personalAccounts
         if type == .expense {
             return scoped.filter { $0.isPaymentAccount }
@@ -295,7 +295,7 @@ struct QuickAddSheet: View {
         return scoped
     }
 
-    private var filteredCategories: [Category] {
+    var filteredCategories: [Category] {
         let all = dashboard?.categories ?? []
         return all
             .filter { $0.type.rawValue == type.apiValue.rawValue && $0.status == .active }
