@@ -53,6 +53,7 @@ struct PersonalOwnershipIndex: Sendable {
     var categoryIds: Set<String>
     var assetCategoryIds: Set<String>
     var planIds: Set<String>
+    private var acceptedEntityKeys: Set<String> = []
 
     init(snapshot: FinanceLocalSnapshot) {
         accountIds = Set(snapshot.accounts.compactMap { record in
@@ -112,6 +113,47 @@ struct PersonalOwnershipIndex: Sendable {
                 }
             }
         }
+    }
+
+    mutating func recordAccepted(_ change: SyncChange) {
+        let key = Self.entityKey(change.entityType, change.entityId)
+        let isRemoval = change.tombstonePayload != nil
+            || change.changeType == SyncOperation.delete.rawValue
+            || change.changeType == SyncOperation.archive.rawValue
+        if isRemoval {
+            acceptedEntityKeys.remove(key)
+            switch change.entityType {
+            case .accounts: accountIds.remove(change.entityId)
+            case .categories: categoryIds.remove(change.entityId)
+            case .assetCategories: assetCategoryIds.remove(change.entityId)
+            case .planningPlans: planIds.remove(change.entityId)
+            default: break
+            }
+            return
+        }
+
+        acceptedEntityKeys.insert(key)
+        switch change.entityType {
+        case .accounts: accountIds.insert(change.entityId)
+        case .categories: categoryIds.insert(change.entityId)
+        case .assetCategories: assetCategoryIds.insert(change.entityId)
+        case .planningPlans: planIds.insert(change.entityId)
+        default: break
+        }
+    }
+
+    func containsAccepted(entityType: SyncEntityType, entityId: String) -> Bool {
+        switch entityType {
+        case .accounts: return accountIds.contains(entityId)
+        case .categories: return categoryIds.contains(entityId)
+        case .assetCategories: return assetCategoryIds.contains(entityId)
+        case .planningPlans: return planIds.contains(entityId)
+        default: return acceptedEntityKeys.contains(Self.entityKey(entityType, entityId))
+        }
+    }
+
+    private static func entityKey(_ entityType: SyncEntityType, _ entityId: String) -> String {
+        "\(entityType.rawValue):\(entityId)"
     }
 }
 
@@ -214,7 +256,8 @@ enum PersonalSyncOwnershipValidator {
               string(tombstone["entityType"]) == change.entityType.rawValue else {
             return false
         }
-        return ownsExistingEntity(
+        return index.containsAccepted(entityType: change.entityType, entityId: change.entityId)
+            || ownsExistingEntity(
             entityType: change.entityType,
             entityId: change.entityId,
             snapshot: snapshot

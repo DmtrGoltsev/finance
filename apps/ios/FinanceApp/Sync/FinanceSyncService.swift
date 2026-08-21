@@ -407,21 +407,20 @@ actor FinanceSyncService {
             )
         )
         var ownershipIndex = PersonalOwnershipIndex(snapshot: snapshot)
-        ownershipIndex.includeClearlyPersonalParents(
-            from: response.changes,
-            viewerUserId: scope.viewerUserId
-        )
-        let personalChanges = response.changes.filter {
-                PersonalSyncOwnershipValidator.allows(
-                    change: $0,
+        var personalChanges: [SyncChange] = []
+        var quarantined: [SyncPullQuarantine] = []
+        for change in response.changes.sorted(by: { $0.seq < $1.seq }) {
+            if PersonalSyncOwnershipValidator.allows(
+                    change: change,
                     snapshot: snapshot,
                     index: ownershipIndex
-                )
+                ) {
+                personalChanges.append(change)
+                ownershipIndex.recordAccepted(change)
+            } else {
+                quarantined.append(.personalScope(change))
             }
-        let personalChangeIds = Set(personalChanges.map(\.id))
-        let quarantined = response.changes
-            .filter { !personalChangeIds.contains($0.id) }
-            .map(SyncPullQuarantine.personalScope)
+        }
         let personalResponse = SyncPullResponse(
             changes: personalChanges,
             nextCursor: response.nextCursor,

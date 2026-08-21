@@ -123,6 +123,48 @@ final class SyncReliabilityTests: XCTestCase {
         XCTAssertEqual(snapshot.syncState.cursor, 2)
     }
 
+    func testProductionPullEvolvesOwnershipForCreateThenDelete() async throws {
+        let context = try makeContext("production-create-delete-page")
+        defer { context.cleanup() }
+        let planId = UUID().uuidString
+        let created = change(
+            seq: 1,
+            entityType: .planningPlans,
+            entityId: planId,
+            payload: planningPlanPayload(id: planId, ownerUserId: context.scope.viewerUserId)
+        )
+        let deleted = change(
+            seq: 2,
+            entityType: .planningPlans,
+            entityId: planId,
+            changeType: "delete",
+            payload: nil,
+            tombstonePayload: [
+                "id": .string(planId),
+                "entityType": .string(SyncEntityType.planningPlans.rawValue),
+            ]
+        )
+        let service = FinanceSyncService(
+            apiClient: StubSyncApiClient(mode: .pull(SyncPullResponse(
+                changes: [created, deleted],
+                nextCursor: 2,
+                hasMore: false,
+                serverTime: "2026-08-21T10:00:00.000Z"
+            ))),
+            localStore: context.store,
+            deviceIdentityStore: context.deviceIdentityStore
+        )
+
+        let result = await service.syncNow(scope: context.scope)
+        let snapshot = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+
+        XCTAssertEqual(result.pulledChanges, 2)
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertTrue(snapshot.planningPlans.isEmpty)
+        XCTAssertEqual(snapshot.tombstones.map(\.entityId), [planId])
+        XCTAssertEqual(snapshot.syncState.cursor, 2)
+    }
+
     func testLive403MapsToForbiddenWithoutClearingIdentityOrCredentials() async throws {
         let tokenStore = CSRFTokenStore.shared
         let identityStore = SessionIdentityStore.shared
@@ -223,6 +265,58 @@ final class SyncReliabilityTests: XCTestCase {
         XCTAssertTrue(afterLogout.categories.isEmpty)
     }
 
+    func testLegacyMigrationPreservesPendingDeleteTombstoneWithoutEntity() async throws {
+        let context = try makeContext("legacy-pending-delete")
+        defer { context.cleanup() }
+        let legacyScope = LocalStoreScope(viewerUserId: context.scope.viewerUserId, sessionId: "legacy-session")
+        let entityId = UUID().uuidString
+        let mutationId = UUID().uuidString
+        let evidence = SyncOwnershipEvidence(
+            viewerUserId: context.scope.viewerUserId,
+            subjectEntityType: .categories,
+            subjectEntityId: entityId,
+            referencedAccountIds: [],
+            referencedCategoryIds: [],
+            referencedAssetCategoryIds: [],
+            referencedPlanIds: [],
+            attestedPersonalPlanIds: [],
+            attestedPersonalAccountIds: [],
+            attestedPersonalCategoryIds: [],
+            attestedPersonalAssetCategoryIds: []
+        )
+        var legacy = FinanceLocalSnapshot.empty(scope: legacyScope, deviceId: "legacy-device")
+        legacy.pendingMutations = [PendingMutation(
+            clientMutationId: mutationId,
+            deviceId: "legacy-device",
+            scope: legacyScope,
+            entityType: .categories,
+            entityId: entityId,
+            operation: .delete,
+            baseVersion: 3,
+            payload: nil,
+            ownershipEvidence: evidence
+        )]
+        legacy.tombstones = [SyncTombstone(
+            entityType: .categories,
+            entityId: entityId,
+            operation: .delete,
+            baseVersion: 3,
+            pendingMutationId: mutationId,
+            createdAt: "2026-08-21T10:00:00.000Z",
+            safeError: nil
+        )]
+        let legacyURL = context.root.appendingPathComponent("user-a_legacy-session.json")
+        try FileManager.default.createDirectory(at: context.root, withIntermediateDirectories: true)
+        try JSONEncoder().encode(legacy).write(to: legacyURL, options: .atomic)
+
+        let migrated = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+
+        XCTAssertTrue(migrated.categories.isEmpty)
+        XCTAssertEqual(migrated.pendingMutations.map(\.clientMutationId), [mutationId])
+        XCTAssertEqual(migrated.tombstones.map(\.pendingMutationId), [mutationId])
+        XCTAssertEqual(migrated.tombstones.map(\.entityId), [entityId])
+    }
+
     func testOptimisticRecordAndMutationCommitAtomicallyToOneSnapshot() async throws {
         let context = try makeContext("atomic-optimistic")
         defer { context.cleanup() }
@@ -319,12 +413,14 @@ final class SyncReliabilityTests: XCTestCase {
                 changeSeq: 20,
                 errorCode: nil,
                 message: nil,
-                data: nil
+                data: categoryPayload(id: persistedId, name: "One", version: 5)
             )
         )
         let successor = try await context.store.pendingMutations(scope: context.scope, deviceId: context.deviceId, limit: 100)
+        let afterFirstResult = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
         XCTAssertEqual(successor.map(\.clientMutationId), [secondUpdate.clientMutationId])
         XCTAssertEqual(successor.first?.baseVersion, 5)
+        XCTAssertEqual(afterFirstResult.categories.first?.entity.name, "Two")
     }
 
     func testPushResultMismatchIsQuarantinedForRetry() async throws {
@@ -538,6 +634,7 @@ private final class StubSyncApiClient: FinanceSyncApiClient, @unchecked Sendable
     enum Mode {
         case networkFailure
         case mismatchedResult
+        case pull(SyncPullResponse)
     }
 
     private let mode: Mode
@@ -568,11 +665,18 @@ private final class StubSyncApiClient: FinanceSyncApiClient, @unchecked Sendable
                     data: nil
                 )]
             )
+        case .pull:
+            return SyncPushResponse(
+                deviceId: request.deviceId,
+                serverTime: "2026-08-21T10:00:00.000Z",
+                results: []
+            )
         }
     }
 
     func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse {
-        SyncPullResponse(
+        if case .pull(let response) = mode { return response }
+        return SyncPullResponse(
             changes: [],
             nextCursor: request.cursor,
             hasMore: false,

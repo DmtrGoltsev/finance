@@ -9,7 +9,7 @@ struct PlanningView: View {
 
     @State private var month = nextPlanningMonth()
     @State private var plan: PlanningPlan?
-    @State private var history: [PlanningPlan] = []
+    @State private var history: [PlanningPlanHistoryItem] = []
     @State private var isLoading = false
     @State private var message: String?
 
@@ -327,10 +327,13 @@ struct PlanningView: View {
         }
     }
 
-    private func copyPlan(_ historyPlan: PlanningPlan) async {
+    private func copyPlan(_ historyPlan: PlanningPlanHistoryItem) async {
         isLoading = true
         do {
-            _ = try await apiClient.copyPlanningPlan(planId: historyPlan.id, PlanningPlanCopyRequest(targetMonth: boundedMonth))
+            let source = try await historyPlan.resolvedDetail { planId in
+                try await apiClient.getPlanningPlan(planId: planId)
+            }
+            _ = try await apiClient.copyPlanningPlan(planId: source.id, PlanningPlanCopyRequest(targetMonth: boundedMonth))
             await loadPlanningState(successMessage: "План \(localizedPlanningMonth(historyPlan.month)) скопирован на \(localizedPlanningMonth(boundedMonth))")
         } catch {
             message = planningErrorMessage(error)
@@ -603,11 +606,12 @@ struct PlanningView: View {
         return planningPlan(base, incomeSources: incomeSources, allocations: allocations)
     }
 
-    private func localPlanningHistory(from snapshot: FinanceLocalSnapshot) -> [PlanningPlan] {
+    private func localPlanningHistory(from snapshot: FinanceLocalSnapshot) -> [PlanningPlanHistoryItem] {
         let tombstonedPlans = tombstonedIds(in: snapshot, entityType: .planningPlans)
         let localPlans = snapshot.planningPlans
             .map(\.entity)
             .filter { $0.scope == planningScope && $0.month != boundedMonth && !tombstonedPlans.contains($0.id) }
+            .map(PlanningPlanHistoryItem.init(plan:))
         var merged = history
         for plan in localPlans {
             upsert(plan, in: &merged)

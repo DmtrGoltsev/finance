@@ -59,7 +59,7 @@ protocol FinanceApiClient: FinanceSyncApiClient {
     func getReportTransactions(reportMode: ReportMode, householdId: String?, startDate: String, endDate: String, timezone: String, accountIds: [String]?, categoryIds: [String]?, transactionTypes: [TransactionType]?, currency: CurrencyCode?, limit: Int?, cursor: String?, sort: String?) async throws -> ReportTransactionDrillDown
 
     func getPlanningPlan(scope: PlanningScope, month: String, householdId: String?) async throws -> PlanningPlan?
-    func listPlanningPlanHistory(scope: PlanningScope, householdId: String?) async throws -> [PlanningPlan]
+    func listPlanningPlanHistory(scope: PlanningScope, householdId: String?) async throws -> [PlanningPlanHistoryItem]
     func createPlanningPlan(_ request: PlanningPlanCreateRequest) async throws -> PlanningPlan
     func getPlanningPlan(planId: String) async throws -> PlanningPlan
     func copyPlanningPlan(planId: String, _ request: PlanningPlanCopyRequest) async throws -> PlanningPlan

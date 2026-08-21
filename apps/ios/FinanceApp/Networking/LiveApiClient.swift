@@ -600,12 +600,13 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         }
     }
 
-    func listPlanningPlanHistory(scope: PlanningScope, householdId: String? = nil) async throws -> [PlanningPlan] {
+    func listPlanningPlanHistory(scope: PlanningScope, householdId: String? = nil) async throws -> [PlanningPlanHistoryItem] {
         let query = ["scope": PlanningScope.personal.rawValue]
         let url = builder.makeURL(path: "/api/v1/planning/plans/history", query: query)
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try ResponseParser.unwrapItemsOnly(PlanningPlan.self, from: data)
+        return try ResponseParser.unwrapItemsOnly(PlanningPlanSummaryDTO.self, from: data)
+            .map(\.historyItem)
             .filter { $0.scope == .personal && $0.householdId == nil }
     }
 

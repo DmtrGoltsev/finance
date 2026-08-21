@@ -426,24 +426,27 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
 
     func markApplied(scope: LocalStoreScope, deviceId: String, result: SyncMutationResult) async throws {
         var snapshot = try await loadSnapshot(scope: scope, deviceId: deviceId)
+        var hasOptimisticSuccessor = false
         if let index = snapshot.pendingMutations.firstIndex(where: { $0.clientMutationId == result.clientMutationId }) {
             snapshot.pendingMutations[index].status = .applied
             snapshot.pendingMutations[index].lastError = nil
             snapshot.pendingMutations[index].updatedAt = Date().ISO8601Format()
-            if let serverVersion = result.serverVersion,
-               let successorIndex = snapshot.pendingMutations.indices.first(where: {
-                   $0 > index &&
-                       snapshot.pendingMutations[$0].entityType == result.entityType &&
-                       snapshot.pendingMutations[$0].entityId == result.entityId &&
-                       snapshot.pendingMutations[$0].canPush
-               }) {
-                snapshot.pendingMutations[successorIndex].baseVersion = serverVersion
+            if let successorIndex = snapshot.pendingMutations.indices.first(where: {
+                $0 > index &&
+                    snapshot.pendingMutations[$0].entityType == result.entityType &&
+                    snapshot.pendingMutations[$0].entityId == result.entityId &&
+                    snapshot.pendingMutations[$0].canPush
+            }) {
+                hasOptimisticSuccessor = true
+                if let serverVersion = result.serverVersion {
+                    snapshot.pendingMutations[successorIndex].baseVersion = serverVersion
+                }
                 snapshot.pendingMutations[successorIndex].updatedAt = Date().ISO8601Format()
             }
         }
         snapshot.issues.removeAll { $0.mutationId == result.clientMutationId }
         snapshot.syncState.issueIds = snapshot.issues.map(\.id)
-        if let data = result.data {
+        if let data = result.data, !hasOptimisticSuccessor {
             try? applyPayload(data, entityType: result.entityType, entityId: result.entityId, version: result.serverVersion, to: &snapshot)
         }
         if result.operation == .delete || result.operation == .archive || result.operation == .restore {
@@ -1109,7 +1112,17 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
             target.planningIncomeSources.map { "\(SyncEntityType.planningIncomeSources.rawValue):\($0.entity.id)" } +
             target.planningAllocations.map { "\(SyncEntityType.planningAllocations.rawValue):\($0.entity.id)" }
         )
-        for tombstone in source.tombstones where knownTombstones.contains("\(tombstone.entityType.rawValue):\(tombstone.entityId)") {
+        for tombstone in source.tombstones {
+            let key = "\(tombstone.entityType.rawValue):\(tombstone.entityId)"
+            let matchesPendingDelete = tombstone.pendingMutationId.map { pendingMutationId in
+                target.pendingMutations.contains { mutation in
+                    mutation.clientMutationId == pendingMutationId
+                        && mutation.entityType == tombstone.entityType
+                        && mutation.entityId == tombstone.entityId
+                        && mutation.operation == .delete
+                }
+            } ?? false
+            guard knownTombstones.contains(key) || matchesPendingDelete else { continue }
             addTombstone(
                 entityType: tombstone.entityType,
                 entityId: tombstone.entityId,
