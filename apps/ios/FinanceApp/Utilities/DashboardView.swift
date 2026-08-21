@@ -69,7 +69,7 @@ extension FinanceDashboard {
                 return sum + (Decimal(string: t.amount) ?? .zero)
             }
 
-        let topCategories = topCategorySpends(
+        let topCategories = serverCategorySpends(currency: currency) ?? topCategorySpends(
             transactions: visibleTransactions,
             allCategories: categories,
             currency: currency
@@ -118,6 +118,31 @@ extension FinanceDashboard {
 }
 
 private extension FinanceDashboard {
+    func serverCategorySpends(currency: CurrencyCode) -> [CategorySpend]? {
+        let matching = categoryBreakdown.filter {
+            $0.currency == currency &&
+            ($0.categoryType == .expense || $0.categoryType == nil) &&
+            $0.categoryScope != .household
+        }
+        guard !matching.isEmpty else { return nil }
+
+        return matching
+            .map { item in
+                let category = item.categoryId.flatMap { categoryId in
+                    categories.first { $0.id == categoryId }
+                }
+                return CategorySpend(
+                    categoryId: item.categoryId ?? "uncategorized",
+                    name: item.categoryName ?? "Без категории",
+                    amount: item.amount,
+                    currency: item.currency,
+                    sfSymbol: categoryIcon(category),
+                    color: categoryColor(category)
+                )
+            }
+            .sorted(by: categorySpendComesBefore)
+    }
+
     func topCategorySpends(
         transactions: [Transaction],
         allCategories: [Category],
@@ -142,7 +167,15 @@ private extension FinanceDashboard {
                     color: categoryColor(cat)
                 )
             }
-            .sorted { Decimal(string: $0.amount) ?? .zero > Decimal(string: $1.amount) ?? .zero }
+            .sorted(by: categorySpendComesBefore)
+    }
+
+    func categorySpendComesBefore(_ lhs: CategorySpend, _ rhs: CategorySpend) -> Bool {
+        let lhsAmount = Decimal(string: lhs.amount) ?? .zero
+        let rhsAmount = Decimal(string: rhs.amount) ?? .zero
+        if lhsAmount != rhsAmount { return lhsAmount > rhsAmount }
+        if lhs.name != rhs.name { return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending }
+        return lhs.categoryId < rhs.categoryId
     }
 
     func categoryIcon(_ category: Category?) -> String {

@@ -12,6 +12,7 @@ final class FinanceDashboard: @unchecked Sendable {
     var assetCategoryGroups: [AssetCategoryGroup]
     var investmentsByCurrency: [MoneyAmount]
     var investmentsTotal: MoneyAmount?
+    var categoryBreakdown: [CategoryBreakdownItem]
 
     init(
         session: SessionStatus = SessionStatus(isAuthenticated: false, displayName: nil, householdId: nil),
@@ -23,7 +24,8 @@ final class FinanceDashboard: @unchecked Sendable {
         assetCategories: [AssetCategory] = [],
         assetCategoryGroups: [AssetCategoryGroup] = [],
         investmentsByCurrency: [MoneyAmount] = [],
-        investmentsTotal: MoneyAmount? = nil
+        investmentsTotal: MoneyAmount? = nil,
+        categoryBreakdown: [CategoryBreakdownItem] = []
     ) {
         self.session = session
         self.accounts = accounts
@@ -35,5 +37,6 @@ final class FinanceDashboard: @unchecked Sendable {
         self.assetCategoryGroups = assetCategoryGroups
         self.investmentsByCurrency = investmentsByCurrency
         self.investmentsTotal = investmentsTotal
+        self.categoryBreakdown = categoryBreakdown
     }
 }

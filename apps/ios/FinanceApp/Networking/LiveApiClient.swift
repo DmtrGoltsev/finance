@@ -708,20 +708,20 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         if let v = startDate { dateQuery["startDate"] = v }
         if let v = endDate { dateQuery["endDate"] = v }
 
-        async let accountsResult = listAccounts(limit: 200, cursor: nil)
-        async let categoriesResult = listCategories(limit: 200, cursor: nil)
-        async let transactionsResult = listTransactions(limit: 200, cursor: nil, startDate: startDate, endDate: endDate)
-        async let assetCategoriesResult = listAssetCategories(limit: 200, cursor: nil)
+        async let accountsResult = loadAllAccounts()
+        async let categoriesResult = loadAllCategories()
+        async let transactionsResult = loadAllTransactions(startDate: startDate, endDate: endDate)
+        async let assetCategoriesResult = loadAllAssetCategories()
 
-        let (accounts, _) = try await accountsResult
-        let (categories, _) = try await categoriesResult
+        let accounts = try await accountsResult
+        let categories = try await categoriesResult
         let personalAccountIds = Set(accounts.map(\.id))
-        let (loadedTransactions, _) = try await transactionsResult
+        let loadedTransactions = try await transactionsResult
         let transactions = loadedTransactions.filter { transaction in
             personalAccountIds.contains(transaction.accountId) &&
             transaction.counterpartyAccountId.map(personalAccountIds.contains) != false
         }
-        let assetCategories = (try? await assetCategoriesResult.0) ?? []
+        let assetCategories = (try? await assetCategoriesResult) ?? []
 
         let currency = accounts.first?.currency ?? .RUB
         let reportQuery: [String: String] = [
@@ -753,6 +753,17 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
             accountIds: nil,
             currency: currency
         )
+        let categoryBreakdown = (try? await getReportCategoryBreakdown(
+            reportMode: .personal,
+            householdId: nil,
+            startDate: startDate ?? "",
+            endDate: endDate ?? "",
+            timezone: TimeZone.current.identifier,
+            accountIds: nil,
+            categoryIds: nil,
+            transactionTypes: [.expense],
+            currency: currency
+        ))?.items ?? []
 
         let assetCategoryGroups = balancesData?.assetCategoryGroups ?? []
         let investmentsByCurrency = totals.compactMap { total in
@@ -778,10 +789,87 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         dashboard.assetCategoryGroups = assetCategoryGroups
         dashboard.investmentsByCurrency = investmentsByCurrency
         dashboard.investmentsTotal = investmentsTotal
+        dashboard.categoryBreakdown = categoryBreakdown
         return dashboard
     }
 
     // MARK: - Private helpers
+
+    static func collectAllPages<Item>(
+        pageSize: Int = 100,
+        maximumPageCount: Int = 10_000,
+        id: (Item) -> String,
+        fetchPage: (_ limit: Int, _ cursor: String?) async throws -> ([Item], PageInfo)
+    ) async throws -> [Item] {
+        guard pageSize > 0, maximumPageCount > 0 else {
+            throw FinanceApiError.serverError("Некорректные параметры пагинации.")
+        }
+
+        var cursor: String?
+        var visitedCursors = Set<String>()
+        var seenIds = Set<String>()
+        var result: [Item] = []
+
+        for _ in 0..<maximumPageCount {
+            let (items, page) = try await fetchPage(pageSize, cursor)
+            for item in items where seenIds.insert(id(item)).inserted {
+                result.append(item)
+            }
+
+            guard page.hasMore else { return result }
+            guard let nextCursor = page.nextCursor, !nextCursor.isEmpty else {
+                throw FinanceApiError.serverError("Сервер не вернул курсор следующей страницы.")
+            }
+            guard visitedCursors.insert(nextCursor).inserted, nextCursor != cursor else {
+                throw FinanceApiError.serverError("Сервер повторил курсор страницы.")
+            }
+            cursor = nextCursor
+        }
+
+        throw FinanceApiError.serverError("Превышен лимит страниц при загрузке данных.")
+    }
+
+    private func loadAllAccounts() async throws -> [Account] {
+        try await Self.collectAllPages(id: \.id) { limit, cursor in
+            try await self.listAccounts(limit: limit, cursor: cursor, ownershipType: .personal)
+        }
+    }
+
+    private func loadAllCategories() async throws -> [Category] {
+        try await Self.collectAllPages(id: \.id) { limit, cursor in
+            try await self.listCategories(limit: limit, cursor: cursor, scope: .personal)
+        }
+    }
+
+    private func loadAllAssetCategories() async throws -> [AssetCategory] {
+        try await Self.collectAllPages(id: \.id) { limit, cursor in
+            try await self.listAssetCategories(limit: limit, cursor: cursor, scopeType: .personal)
+        }
+    }
+
+    private func loadAllTransactions(startDate: String?, endDate: String?) async throws -> [Transaction] {
+        let transactions = try await Self.collectAllPages(id: \.id) { limit, cursor in
+            try await self.listTransactions(
+                limit: limit,
+                cursor: cursor,
+                ownershipType: .personal,
+                startDate: startDate,
+                endDate: endDate,
+                sort: "-occurredAt"
+            )
+        }
+        return transactions.sorted(by: transactionComesBefore)
+    }
+
+    private func transactionComesBefore(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        let lhsDate = lhs.transactionDate ?? String(lhs.occurredAt.prefix(10))
+        let rhsDate = rhs.transactionDate ?? String(rhs.occurredAt.prefix(10))
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        let lhsVersion = lhs.version ?? 0
+        let rhsVersion = rhs.version ?? 0
+        if lhsVersion != rhsVersion { return lhsVersion > rhsVersion }
+        return lhs.id > rhs.id
+    }
 
     private var csrfToken: String? { tokenStore.csrfToken }
 
@@ -877,23 +965,21 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     private func fetchTransferCount(query: [String: String]) async throws -> Int {
-        let url = builder.makeURL(path: "/api/v1/reports/transactions", query: query)
-        let request = builder.makeURLRequest(url: url, method: "GET")
-        let data = try await performRequest(request)
-        let drill = try ResponseParser.unwrapDataEnvelope(ReportTransactionDrillDown.self, from: data)
-        return drill.items.count
+        let transactions = try await Self.collectAllPages(id: \.id) { limit, cursor in
+            var pageQuery = query
+            pageQuery["limit"] = String(limit)
+            if let cursor { pageQuery["cursor"] = cursor }
+            let url = self.builder.makeURL(path: "/api/v1/reports/transactions", query: pageQuery)
+            let request = self.builder.makeURLRequest(url: url, method: "GET")
+            let data = try await self.performRequest(request)
+            let drill = try ResponseParser.unwrapDataEnvelope(ReportTransactionDrillDown.self, from: data)
+            return (drill.items, drill.page)
+        }
+        return transactions.count
     }
 
     private func personalAccountIdsForFiltering() async throws -> Set<String> {
-        let (accounts, _) = try await listAccounts(
-            limit: 500,
-            cursor: nil,
-            ownershipType: .personal,
-            householdId: nil,
-            status: nil,
-            q: nil,
-            sort: nil
-        )
+        let accounts = try await loadAllAccounts()
         return Set(accounts.map(\.id))
     }
 
