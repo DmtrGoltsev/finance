@@ -178,6 +178,32 @@ Minimum files for a future release run:
 - redacted screenshots under `screenshots-redacted/`;
 - no raw logs/secrets/raw OCR artifacts.
 
+## CI-backed closure update (2026-08-21)
+
+The former Mac/Xcode build blocker is closed for compilation and automated tests
+on branch `codex/ios-native-personal-parity-20260820`, commit
+`96aa58226ad8f80834ea333192ebace7885d69c2`.
+
+| Gate | Result |
+| --- | --- |
+| GitHub Actions | PASS: run `32523201106` |
+| XcodeGen | PASS |
+| Debug device build without signing | PASS |
+| Release device build without signing | PASS |
+| XCTest | PASS: 47/47 |
+| Launch UI test | PASS: 1/1 |
+| Evidence artifact | `ios-build-test-evidence-32523201106`, inspected |
+| Personal-only runtime/API scan | PASS for reachable behavior |
+| Physical iPhone install and signing | BLOCKED/NOT RUN in Windows/CI scope |
+| Actual production login | BLOCKED until a trusted HTTPS API endpoint is selected |
+
+The project must not solve the production connectivity blocker with an arbitrary
+ATS exception. Use an owned HTTPS domain or a trusted short-lived Let's Encrypt
+IP-address certificate. Legacy Capacitor remains outside the native target.
+
+See `docs/ios-native-mac-handoff.md` and
+`MVP_EVIDENCE/personal-native-ios-final-regression-20260821-234120/SUMMARY_SANITIZED.md`.
+
 ## Current `codex/IOS` QA closure (2026-06-19)
 
 **Status:** Windows static QA PASS for native iOS parity docs/source inventory; no FAIL recorded. This is not a Mac/Xcode build or runtime test pass.

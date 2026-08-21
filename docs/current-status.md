@@ -126,3 +126,27 @@ QA evidence для этого scope должно опираться на targete
 ## Измененные файлы
 
 - Changed files are tracked in git diff/status; this document is not an authoritative complete list.
+
+## Personal-only/native iOS final regression (2026-08-21)
+
+- Branch `codex/ios-native-personal-parity-20260820` is verified at commit
+  `96aa58226ad8f80834ea333192ebace7885d69c2`.
+- Native target is `apps/ios`; legacy `apps/web-pwa/ios` Capacitor output is not
+  the target native app.
+- GitHub Actions run `32523201106` is successful for the exact branch/commit:
+  XcodeGen PASS, Debug build PASS, Release build PASS, XCTest 47/47, UI 1/1.
+- Local final regression: backend 296 passed/6 skipped and Ruff PASS; Android
+  143/143 plus debug and unsigned release builds PASS; PWA 69/69, production
+  build, runtime audit and service-worker/HTTP guards PASS.
+- Reachable Android/PWA/native iOS UI and API behavior is personal-only. Finance
+  mode selectors are absent, reports use `reportMode=personal`, and category
+  management is `Категории расходов` with expense-only list/create behavior.
+- Internal legacy shared/household enum/DTO/decode branches remain only for
+  backend/wire compatibility and are not exposed as product modes.
+- **Release blocker:** native iOS code/CI is ready, but actual production login on
+  a physical iPhone is blocked until a trusted HTTPS API endpoint is selected.
+  Do not add an arbitrary ATS exception. Use an owned domain with trusted TLS or
+  a trusted short-lived Let's Encrypt IP-address certificate with renewal control.
+- Mac handoff: `docs/ios-native-mac-handoff.md`.
+- Sanitized regression evidence:
+  `MVP_EVIDENCE/personal-native-ios-final-regression-20260821-234120/SUMMARY_SANITIZED.md`.

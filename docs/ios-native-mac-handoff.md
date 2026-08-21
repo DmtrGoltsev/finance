@@ -1,0 +1,143 @@
+# Native iOS: Mac handoff and physical iPhone install
+
+## Source of truth
+
+- Repository: `DmtrGoltsev/finance`
+- Branch: `codex/ios-native-personal-parity-20260820`
+- Verified commit: `96aa58226ad8f80834ea333192ebace7885d69c2`
+- Native target: `apps/ios`
+- Minimum deployment target: iOS 17.0
+- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32523201106`
+
+`apps/web-pwa/ios` is the legacy Capacitor wrapper. It is not the target native
+application and must not be used for the native iPhone handoff.
+
+## Prerequisites on the Mac
+
+1. Install a current Xcode compatible with the project. CI passed with Xcode 16.4.
+2. Install Xcode command-line tools and accept the Xcode license.
+3. Install XcodeGen:
+
+```bash
+brew install xcodegen
+```
+
+4. Sign in to the owner-approved Apple Developer or Personal Team in Xcode.
+5. Connect the iPhone by cable, trust the Mac and enable Developer Mode on the
+   device when iOS requests it.
+
+## Checkout and project generation
+
+```bash
+git clone git@github.com:DmtrGoltsev/finance.git
+cd finance
+git checkout codex/ios-native-personal-parity-20260820
+git pull --ff-only
+git rev-parse HEAD
+cd apps/ios
+xcodegen generate
+open FinanceApp.xcodeproj
+```
+
+The expected `git rev-parse HEAD` for this handoff is
+`96aa58226ad8f80834ea333192ebace7885d69c2`.
+
+## Production API requirement
+
+Release builds require the user-defined build setting
+`FINANCE_RELEASE_API_BASE_URL` with an absolute trusted HTTPS URL, for example:
+
+```text
+https://finance.example.com/finance-api
+```
+
+The value must not be localhost, a debug endpoint or plain HTTP. Do not enable
+`NSAllowsArbitraryLoads` and do not add a broad ATS exception to bypass this gate.
+
+Acceptable production options:
+
+1. Preferred: an owned domain/subdomain with a publicly trusted TLS certificate
+   and automated renewal.
+2. Alternative: a publicly trusted short-lived Let's Encrypt IP-address
+   certificate, with explicit renewal monitoring and the IP present in the
+   certificate SAN.
+
+Until one of these endpoints is configured and reachable, native iOS production
+login is blocked by design. The existing plain HTTP IP is not sufficient.
+
+## Signing and bundle identifier
+
+In Xcode, select the `FinanceApp` target, then `Signing & Capabilities`:
+
+1. Enable automatic signing.
+2. Choose the owner-approved Team.
+3. Replace `com.codex.FinanceApp` with a unique owner-controlled bundle ID when
+   the current identifier is unavailable to that Team.
+4. Apply the corresponding bundle ID updates to test targets if Xcode requests it.
+5. Set `FINANCE_RELEASE_API_BASE_URL` for the Release configuration only.
+
+Do not commit Apple account data, signing certificates, provisioning profiles,
+team identifiers or local API secrets.
+
+## Build and test
+
+From `apps/ios`, the reproducible command-line gates are:
+
+```bash
+xcodegen generate
+xcodebuild build \
+  -project FinanceApp.xcodeproj \
+  -scheme FinanceApp \
+  -configuration Debug \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO
+
+xcodebuild build \
+  -project FinanceApp.xcodeproj \
+  -scheme FinanceApp \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  FINANCE_RELEASE_API_BASE_URL='https://<trusted-host>/finance-api'
+```
+
+Run the `FinanceApp` scheme tests on an available iPhone simulator. The verified
+CI baseline is 47 XCTest plus 1 launch UI test with zero failures.
+
+## Install on a physical iPhone without App Store
+
+1. In Xcode, select the connected iPhone as the run destination.
+2. Select the owner-approved Team and unique bundle ID.
+3. Set the trusted HTTPS Release API URL.
+4. Use `Product -> Clean Build Folder`, then `Product -> Run`.
+5. If iOS asks, trust the developer identity under device management settings.
+6. Complete the physical-device QA checklist before treating the build as ready.
+
+A free Personal Team can impose short provisioning validity and device limits.
+Use the paid developer team when stable long-lived installation is required.
+
+## Required physical-device acceptance
+
+- Register or sign in with the persistent production QA account locator documented
+  in Obsidian; retrieve its password only from the owner-managed secret store.
+- Confirm one-time login persists through force quit and relaunch; the password
+  itself is not stored by the app.
+- Confirm logout wipes session, CSRF state, local snapshot and pending queue.
+- Confirm categories show `Категории расходов` and expose no finance mode selector.
+- Exercise manual income, expense, transfer, date selection, category search,
+  payment-account filtering, assets, investment transfer analytics and month switch.
+- Exercise offline create/edit/delete, relaunch, manual sync and server convergence.
+- Confirm 401 clears identity/session; 403 preserves identity and pending work.
+- Confirm screenshot OCR is online-only and no image/raw OCR payload enters local
+  storage, pending sync, logs or evidence.
+
+## Known limitations
+
+- Windows cannot perform Apple signing or physical-device installation.
+- The successful CI build used a non-production placeholder HTTPS URL only to
+  prove Release compilation. It does not prove production connectivity.
+- Actual production login remains blocked until the trusted HTTPS endpoint is
+  chosen and configured.
+- Backend/PWA compatibility types may still contain legacy household vocabulary;
+  native product UI and reachable API behavior are personal-only.
+
