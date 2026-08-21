@@ -622,27 +622,46 @@ class LiveFinanceApiClient(
 
     override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> = safeCall {
         val session = parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
-        val accounts = request(path = "/api/v1/accounts", method = "GET")
-            .items()
+        val accounts = requestAllPages(
+            path = "/api/v1/accounts",
+            query = mapOf("ownershipType" to "personal"),
+        )
             .map(::parseAccount)
-            .filter { it.ownershipType != "shared" }
-        val categories = request(path = "/api/v1/categories", method = "GET")
-            .items()
+            .filter { it.ownershipType == "personal" && it.householdId == null }
+        val categories = requestAllPages(
+            path = "/api/v1/categories",
+            query = mapOf("scope" to "personal"),
+        )
             .map(::parseCategory)
-            .filter { it.scope != "household" }
+            .filter { it.scope != "household" && it.householdId == null }
         val assetCategories = runCatching {
-            request(path = "/api/v1/asset-categories", method = "GET")
-                .items()
+            requestAllPages(
+                path = "/api/v1/asset-categories",
+                query = mapOf("scopeType" to "personal"),
+            )
                 .map(::parseAssetCategory)
-                .filter { it.scopeType != "household" }
+                .filter { it.scopeType == "personal" && it.householdId == null }
         }.getOrDefault(emptyList())
         val dateQuery = reportDateQuery(startDate, endDate)
         val personalAccountIds = accounts.map { it.id }.toSet()
-        val transactions = request(
+        val personalCategoryIds = categories.map { it.id }.toSet()
+        val transactions = requestAllPages(
             path = "/api/v1/transactions",
-            method = "GET",
-            query = dateQuery,
-        ).items().map(::parseTransaction).filter { it.accountId in personalAccountIds }
+            query = mapOf(
+                "ownershipType" to "personal",
+                "sort" to "-occurredAt",
+            ) + dateQuery,
+        ).map(::parseTransaction)
+            .filter { transaction ->
+                transaction.accountId in personalAccountIds &&
+                    (transaction.categoryId == null || transaction.categoryId in personalCategoryIds) &&
+                    (
+                        transaction.counterpartyAccountId == null ||
+                            transaction.counterpartyAccountId in personalAccountIds
+                        ) &&
+                    (transaction.type != "transfer" || transaction.counterpartyAccountId != null)
+            }
+            .sortedByDescending { it.occurredAt }
         val reportData = runCatching {
             request(
                 path = "/api/v1/reports/summary",
@@ -671,18 +690,14 @@ class LiveFinanceApiClient(
         val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
             ?: investmentsByCurrency.firstOrNull()
         val reportTransferCount = runCatching {
-            request(
+            requestAllPages(
                 path = "/api/v1/reports/transactions",
-                method = "GET",
                 query = mapOf(
                     "reportMode" to "personal",
                     "currency" to (accounts.firstOrNull()?.currency ?: "USD"),
                     "transactionTypes" to "transfer",
                 ) + dateQuery,
-            ).optJSONObject("data")
-                ?.optJSONArray("items")
-                ?.length()
-                ?: 0
+            ).size
         }.getOrDefault(0)
 
         FinanceDashboard(
@@ -1264,6 +1279,38 @@ class LiveFinanceApiClient(
             throw ApiException(parseError(text, code), code)
         }
         return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
+
+    private suspend fun requestAllPages(
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): List<JSONObject> {
+        val itemsById = linkedMapOf<String, JSONObject>()
+        val seenCursors = mutableSetOf<String>()
+        var cursor: String? = null
+        var anonymousIndex = 0
+
+        while (true) {
+            val pageQuery = query + mapOf("limit" to "100") +
+                (cursor?.let { mapOf("cursor" to it) } ?: emptyMap())
+            val response = request(path = path, method = "GET", query = pageQuery)
+            val envelope = response.optJSONObject("data") ?: response
+            envelope.items().forEach { item ->
+                val id = item.optString("id").takeIf { it.isNotBlank() }
+                    ?: "__anonymous_${anonymousIndex++}"
+                itemsById.putIfAbsent(id, item)
+            }
+
+            val page = envelope.optJSONObject("page") ?: response.optJSONObject("page")
+            if (page?.optBoolean("hasMore", false) != true) break
+            val nextCursor = page.optNullableString("nextCursor")
+            if (nextCursor == null || !seenCursors.add(nextCursor)) {
+                throw ApiException("Invalid pagination cursor for $path")
+            }
+            cursor = nextCursor
+        }
+
+        return itemsById.values.toList()
     }
 
     private fun HttpURLConnection.readText(code: Int): String {

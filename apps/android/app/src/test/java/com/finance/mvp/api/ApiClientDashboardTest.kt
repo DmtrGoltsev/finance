@@ -127,6 +127,83 @@ class ApiClientDashboardTest {
         }
     }
 
+    @Test
+    fun dashboardPaginatesBeforePersonalFilteringAndKeepsMoreThanTwoHundredTransactions() = runBlocking {
+        val responses = mutableListOf(
+            ScriptedJsonResponse(
+                body = """{"data":{"actor":{"id":"user-1","memberships":[]}}}""",
+            ),
+        )
+        val sharedAccounts = (0 until 100).map { index ->
+            """{"id":"shared-account-$index","name":"Shared $index","accountType":"card","ownershipType":"shared","householdId":"household-1","currency":"RUB","currentBalance":"9999.00"}"""
+        }
+        responses += ScriptedJsonResponse(body = pageBody(sharedAccounts, "100", true))
+        responses += ScriptedJsonResponse(
+            body = pageBody(
+                listOf("""{"id":"personal-account","name":"Personal","accountType":"card","ownershipType":"personal","currency":"RUB","currentBalance":"100.00"}"""),
+                null,
+                false,
+            ),
+        )
+        val sharedCategories = (0 until 100).map { index ->
+            """{"id":"shared-category-$index","name":"Shared category $index","type":"expense","scope":"household","householdId":"household-1"}"""
+        }
+        responses += ScriptedJsonResponse(body = pageBody(sharedCategories, "100", true))
+        responses += ScriptedJsonResponse(
+            body = pageBody(
+                listOf("""{"id":"personal-category","name":"Personal category","type":"expense","scope":"personal"}"""),
+                null,
+                false,
+            ),
+        )
+        val sharedAssets = (0 until 100).map { index ->
+            """{"id":"shared-asset-$index","name":"Shared asset $index","scopeType":"household","householdId":"household-1","currency":"RUB","manualAmount":"9999.00","isInvestment":false,"assetType":"other"}"""
+        }
+        responses += ScriptedJsonResponse(body = pageBody(sharedAssets, "100", true))
+        responses += ScriptedJsonResponse(
+            body = pageBody(
+                listOf("""{"id":"personal-asset","name":"Personal asset","scopeType":"personal","currency":"RUB","manualAmount":"0","isInvestment":false,"assetType":"other"}"""),
+                null,
+                false,
+            ),
+        )
+        val sharedTransactions = (0 until 100).map { index ->
+            """{"id":"shared-tx-$index","transactionType":"expense","accountId":"shared-account-0","categoryId":"shared-category-0","amount":"9999.00","currency":"RUB","occurredAt":"2026-07-31T23:59:59Z","description":"SHARED SECRET $index"}"""
+        }
+        val personalTransactions = (0 until 201).map { index ->
+            val occurredAt = java.time.Instant.parse("2026-07-01T00:00:00Z").plusSeconds(index.toLong())
+            """{"id":"personal-tx-$index","transactionType":"expense","accountId":"personal-account","categoryId":"personal-category","amount":"1.00","currency":"RUB","occurredAt":"$occurredAt","description":"Personal $index"}"""
+        }
+        val allTransactions = sharedTransactions + personalTransactions
+        allTransactions.chunked(100).forEachIndexed { index, page ->
+            val nextOffset = (index + 1) * 100
+            val hasMore = nextOffset < allTransactions.size
+            responses += ScriptedJsonResponse(
+                body = pageBody(page, nextOffset.toString().takeIf { hasMore }, hasMore),
+            )
+        }
+        responses += ScriptedJsonResponse(body = """{"data":{"totalsByCurrency":[]}}""")
+        responses += ScriptedJsonResponse(body = """{"data":{"assetCategoryGroups":[]}}""")
+        responses += ScriptedJsonResponse(body = """{"data":{"items":[],"page":{"limit":100,"nextCursor":null,"hasMore":false}}}""")
+
+        withScriptedJsonServer(*responses.toTypedArray()) { baseUrl, requests ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.dashboard("2026-07-01", "2026-07-31")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val dashboard = (result as ApiResult.Success).value
+            assertEquals(listOf("personal-account"), dashboard.accounts.map { it.id })
+            assertEquals(listOf("personal-category"), dashboard.categories.map { it.id })
+            assertEquals(listOf("personal-asset"), dashboard.assetCategories.map { it.id })
+            assertEquals(201, dashboard.transactions.size)
+            assertEquals("personal-tx-200", dashboard.transactions.first().id)
+            assertTrue(dashboard.transactions.none { it.description?.contains("SHARED SECRET") == true })
+            assertTrue(requests.any { it.contains("/api/v1/accounts?ownershipType=personal") && it.contains("cursor=100") })
+            assertTrue(requests.any { it.contains("/api/v1/transactions?ownershipType=personal") && it.contains("cursor=300") })
+        }
+    }
+
     private data class ScriptedJsonResponse(
         val statusCode: Int = 200,
         val body: String,
@@ -172,6 +249,11 @@ class ApiClientDashboardTest {
         ScriptedJsonResponse(body = accountBalancesBody),
         ScriptedJsonResponse(body = """{"data": {"items": []}}"""),
     )
+
+    private fun pageBody(items: List<String>, nextCursor: String?, hasMore: Boolean): String {
+        val cursor = nextCursor?.let { "\"$it\"" } ?: "null"
+        return """{"items":[${items.joinToString(",")}],"page":{"limit":100,"nextCursor":$cursor,"hasMore":$hasMore}}"""
+    }
 
     private fun accountBalancesWithInvestments(amount: String): String = """
         {
