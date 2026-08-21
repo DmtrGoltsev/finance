@@ -63,7 +63,7 @@ describe("LiveFinanceApiClient", () => {
         return jsonResponse({ actor: actor() });
       }
 
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -79,12 +79,12 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories") {
+      if (path.startsWith("/api/v1/categories?")) {
         return jsonResponse({
           items: [{ id: "category-1", name: "Dev Salary", type: "income" }]
         });
       }
-      if (path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({
           items: [
             {
@@ -153,12 +153,12 @@ describe("LiveFinanceApiClient", () => {
       name: "Зарплата"
     });
     expect(snapshot.operations[0]).toMatchObject({
-      title: "Зарплата",
-      amount: { value: 250, currency: "USD" }
-    });
-    expect(snapshot.operations[1]).toMatchObject({
       title: "Покупка актива",
       amount: { value: 50, currency: "USD" }
+    });
+    expect(snapshot.operations[1]).toMatchObject({
+      title: "Зарплата",
+      amount: { value: 250, currency: "USD" }
     });
     expect(snapshot.reports).toHaveLength(1);
     expect(
@@ -252,7 +252,11 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts" || path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (
+        path.startsWith("/api/v1/accounts?") ||
+        path.startsWith("/api/v1/categories?") ||
+        path.startsWith("/api/v1/transactions?")
+      ) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -574,7 +578,7 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -590,7 +594,7 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -637,7 +641,7 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -653,10 +657,10 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
-      if (path === "/api/v1/asset-categories") {
+      if (path.startsWith("/api/v1/asset-categories?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/account-balances?")) {
@@ -717,7 +721,7 @@ describe("LiveFinanceApiClient", () => {
           }
         });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -733,10 +737,10 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
-      if (path === "/api/v1/asset-categories") {
+      if (path.startsWith("/api/v1/asset-categories?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/account-balances?")) {
@@ -797,7 +801,7 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -814,7 +818,7 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -846,6 +850,138 @@ describe("LiveFinanceApiClient", () => {
     });
 
     expect(reportUrls).toHaveLength(1);
+  });
+
+  it("loads every personal page, deduplicates it, and drops shared-first transactions", async () => {
+    const personalAccounts = Array.from({ length: 205 }, (_, index) => ({
+      id: `account-${index}`,
+      name: `Account ${index}`,
+      accountType: "card",
+      ownershipType: "personal",
+      ownerUserId: "user-1",
+      householdId: null,
+      currency: "RUB",
+      currentBalance: "1.00"
+    }));
+    const personalCategories = Array.from({ length: 205 }, (_, index) => ({
+      id: `category-${index}`,
+      name: `Category ${index}`,
+      type: "expense",
+      scope: "personal",
+      ownerUserId: "user-1",
+      householdId: null
+    }));
+    const personalAssets = Array.from({ length: 205 }, (_, index) => ({
+      id: `asset-${index}`,
+      name: `Asset ${index}`,
+      scopeType: "personal",
+      ownerUserId: "user-1",
+      householdId: null,
+      currency: "RUB",
+      manualAmount: "0",
+      isInvestment: false,
+      assetType: "other",
+      recordStatus: "active"
+    }));
+    const sharedTransactions = Array.from({ length: 100 }, (_, index) => ({
+      id: `shared-transaction-${index}`,
+      transactionType: "expense",
+      accountId: "shared-account",
+      counterpartyAccountId: null,
+      categoryId: "shared-category",
+      amount: "9999.00",
+      currency: "RUB",
+      occurredAt: "2026-06-30T23:59:59Z",
+      description: `SHARED SECRET ${index}`
+    }));
+    const personalTransactions = Array.from({ length: 205 }, (_, index) => ({
+      id: `transaction-${index}`,
+      transactionType: "expense",
+      accountId: `account-${index}`,
+      counterpartyAccountId: null,
+      categoryId: `category-${index}`,
+      amount: "1.00",
+      currency: "RUB",
+      occurredAt: new Date(Date.UTC(2026, 5, 1, 0, 0, index)).toISOString(),
+      description: `Personal ${index}`
+    }));
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({ actor: actor() });
+      }
+      const [pathname, queryString = ""] = path.split("?");
+      const params = new URLSearchParams(queryString);
+      const paged = (items: unknown[]) => {
+        const cursor = Number(params.get("cursor") ?? 0);
+        const pageItems = items.slice(cursor, cursor + 100);
+        const next = cursor + pageItems.length;
+        return jsonResponse({
+          items: pageItems,
+          page: {
+            limit: 100,
+            nextCursor: next < items.length ? String(next) : null,
+            hasMore: next < items.length
+          }
+        });
+      };
+      if (pathname === "/api/v1/accounts") {
+        expect(params.get("ownershipType")).toBe("personal");
+        return paged([
+          { ...personalAccounts[0], id: "shared-account", ownershipType: "shared", householdId: "h-1" },
+          ...personalAccounts,
+          personalAccounts[204]
+        ]);
+      }
+      if (pathname === "/api/v1/categories") {
+        expect(params.get("scope")).toBe("personal");
+        return paged([
+          { ...personalCategories[0], id: "shared-category", scope: "household", householdId: "h-1" },
+          ...personalCategories,
+          personalCategories[204]
+        ]);
+      }
+      if (pathname === "/api/v1/asset-categories") {
+        expect(params.get("scopeType")).toBe("personal");
+        return paged([
+          { ...personalAssets[0], id: "shared-asset", scopeType: "household", householdId: "h-1" },
+          ...personalAssets,
+          personalAssets[204]
+        ]);
+      }
+      if (pathname === "/api/v1/transactions") {
+        expect(params.get("ownershipType")).toBe("personal");
+        expect(params.get("sort")).toBe("-occurredAt");
+        expect(params.get("startDate")).toBe("2026-06-01");
+        expect(params.get("endDate")).toBe("2026-06-30");
+        return paged([...sharedTransactions, ...personalTransactions, personalTransactions[204]]);
+      }
+      if (pathname === "/api/v1/reports/account-balances") {
+        return jsonResponse({ data: { assetCategoryGroups: [], investmentsByCurrency: [], totalsByCurrency: [] } });
+      }
+      if (pathname === "/api/v1/reports/summary") {
+        return jsonResponse({
+          data: { reportMode: "personal", currency: "RUB", incomeTotal: 0, expenseTotal: 205, netTotal: -205 }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot({
+      startDate: "2026-06-01",
+      endDate: "2026-06-30"
+    });
+
+    expect(snapshot.accounts).toHaveLength(205);
+    expect(snapshot.categories).toHaveLength(205);
+    expect(snapshot.assetCategories).toHaveLength(205);
+    expect(snapshot.operations).toHaveLength(205);
+    expect(snapshot.operations[0].id).toBe("transaction-204");
+    expect(JSON.stringify(snapshot)).not.toContain("SHARED SECRET");
   });
 
   it("retrieves category breakdown expenses sorted by amount", async () => {
@@ -1223,6 +1359,18 @@ describe("LiveFinanceApiClient", () => {
         method: "DELETE"
       })
     );
+    expect(document.cookie).not.toContain("finance_csrf=");
+  });
+
+  it("clears csrf state but surfaces a failed server-side session revocation", async () => {
+    document.cookie = "finance_csrf=csrf-stale; path=/";
+    const fetcher = vi.fn(async () => jsonResponse({ error: { code: "FAILED" } }, 503));
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    await expect(client.logout()).rejects.toThrow("failed: 503");
     expect(document.cookie).not.toContain("finance_csrf=");
   });
 

@@ -90,6 +90,7 @@ type CategoryDto = {
   color?: string | null;
   scope?: "personal" | "household";
   householdId?: string | null;
+  ownerUserId?: string | null;
   status?: "active" | "archived" | "deleted";
   version?: number;
 };
@@ -312,6 +313,11 @@ type ReportAccountBalancesDto = {
 
 type PageEnvelope<T> = {
   items: T[];
+  page?: {
+    limit: number;
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
 };
 
 type DataEnvelope<T> = {
@@ -575,41 +581,83 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   }
 
   async logout(): Promise<void> {
-    await this.request<void>(
-      "/api/v1/sessions/current",
-      { method: "DELETE" },
-      { empty: true }
-    );
-    this.csrfToken = null;
-    clearCookie(CSRF_COOKIE_NAME);
+    try {
+      await this.request<void>(
+        "/api/v1/sessions/current",
+        { method: "DELETE" },
+        { empty: true }
+      );
+    } finally {
+      this.csrfToken = null;
+      clearCookie(CSRF_COOKIE_NAME);
+    }
   }
 
   async getDashboardSnapshot(input: ReportPeriodInput = {}): Promise<DashboardSnapshot> {
     const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
-    const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope, assetCategoriesEnvelope] =
+    const transactionQuery: Record<string, string> = {
+      ownershipType: "personal",
+      sort: "-occurredAt"
+    };
+    if (input.startDate) {
+      transactionQuery.startDate = input.startDate;
+    }
+    if (input.endDate) {
+      transactionQuery.endDate = input.endDate;
+    }
+
+    const [accountDtos, categoryDtos, transactionDtos, assetCategoryDtos] =
       await Promise.all([
-        this.get<PageEnvelope<AccountDto>>("/api/v1/accounts"),
-        this.get<PageEnvelope<CategoryDto>>("/api/v1/categories"),
-        this.get<PageEnvelope<TransactionDto>>("/api/v1/transactions"),
-        this.get<PageEnvelope<AssetCategoryDto>>("/api/v1/asset-categories").catch(
-          () => ({ items: [] } as PageEnvelope<AssetCategoryDto>)
-        )
+        this.getAllPages<AccountDto>("/api/v1/accounts", { ownershipType: "personal" }),
+        this.getAllPages<CategoryDto>("/api/v1/categories", { scope: "personal" }),
+        this.getAllPages<TransactionDto>("/api/v1/transactions", transactionQuery),
+        this.getAllPages<AssetCategoryDto>("/api/v1/asset-categories", {
+          scopeType: "personal"
+        }).catch(() => [] as AssetCategoryDto[])
       ]);
 
-    const accounts = accountsEnvelope.items
+    const actorUserId = session.actor.userId;
+    const accounts = accountDtos
+      .filter(
+        (account) =>
+          account.ownershipType === "personal" &&
+          account.householdId == null &&
+          (account.ownerUserId == null || account.ownerUserId === actorUserId)
+      )
       .map(mapAccount)
-      .filter((account) => account.ownershipType !== "shared");
-    const categories = categoriesEnvelope.items
+      .filter((account) => account.ownershipType === "personal");
+    const categories = categoryDtos
+      .filter(
+        (category) =>
+          category.scope !== "household" &&
+          category.householdId == null &&
+          (category.ownerUserId == null || category.ownerUserId === actorUserId)
+      )
       .map(mapCategory)
       .filter((category) => category.scope !== "household");
-    const operations = transactionsEnvelope.items
+    const personalAccountIds = new Set(accounts.map((account) => account.id));
+    const personalCategoryIds = new Set(categories.map((category) => category.id));
+    const personalTransactions = transactionDtos
+      .filter((transaction) => isStrictlyPersonalTransaction(
+        transaction,
+        personalAccountIds,
+        personalCategoryIds
+      ))
+      .sort(compareTransactionsNewestFirst);
+    const operations = personalTransactions
       .filter((transaction) => transaction.transactionType !== "transfer")
       .map((transaction) => mapOperation(transaction, accounts, categories));
-    const transfers = transactionsEnvelope.items
+    const transfers = personalTransactions
       .filter((transaction) => transaction.transactionType === "transfer")
       .map((transaction) => mapTransfer(transaction, accounts));
     const currency = accounts[0]?.balance.currency ?? "RUB";
-    const assetCategories = (assetCategoriesEnvelope as PageEnvelope<AssetCategoryDto>).items
+    const assetCategories = assetCategoryDtos
+      .filter(
+        (category) =>
+          category.scopeType === "personal" &&
+          category.householdId == null &&
+          (category.ownerUserId == null || category.ownerUserId === actorUserId)
+      )
       .map(mapAssetCategory)
       .filter((category) => category.scopeType === "personal");
 
@@ -1107,11 +1155,12 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     if (input?.isInvestment !== undefined) {
       params.set("isInvestment", String(input.isInvestment));
     }
-    const envelope = await this.get<PageEnvelope<AssetCategoryDto>>(
-      `/api/v1/asset-categories?${params.toString()}`
+    const items = await this.getAllPages<AssetCategoryDto>(
+      "/api/v1/asset-categories",
+      Object.fromEntries(params.entries())
     );
 
-    return envelope.items.map(mapAssetCategory);
+    return items.map(mapAssetCategory);
   }
 
   async createAssetCategory(input: AssetCategoryCreateInput): Promise<AssetCategory> {
@@ -1436,6 +1485,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       (envelope.data.items ?? []).filter((item) => item.categoryType !== "income");
 
     return expenseItems
+      .filter((item) => item.categoryScope === "personal" || item.categoryId == null)
       .map(mapCategoryBreakdownItem)
       .sort((left, right) => right.amount.value - left.amount.value);
   }
@@ -1463,6 +1513,40 @@ export class LiveFinanceApiClient implements FinanceApiClient {
 
   private get<T>(path: string): Promise<T> {
     return this.request<T>(path, { method: "GET" });
+  }
+
+  private async getAllPages<T extends { id: string }>(
+    path: string,
+    query: Record<string, string> = {}
+  ): Promise<T[]> {
+    const itemsById = new Map<string, T>();
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+
+    do {
+      const params = new URLSearchParams({ ...query, limit: "100" });
+      if (cursor) {
+        params.set("cursor", cursor);
+      }
+      const envelope = await this.get<PageEnvelope<T>>(`${path}?${params.toString()}`);
+      for (const item of envelope.items ?? []) {
+        if (item.id && !itemsById.has(item.id)) {
+          itemsById.set(item.id, item);
+        }
+      }
+
+      if (!envelope.page?.hasMore) {
+        break;
+      }
+      const nextCursor = envelope.page.nextCursor;
+      if (!nextCursor || seenCursors.has(nextCursor)) {
+        throw new Error(`Invalid pagination cursor for ${path}`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    } while (true);
+
+    return [...itemsById.values()];
   }
 
   private async request<T>(
@@ -1552,6 +1636,32 @@ function clearCookie(name: string): void {
 
 export function isApiRequestError(error: unknown, status?: number): error is ApiRequestError {
   return error instanceof ApiRequestError && (status === undefined || error.status === status);
+}
+
+function isStrictlyPersonalTransaction(
+  transaction: TransactionDto,
+  personalAccountIds: Set<string>,
+  personalCategoryIds: Set<string>
+): boolean {
+  if (!personalAccountIds.has(transaction.accountId)) {
+    return false;
+  }
+  if (transaction.categoryId && !personalCategoryIds.has(transaction.categoryId)) {
+    return false;
+  }
+  if (
+    transaction.counterpartyAccountId &&
+    !personalAccountIds.has(transaction.counterpartyAccountId)
+  ) {
+    return false;
+  }
+  return transaction.transactionType !== "transfer" || Boolean(transaction.counterpartyAccountId);
+}
+
+function compareTransactionsNewestFirst(left: TransactionDto, right: TransactionDto): number {
+  const leftDate = left.occurredAt || left.transactionDate || "";
+  const rightDate = right.occurredAt || right.transactionDate || "";
+  return rightDate.localeCompare(leftDate);
 }
 
 function mapAccount(account: AccountDto): AccountSummary {

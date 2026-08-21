@@ -482,6 +482,23 @@ describe("PWA finance experience", () => {
     expect(screen.queryByText("Капитал")).not.toBeInTheDocument();
   });
 
+  it("does not claim logout when server-side cookie revocation fails", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.logout = vi.fn(async () => {
+      throw new Error("revocation unavailable");
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByRole("button", { name: /Выйти/i }));
+
+    expect(await screen.findByRole("heading", { name: "Не удалось завершить выход" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Сессия может оставаться активной");
+    expect(screen.queryByRole("form", { name: "Вход в финансы" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Капитал")).not.toBeInTheDocument();
+  });
+
   it("renders the financial dashboard and hides technical wording", async () => {
     render(<App client={makeClient()} />);
 

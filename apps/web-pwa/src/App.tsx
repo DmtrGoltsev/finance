@@ -417,9 +417,9 @@ function planningTargetOptions(
 export function App({ client = financeApiClient }: { client?: FinanceApiClient }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">(
-    "checking"
-  );
+  const [authStatus, setAuthStatus] = useState<
+    "checking" | "authenticated" | "unauthenticated" | "logout-failed"
+  >("checking");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>("money");
   const viewMode: ViewMode = "personal";
@@ -489,11 +489,17 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
   };
 
   const logout = async () => {
+    setLoginError(null);
     try {
       await client.logout();
+      setAuthStatus("unauthenticated");
+    } catch {
+      setAuthStatus("logout-failed");
+      setLoginError(
+        "Сервер не подтвердил выход. Сессия может оставаться активной; после обновления страница проверит ее заново."
+      );
     } finally {
       setSnapshot(null);
-      setAuthStatus("unauthenticated");
       setActiveSection("money");
       setQuickAddOpen(false);
       setSaveStatus("");
@@ -640,6 +646,15 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         onRegister={submitRegistration}
         error={loginError}
       />
+    );
+  }
+
+  if (authStatus === "logout-failed") {
+    return (
+      <main className="loading" role="alert">
+        <h1>Не удалось завершить выход</h1>
+        <p>{loginError}</p>
+      </main>
     );
   }
 
