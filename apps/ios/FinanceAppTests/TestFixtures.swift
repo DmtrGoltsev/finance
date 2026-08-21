@@ -34,8 +34,8 @@ enum TestFixtures {
         scope: CategoryScope = .personal,
         householdId: String? = nil,
         status: RecordStatus = .active
-    ) -> Category {
-        Category(
+    ) -> FinanceApp.Category {
+        FinanceApp.Category(
             id: id,
             name: id,
             type: type,

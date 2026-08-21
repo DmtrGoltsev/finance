@@ -1010,7 +1010,7 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
 
         var migrated = FinanceLocalSnapshot.empty(scope: scope, deviceId: deviceId)
         for (_, source) in legacy.sorted(by: { $0.snapshot.updatedAt < $1.snapshot.updatedAt }) {
-            mergeLegacySnapshot(source.snapshot, into: &migrated, scope: scope)
+            mergeLegacySnapshot(source, into: &migrated, scope: scope)
         }
         migrated.syncState.deviceId = deviceId
         try await saveSnapshot(migrated)
@@ -1103,15 +1103,35 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
             target.pendingMutations.contains(where: { $0.clientMutationId == metadata.pendingMutationId })
         })
 
-        let knownTombstones = Set(
-            target.accounts.map { "\(SyncEntityType.accounts.rawValue):\($0.entity.id)" } +
-            target.categories.map { "\(SyncEntityType.categories.rawValue):\($0.entity.id)" } +
-            target.assetCategories.map { "\(SyncEntityType.assetCategories.rawValue):\($0.entity.id)" } +
-            target.transactions.map { "\(SyncEntityType.transactions.rawValue):\($0.entity.id)" } +
-            target.planningPlans.map { "\(SyncEntityType.planningPlans.rawValue):\($0.entity.id)" } +
-            target.planningIncomeSources.map { "\(SyncEntityType.planningIncomeSources.rawValue):\($0.entity.id)" } +
-            target.planningAllocations.map { "\(SyncEntityType.planningAllocations.rawValue):\($0.entity.id)" }
-        )
+        let accountTombstoneKeys: [String] = target.accounts.map {
+            "\(SyncEntityType.accounts.rawValue):\($0.entity.id)"
+        }
+        let categoryTombstoneKeys: [String] = target.categories.map {
+            "\(SyncEntityType.categories.rawValue):\($0.entity.id)"
+        }
+        let assetCategoryTombstoneKeys: [String] = target.assetCategories.map {
+            "\(SyncEntityType.assetCategories.rawValue):\($0.entity.id)"
+        }
+        let transactionTombstoneKeys: [String] = target.transactions.map {
+            "\(SyncEntityType.transactions.rawValue):\($0.entity.id)"
+        }
+        let planningPlanTombstoneKeys: [String] = target.planningPlans.map {
+            "\(SyncEntityType.planningPlans.rawValue):\($0.entity.id)"
+        }
+        let planningIncomeSourceTombstoneKeys: [String] = target.planningIncomeSources.map {
+            "\(SyncEntityType.planningIncomeSources.rawValue):\($0.entity.id)"
+        }
+        let planningAllocationTombstoneKeys: [String] = target.planningAllocations.map {
+            "\(SyncEntityType.planningAllocations.rawValue):\($0.entity.id)"
+        }
+        var knownTombstones = Set<String>()
+        knownTombstones.formUnion(accountTombstoneKeys)
+        knownTombstones.formUnion(categoryTombstoneKeys)
+        knownTombstones.formUnion(assetCategoryTombstoneKeys)
+        knownTombstones.formUnion(transactionTombstoneKeys)
+        knownTombstones.formUnion(planningPlanTombstoneKeys)
+        knownTombstones.formUnion(planningIncomeSourceTombstoneKeys)
+        knownTombstones.formUnion(planningAllocationTombstoneKeys)
         for tombstone in source.tombstones {
             let key = "\(tombstone.entityType.rawValue):\(tombstone.entityId)"
             let matchesPendingDelete = tombstone.pendingMutationId.map { pendingMutationId in
