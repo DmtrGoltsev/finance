@@ -419,12 +419,11 @@ struct FinanceAppView: View {
     private func performLogout() async {
         isLoading = true
         message = "Выходим"
-        do {
-            try await apiClient.logout()
-            await wipeConfirmedIdentityState(message: "Войдите, чтобы увидеть финансы")
-        } catch {
-            await wipeConfirmedIdentityState(message: "Сессия завершена локально. \(error.localizedDescription)")
-        }
+        let result = await apiClient.logout()
+        let statusMessage = result.remoteSessionRevoked
+            ? "Сессия завершена"
+            : "Сессия завершена локально. Сервер будет отозван при следующем входе."
+        await wipeConfirmedIdentityState(message: statusMessage)
         isLoading = false
     }
 
@@ -509,6 +508,10 @@ struct FinanceAppView: View {
     @discardableResult
     private func restoreBoundOfflineSession(message: String) async -> Bool {
         guard let binding = SessionIdentityStore.shared.load() else { return false }
+        guard OfflineSessionRestorePolicy.canRestore(storedExpiry: CSRFTokenStore.shared.sessionExpiry) else {
+            self.message = "Срок офлайн-доступа истёк. Подключитесь к серверу и войдите снова."
+            return false
+        }
         let scope = LocalStoreScope(viewerUserId: binding.userId)
         do {
             let snapshot = try await syncService.localSnapshot(scope: scope)

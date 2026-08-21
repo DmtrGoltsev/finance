@@ -1,10 +1,15 @@
 import Foundation
 
-protocol FinanceApiClient: Sendable {
+protocol FinanceSyncApiClient: Sendable {
+    func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse
+    func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse
+}
+
+protocol FinanceApiClient: FinanceSyncApiClient {
     func login(email: String, password: String) async throws -> SessionStatus
     func register(email: String, password: String, displayName: String?) async throws -> RegistrationResult
     func sessionStatus() async throws -> SessionStatus
-    func logout() async throws
+    func logout() async -> LogoutResult
 
     func listAccounts(limit: Int?, cursor: String?, ownershipType: OwnershipType?, householdId: String?, status: RecordStatus?, q: String?, sort: String?) async throws -> ([Account], PageInfo)
     func getAccount(accountId: String) async throws -> Account
@@ -65,9 +70,6 @@ protocol FinanceApiClient: Sendable {
     func createPlanningAllocation(planId: String, _ request: PlanningAllocationCreateRequest) async throws -> PlanningAllocation
     func updatePlanningAllocation(allocationId: String, _ request: PlanningAllocationUpdateRequest) async throws -> PlanningAllocation
     func deletePlanningAllocation(allocationId: String) async throws
-
-    func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse
-    func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse
 
     func dashboard(startDate: String?, endDate: String?) async throws -> FinanceDashboard
 }

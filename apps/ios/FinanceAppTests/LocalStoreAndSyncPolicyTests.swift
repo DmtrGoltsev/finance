@@ -365,8 +365,8 @@ final class LocalStoreAndSyncPolicyTests: XCTestCase {
         XCTAssertEqual(Set(assetUpdate.keys), Set(["name"]))
         XCTAssertNil(assetUpdate["version"])
 
-        let migrationAccountId = UUID().uuidString
-        let migrationCreate = try OfflineSyncPayloadContract.payload(
+        let detailedMigrationAccountId = UUID().uuidString
+        let detailedMigrationCreate = try OfflineSyncPayloadContract.payload(
             entityType: .investmentMigrations,
             operation: .create,
             request: InvestmentMigrationCreateRequest(
@@ -378,16 +378,16 @@ final class LocalStoreAndSyncPolicyTests: XCTestCase {
                 currency: .RUB,
                 scope: .personal,
                 householdId: nil,
-                accountIds: [migrationAccountId],
-                accountVersions: [migrationAccountId: 1]
+                accountIds: [detailedMigrationAccountId],
+                accountVersions: [detailedMigrationAccountId: 1]
             )
         )
         XCTAssertEqual(
-            Set(migrationCreate.keys),
+            Set(detailedMigrationCreate.keys),
             Set(["assetCategoryId", "name", "assetType", "currency", "scope", "accountIds", "accountVersions"])
         )
-        XCTAssertNil(migrationCreate["id"])
-        XCTAssertNil(migrationCreate["version"])
+        XCTAssertNil(detailedMigrationCreate["id"])
+        XCTAssertNil(detailedMigrationCreate["version"])
 
         let migrationAccountId = UUID().uuidString
         let migrationCreate = try OfflineSyncPayloadContract.payload(

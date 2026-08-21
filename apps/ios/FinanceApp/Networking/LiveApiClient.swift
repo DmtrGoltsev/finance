@@ -85,12 +85,25 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         return try parseSessionStatus(from: data)
     }
 
-    func logout() async throws {
+    func logout() async -> LogoutResult {
         let url = builder.makeURL(path: "/api/v1/sessions/current")
         let request = builder.makeURLRequest(url: url, method: "DELETE", csrfToken: csrfToken)
-        _ = try? await performRequestRaw(request, expectedCodes: [200, 204])
+        let remoteSessionRevoked: Bool
+        do {
+            _ = try await performRequestRaw(request, expectedCodes: [200, 204])
+            remoteSessionRevoked = true
+        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
+            // A 401 on logout proves the server session is already gone.
+            remoteSessionRevoked = true
+        } catch {
+            remoteSessionRevoked = false
+        }
         tokenStore.clear()
         clearSessionCookies()
+        return LogoutResult(
+            remoteSessionRevoked: remoteSessionRevoked,
+            localCredentialsCleared: true
+        )
     }
 
     // MARK: - Accounts
@@ -893,7 +906,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         if expectedCodes.contains(http.statusCode) {
             return data
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if SessionHTTPStatusPolicy.invalidatesIdentity(statusCode: http.statusCode) {
             tokenStore.clear()
             throw FinanceApiError.unauthorized
         }
@@ -908,7 +921,7 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         if expectedCodes.contains(http.statusCode) {
             return data
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if SessionHTTPStatusPolicy.invalidatesIdentity(statusCode: http.statusCode) {
             tokenStore.clear()
             throw FinanceApiError.unauthorized
         }

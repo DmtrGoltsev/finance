@@ -181,6 +181,15 @@ struct SyncPushResponse: Codable, Sendable {
     let results: [SyncMutationResult]
 }
 
+enum SyncPushResultCorrelation {
+    static func matches(_ result: SyncMutationResult, mutation: PendingMutation) -> Bool {
+        result.clientMutationId == mutation.clientMutationId &&
+            result.entityType == mutation.entityType &&
+            result.entityId == mutation.entityId &&
+            result.operation == mutation.operation
+    }
+}
+
 struct SyncPullRequest: Codable, Sendable {
     let deviceId: String
     let clientSchemaVersion: Int

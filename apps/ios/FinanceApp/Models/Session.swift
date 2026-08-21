@@ -45,6 +45,44 @@ enum SessionRestorePolicy {
     }
 }
 
+enum SessionHTTPStatusPolicy {
+    static func invalidatesIdentity(statusCode: Int) -> Bool {
+        statusCode == 401
+    }
+
+    static func isForbiddenOrCSRF(statusCode: Int) -> Bool {
+        statusCode == 403
+    }
+}
+
+enum OfflineSessionRestorePolicy {
+    static let maximumGrace: TimeInterval = 72 * 60 * 60
+
+    static func canRestore(storedExpiry: String?, now: Date = Date()) -> Bool {
+        guard let storedExpiry,
+              let expiry = parse(storedExpiry) else {
+            return false
+        }
+        return now <= expiry.addingTimeInterval(maximumGrace)
+    }
+
+    private static func parse(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
+    }
+}
+
+struct LogoutResult: Equatable, Sendable {
+    let remoteSessionRevoked: Bool
+    let localCredentialsCleared: Bool
+}
+
 struct ActorContext: Codable, Sendable {
     let userId: String
     let sessionId: String?

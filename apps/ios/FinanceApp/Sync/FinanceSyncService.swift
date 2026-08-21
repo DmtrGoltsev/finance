@@ -25,12 +25,12 @@ struct LocalSyncOverview: Codable, Sendable {
 }
 
 actor FinanceSyncService {
-    private let apiClient: FinanceApiClient
+    private let apiClient: any FinanceSyncApiClient
     private let localStore: FinanceLocalStore
     private let deviceIdentityStore: DeviceIdentityStore
 
     init(
-        apiClient: FinanceApiClient,
+        apiClient: any FinanceSyncApiClient,
         localStore: FinanceLocalStore = FileBackedFinanceLocalStore(),
         deviceIdentityStore: DeviceIdentityStore = .shared
     ) {
@@ -288,29 +288,11 @@ actor FinanceSyncService {
             )
         } ?? planningMetadata
 
-        switch operation {
-        case .delete, .archive:
-            try await localStore.optimisticDelete(
-                scope: scope,
-                deviceId: deviceId,
-                entityType: entityType,
-                entityId: entityId,
-                operation: operation,
-                baseVersion: baseVersion,
-                pendingMutationId: mutation.clientMutationId
-            )
-        case .create, .update, .restore, .confirm:
-            try await localStore.optimisticUpsert(
-                scope: scope,
-                deviceId: deviceId,
-                entityType: entityType,
-                entityId: entityId,
-                baseVersion: baseVersion,
-                pendingMutationId: mutation.clientMutationId,
-                payload: optimisticPayload
-            )
-        }
-        try await localStore.enqueueMutation(mutation, planningMetadata: metadata)
+        try await localStore.commitOptimisticMutation(
+            mutation,
+            planningMetadata: metadata,
+            optimisticPayload: optimisticPayload
+        )
     }
 
     func rejectOnlineOnlyOperation(_ operation: OnlineOnlySyncOperation) -> SyncIssue {
@@ -356,9 +338,35 @@ actor FinanceSyncService {
         )
 
         var summary = SyncPushSummary(pushed: pending.count, rejected: blocked.count)
+        guard response.deviceId == deviceId else {
+            for mutation in pending {
+                try await localStore.markFailed(
+                    scope: scope,
+                    deviceId: deviceId,
+                    mutationId: mutation.clientMutationId,
+                    message: "Сервер вернул ответ для другого устройства"
+                )
+            }
+            summary.failed += pending.count
+            summary.retry += pending.count
+            return summary
+        }
         let mutationsById = Dictionary(uniqueKeysWithValues: pending.map { ($0.clientMutationId, $0) })
+        var handledMutationIds = Set<String>()
         for result in response.results {
             guard let mutation = mutationsById[result.clientMutationId] else { continue }
+            guard handledMutationIds.insert(result.clientMutationId).inserted,
+                  SyncPushResultCorrelation.matches(result, mutation: mutation) else {
+                try await localStore.markFailed(
+                    scope: scope,
+                    deviceId: deviceId,
+                    mutationId: mutation.clientMutationId,
+                    message: "Сервер вернул несогласованный результат синхронизации"
+                )
+                summary.failed += 1
+                summary.retry += 1
+                continue
+            }
             switch result.status {
             case .applied:
                 try await localStore.markApplied(scope: scope, deviceId: deviceId, result: result)
@@ -370,14 +378,14 @@ actor FinanceSyncService {
             }
         }
 
-        let resultIds = Set(response.results.map(\.clientMutationId))
-        for missing in pending where !resultIds.contains(missing.clientMutationId) {
+        for missing in pending where !handledMutationIds.contains(missing.clientMutationId) {
             try await localStore.markFailed(
                 scope: scope,
                 deviceId: deviceId,
                 mutationId: missing.clientMutationId,
                 message: "Сервер не вернул результат синхронизации"
             )
+            summary.failed += 1
             summary.retry += 1
         }
         return summary
@@ -411,19 +419,21 @@ actor FinanceSyncService {
                 )
             }
         let personalChangeIds = Set(personalChanges.map(\.id))
-        let quarantined = response.changes.filter { !personalChangeIds.contains($0.id) }
-        try await localStore.quarantinePullChanges(
-            scope: scope,
-            deviceId: deviceId,
-            changes: quarantined
-        )
+        let quarantined = response.changes
+            .filter { !personalChangeIds.contains($0.id) }
+            .map(SyncPullQuarantine.personalScope)
         let personalResponse = SyncPullResponse(
             changes: personalChanges,
             nextCursor: response.nextCursor,
             hasMore: response.hasMore,
             serverTime: response.serverTime
         )
-        try await localStore.applyPullResponse(scope: scope, deviceId: deviceId, response: personalResponse)
+        try await localStore.applyPullPage(
+            scope: scope,
+            deviceId: deviceId,
+            response: personalResponse,
+            quarantined: quarantined
+        )
         return personalResponse
     }
 
