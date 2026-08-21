@@ -98,6 +98,7 @@ import com.finance.mvp.BuildConfig
 import com.finance.mvp.R
 import com.finance.mvp.api.AccountSummary
 import com.finance.mvp.api.ApiConfig
+import com.finance.mvp.api.ApiFailureKind
 import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.AssetCategory
 import com.finance.mvp.api.AssetCategoryCreateRequest
@@ -809,20 +810,16 @@ fun FinanceApp(
     fun logout() {
         scope.launch {
             val userId = uiState.session?.syncUserIdOrNull()
+            userId?.let { TransactionSyncWorker.cancel(context, it) }
             uiState = uiState.copy(isLoading = true, message = "Выходим")
-            when (val result = withContext(Dispatchers.IO) { apiClient.logout() }) {
-                is ApiResult.Success -> {
-                    if (syncManager != null && userId != null) {
-                        withContext(Dispatchers.IO) { syncManager.clearUserData(userId) }
-                    }
-                    syncUiState = SyncUiState()
-                    uiState = FinanceUiState(message = "Сессия завершена")
-                }
-                is ApiResult.Failure -> uiState = uiState.copy(
-                    isLoading = false,
-                    message = result.userFacingMessage(),
-                )
+            val result = withContext(Dispatchers.IO) { apiClient.logout() }
+            if (syncManager != null && userId != null) {
+                withContext(Dispatchers.IO) { syncManager.clearUserData(userId) }
             }
+            syncUiState = SyncUiState()
+            syncIssues = emptyList()
+            showSyncIssuesSheet = false
+            uiState = withContext(Dispatchers.IO) { completedLogoutUiState(result, apiClient) }
         }
     }
 
@@ -5444,6 +5441,22 @@ private fun FinanceMode.scopeTitle(): String = when (this) {
     FinanceMode.Personal -> "Личные финансы"
     FinanceMode.Shared -> "Legacy"
     FinanceMode.Overview -> "Legacy"
+}
+
+internal fun loggedOutFinanceUiState(result: ApiResult<Unit>): FinanceUiState = FinanceUiState(
+    message = when (result) {
+        is ApiResult.Success -> "Сессия завершена"
+        is ApiResult.Failure -> "Сессия завершена на устройстве. Сервер временно недоступен."
+    },
+)
+
+internal suspend fun completedLogoutUiState(
+    result: ApiResult<Unit>,
+    apiClient: FinanceApiClient,
+): FinanceUiState = if (result is ApiResult.Failure && result.kind == ApiFailureKind.SESSION_CHANGED) {
+    restoredFinanceUiState(apiClient)
+} else {
+    loggedOutFinanceUiState(result)
 }
 
 private fun TransactionSummary.displayDescription(): String {

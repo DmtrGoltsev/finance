@@ -2,6 +2,7 @@ package com.finance.mvp.sync
 
 import androidx.room.withTransaction
 import com.finance.mvp.api.AccountSummary
+import com.finance.mvp.api.ApiFailureKind
 import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.InvestmentMigrationCreateRequest
 import com.finance.mvp.api.PlanningAllocationCreateRequest
@@ -831,20 +832,32 @@ class SyncManager(
         )
     }
 
-    suspend fun pushPendingMutations(userId: String, limit: Int = 100): SyncPushSummary {
+    suspend fun pushPendingMutations(userId: String, limit: Int = 100): SyncPushSummary =
+        pushPendingMutations(userId, limit, apiClient)
+
+    private suspend fun pushPendingMutations(
+        userId: String,
+        limit: Int,
+        boundApiClient: SyncApiClient,
+    ): SyncPushSummary {
         val pending = database.pendingMutationDao().pendingForUser(userId = userId, limit = limit)
         if (pending.isEmpty()) return SyncPushSummary()
         val (syncablePending, onlineOnlyPending) = pending.partition { isSyncableEntityType(it.entityType) }
         if (onlineOnlyPending.isNotEmpty()) {
-            database.pendingMutationDao().deleteByClientMutationIds(
-                onlineOnlyPending.map { it.clientMutationId },
-            )
+            val cleanup = boundApiClient.withSessionLease {
+                database.pendingMutationDao().deleteByClientMutationIds(
+                    onlineOnlyPending.map { it.clientMutationId },
+                )
+            }
+            if (cleanup is ApiResult.Failure) {
+                return SyncPushSummary(sessionChanged = cleanup.kind == ApiFailureKind.SESSION_CHANGED)
+            }
         }
         if (syncablePending.isEmpty()) {
             return SyncPushSummary(rejected = onlineOnlyPending.size)
         }
 
-        val response = apiClient.syncPush(
+        val response = boundApiClient.syncPush(
             SyncPushRequest(
                 deviceId = deviceIdStore.deviceId(),
                 mutations = syncablePending.map { it.toSyncMutationRequest() },
@@ -853,16 +866,35 @@ class SyncManager(
 
         return when (response) {
             is ApiResult.Success -> {
-                val summary = applyPushResponse(userId, syncablePending, response.value)
-                summary.copy(rejected = summary.rejected + onlineOnlyPending.size)
+                when (
+                    val guardedApply = boundApiClient.withSessionLease {
+                        val summary = applyPushResponse(userId, syncablePending, response.value)
+                        summary.copy(rejected = summary.rejected + onlineOnlyPending.size)
+                    }
+                ) {
+                    is ApiResult.Success -> guardedApply.value
+                    is ApiResult.Failure -> SyncPushSummary(
+                        sessionChanged = guardedApply.kind == ApiFailureKind.SESSION_CHANGED,
+                    )
+                }
             }
             is ApiResult.Failure -> {
+                if (response.kind == ApiFailureKind.SESSION_CHANGED) {
+                    return SyncPushSummary(sessionChanged = true)
+                }
                 val retriable = response.statusCode.isRetriableStatus()
-                syncablePending.forEach { mutation ->
-                    markMutationAfterFailure(
-                        mutation = mutation,
-                        retriable = retriable,
-                        message = response.message,
+                val guardedFailure = boundApiClient.withSessionLease {
+                    syncablePending.forEach { mutation ->
+                        markMutationAfterFailure(
+                            mutation = mutation,
+                            retriable = retriable,
+                            message = response.message,
+                        )
+                    }
+                }
+                if (guardedFailure is ApiResult.Failure) {
+                    return SyncPushSummary(
+                        sessionChanged = guardedFailure.kind == ApiFailureKind.SESSION_CHANGED,
                     )
                 }
                 SyncPushSummary(
@@ -875,10 +907,17 @@ class SyncManager(
         }
     }
 
-    suspend fun pullAndApply(userId: String, limit: Int = 100): ApiResult<SyncPullResponse> {
+    suspend fun pullAndApply(userId: String, limit: Int = 100): ApiResult<SyncPullResponse> =
+        pullAndApply(userId, limit, apiClient)
+
+    private suspend fun pullAndApply(
+        userId: String,
+        limit: Int,
+        boundApiClient: SyncApiClient,
+    ): ApiResult<SyncPullResponse> {
         val deviceId = deviceIdStore.deviceId()
         val state = database.syncStateDao().find(userId, deviceId)
-        val response = apiClient.syncPull(
+        val response = boundApiClient.syncPull(
             SyncPullRequest(
                 deviceId = deviceId,
                 cursor = state?.serverCursor ?: 0,
@@ -887,24 +926,42 @@ class SyncManager(
             ),
         )
         if (response is ApiResult.Success) {
-            applyPullChanges(userId = userId, response = response.value)
-            database.syncStateDao().upsert(
-                SyncStateEntity(
-                    userId = userId,
-                    deviceId = deviceId,
-                    serverCursor = response.value.nextCursor,
-                    lastSuccessfulSyncAt = response.value.serverTime,
-                    updatedAtEpochMillis = nowEpochMillis(),
-                ),
-            )
+            val guardedApply = boundApiClient.withSessionLease {
+                applyPullChanges(userId = userId, response = response.value)
+                database.syncStateDao().upsert(
+                    SyncStateEntity(
+                        userId = userId,
+                        deviceId = deviceId,
+                        serverCursor = response.value.nextCursor,
+                        lastSuccessfulSyncAt = response.value.serverTime,
+                        updatedAtEpochMillis = nowEpochMillis(),
+                    ),
+                )
+            }
+            if (guardedApply is ApiResult.Failure) return guardedApply
         }
         return response
     }
 
     suspend fun syncOnce(userId: String): SyncOnceSummary {
-        val push = pushPendingMutations(userId)
-        val pull = pullAndApply(userId)
-        return SyncOnceSummary(push = push, pullSucceeded = pull is ApiResult.Success)
+        val boundClient = when (val result = apiClient.bindSession(userId)) {
+            is ApiResult.Success -> result.value
+            is ApiResult.Failure -> return SyncOnceSummary(
+                push = SyncPushSummary(sessionChanged = result.kind == ApiFailureKind.SESSION_CHANGED),
+                pullSucceeded = false,
+                sessionChanged = result.kind == ApiFailureKind.SESSION_CHANGED,
+            )
+        }
+        val push = pushPendingMutations(userId, limit = 100, boundApiClient = boundClient)
+        if (push.sessionChanged) {
+            return SyncOnceSummary(push = push, pullSucceeded = false, sessionChanged = true)
+        }
+        val pull = pullAndApply(userId, limit = 100, boundApiClient = boundClient)
+        return SyncOnceSummary(
+            push = push,
+            pullSucceeded = pull is ApiResult.Success,
+            sessionChanged = pull is ApiResult.Failure && pull.kind == ApiFailureKind.SESSION_CHANGED,
+        )
     }
 
     suspend fun syncNow(userId: String): SyncOnceSummary = syncOnce(userId)
@@ -2329,11 +2386,13 @@ data class SyncPushSummary(
     val rejected: Int = 0,
     val retry: Int = 0,
     val failed: Int = 0,
+    val sessionChanged: Boolean = false,
 )
 
 data class SyncOnceSummary(
     val push: SyncPushSummary,
     val pullSucceeded: Boolean,
+    val sessionChanged: Boolean = false,
 )
 
 data class SyncIssueSummary(
