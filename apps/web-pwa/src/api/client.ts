@@ -596,29 +596,29 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         )
       ]);
 
-    const accounts = accountsEnvelope.items.map(mapAccount);
-    const categories = categoriesEnvelope.items.map(mapCategory);
+    const accounts = accountsEnvelope.items
+      .map(mapAccount)
+      .filter((account) => account.ownershipType !== "shared");
+    const categories = categoriesEnvelope.items
+      .map(mapCategory)
+      .filter((category) => category.scope !== "household");
     const operations = transactionsEnvelope.items
       .filter((transaction) => transaction.transactionType !== "transfer")
       .map((transaction) => mapOperation(transaction, accounts, categories));
     const transfers = transactionsEnvelope.items
       .filter((transaction) => transaction.transactionType === "transfer")
       .map((transaction) => mapTransfer(transaction, accounts));
-    const householdId = pickHouseholdId(session.actor);
     const currency = accounts[0]?.balance.currency ?? "RUB";
-    const assetCategories = (assetCategoriesEnvelope as PageEnvelope<AssetCategoryDto>).items.map(
-      mapAssetCategory
-    );
+    const assetCategories = (assetCategoriesEnvelope as PageEnvelope<AssetCategoryDto>).items
+      .map(mapAssetCategory)
+      .filter((category) => category.scopeType === "personal");
 
     let accountBalancesData: ReportAccountBalancesDto | null = null;
     try {
       const params = new URLSearchParams({
-        reportMode: householdId ? "combined_viewer_overview" : "personal",
+        reportMode: "personal",
         currency
       });
-      if (householdId) {
-        params.set("householdId", householdId);
-      }
       if (input.startDate) {
         params.set("startDate", input.startDate);
       }
@@ -641,14 +641,14 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       ? money(accountBalancesData.totalsByCurrency[0].netWorthTotal, currency)
       : null;
 
-    const reports = await this.getReports(householdId, currency, input);
+    const reports = await this.getPersonalReports(currency, input);
 
     return {
       session: {
         viewerName: "Владелец",
-        householdName: householdId ? "Общие финансы" : "Личный режим",
+        householdName: "Финансы",
         accessLabel: "Вход выполнен",
-        householdId
+        householdId: null
       },
       accounts,
       categories,
@@ -671,8 +671,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           name: input.name?.trim() || `Новый актив ${uniqueSuffix()}`,
           accountType: accountTypeFromKind(input.kind ?? "cash"),
           isPaymentAccount: input.isPaymentAccount ?? true,
-          ownershipType: input.ownershipType ?? "personal",
-          householdId: input.ownershipType === "shared" ? input.householdId : null,
+          ownershipType: "personal",
+          householdId: null,
           currency: input.currency ?? "RUB",
           initialBalance: String(input.initialBalance ?? 0),
           ...(input.assetCategoryId ? { assetCategoryId: input.assetCategoryId } : {})
@@ -746,8 +746,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         body: JSON.stringify({
           name: input.name.trim(),
           type: input.direction,
-          scope: input.scope,
-          householdId: input.scope === "household" ? input.householdId : null,
+          scope: "personal",
+          householdId: null,
           iconKey: input.iconKey,
           color: input.color
         })
@@ -1121,8 +1121,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         method: "POST",
         body: JSON.stringify({
           name: input.name.trim(),
-          scopeType: input.scopeType,
-          ...(input.householdId ? { householdId: input.householdId } : {}),
+          scopeType: "personal",
           currency: input.currency,
           ...(input.manualAmount !== undefined ? { manualAmount: input.manualAmount.toFixed(4) } : {}),
           ...(input.isInvestment !== undefined ? { isInvestment: input.isInvestment } : {}),
@@ -1441,37 +1440,25 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       .sort((left, right) => right.amount.value - left.amount.value);
   }
 
-  private async getReports(
-    householdId: string | null,
+  private async getPersonalReports(
     currency: CurrencyCode,
     period: ReportPeriodInput = {}
   ): Promise<ReportSummary[]> {
-    const modes: ReportMode[] = householdId
-      ? ["shared_family_report", "combined_viewer_overview", "personal"]
-      : ["personal"];
-
-    return Promise.all(
-      modes.map(async (mode) => {
-        const params = new URLSearchParams({
-          reportMode: mode,
-          currency
-        });
-        if (householdId && mode !== "personal") {
-          params.set("householdId", householdId);
-        }
-        if (period.startDate) {
-          params.set("startDate", period.startDate);
-        }
-        if (period.endDate) {
-          params.set("endDate", period.endDate);
-        }
-        const envelope = await this.get<DataEnvelope<ReportSummaryDto>>(
-          `/api/v1/reports/summary?${params.toString()}`
-        );
-
-        return mapReport(envelope.data, currency, period);
-      })
+    const params = new URLSearchParams({
+      reportMode: "personal",
+      currency
+    });
+    if (period.startDate) {
+      params.set("startDate", period.startDate);
+    }
+    if (period.endDate) {
+      params.set("endDate", period.endDate);
+    }
+    const envelope = await this.get<DataEnvelope<ReportSummaryDto>>(
+      `/api/v1/reports/summary?${params.toString()}`
     );
+
+    return [mapReport(envelope.data, currency, period)];
   }
 
   private get<T>(path: string): Promise<T> {
@@ -1571,7 +1558,7 @@ function mapAccount(account: AccountDto): AccountSummary {
   return {
     id: account.id,
     name: userFacingSeedText(account.name),
-    ownerName: account.ownershipType === "shared" ? "Общее" : "Личное",
+    ownerName: "Владелец",
     kind: mapAccountKind(account.accountType),
     isPaymentAccount: account.isPaymentAccount ?? true,
     ownershipType: account.ownershipType,
@@ -1971,9 +1958,9 @@ function transactionTypeLabel(type: TransactionDto["transactionType"]): string {
 }
 
 const reportModeLabels: Record<ReportMode, string> = {
-  personal: "Личное",
-  shared_family_report: "Общее",
-  combined_viewer_overview: "Обзор"
+  personal: "Финансы",
+  shared_family_report: "Финансы",
+  combined_viewer_overview: "Финансы"
 };
 
 function userFacingSeedText(value: string | null | undefined): string {

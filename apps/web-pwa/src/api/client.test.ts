@@ -143,10 +143,10 @@ describe("LiveFinanceApiClient", () => {
     expect(localStorageSet).not.toHaveBeenCalled();
     expect(localStorageRemove).not.toHaveBeenCalled();
     expect(snapshot.session.accessLabel).toBe("Вход выполнен");
-    expect(snapshot.session.householdId).toBe("household-1");
+    expect(snapshot.session.householdId).toBeNull();
     expect(snapshot.accounts[0]).toMatchObject({
       name: "Личные наличные",
-      ownerName: "Личное",
+      ownerName: "Владелец",
       balance: { value: 925.5, currency: "USD" }
     });
     expect(snapshot.categories[0]).toMatchObject({
@@ -160,7 +160,7 @@ describe("LiveFinanceApiClient", () => {
       title: "Покупка актива",
       amount: { value: 50, currency: "USD" }
     });
-    expect(snapshot.reports).toHaveLength(3);
+    expect(snapshot.reports).toHaveLength(1);
     expect(
       fetcher.mock.calls.some(([url]) =>
         /\/api\/v1\/imports\//.test(String(url))
@@ -310,7 +310,7 @@ describe("LiveFinanceApiClient", () => {
     ).toBe(false);
   });
 
-  it("sends householdId when creating a shared account", async () => {
+  it("forces personal ownership when creating an account", async () => {
     document.cookie = "finance_csrf=csrf-account; path=/";
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const path = String(url).replace("http://api.test", "");
@@ -324,8 +324,8 @@ describe("LiveFinanceApiClient", () => {
           name: "Family Wallet",
           accountType: "bank",
           isPaymentAccount: true,
-          ownershipType: "shared",
-          householdId: "household-1",
+          ownershipType: "personal",
+          householdId: null,
           currency: "RUB",
           initialBalance: "100"
         })
@@ -336,9 +336,9 @@ describe("LiveFinanceApiClient", () => {
           id: "account-new",
           name: "Family Wallet",
           accountType: "bank",
-          ownershipType: "shared",
-          ownerUserId: null,
-          householdId: "household-1",
+          ownershipType: "personal",
+          ownerUserId: "user-1",
+          householdId: null,
           currency: "RUB",
           currentBalance: "100.00",
           status: "active",
@@ -361,7 +361,8 @@ describe("LiveFinanceApiClient", () => {
       householdId: "household-1"
     });
 
-    expect(account.householdId).toBe("household-1");
+    expect(account.householdId).toBeNull();
+    expect(account.ownershipType).toBe("personal");
   });
 
   it("creates manual income and expense with transactionDate instead of local-noon occurredAt", async () => {
@@ -489,8 +490,8 @@ describe("LiveFinanceApiClient", () => {
           JSON.stringify({
             name: "Подработка",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "income",
             color: "#087f5b"
           })
@@ -500,8 +501,8 @@ describe("LiveFinanceApiClient", () => {
             id: "category-new",
             name: "Подработка",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "income",
             color: "#087f5b",
             version: 1
@@ -523,8 +524,8 @@ describe("LiveFinanceApiClient", () => {
             id: "category-new",
             name: "Подработка новая",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "wallet",
             color: "#2563eb",
             version: 2
@@ -542,8 +543,8 @@ describe("LiveFinanceApiClient", () => {
     const category = await client.createDemoCategory({
       name: "Подработка",
       direction: "income",
-      scope: "household",
-      householdId: "household-1",
+      scope: "personal",
+      householdId: null,
       iconKey: "income",
       color: "#087f5b"
     });
@@ -559,13 +560,13 @@ describe("LiveFinanceApiClient", () => {
       id: "category-new",
       name: "Подработка новая",
       direction: "income",
-      scope: "household",
-      householdId: "household-1",
+      scope: "personal",
+      householdId: null,
       version: 2
     });
   });
 
-  it("maps the nested live report summary shape", async () => {
+  it("maps the personal nested live report summary shape", async () => {
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const path = String(url).replace("http://api.test", "");
       expect(init?.credentials).toBe("include");
@@ -620,16 +621,13 @@ describe("LiveFinanceApiClient", () => {
     const snapshot = await client.getDashboardSnapshot();
 
     expect(snapshot.reports[0]).toMatchObject({
-      mode: "shared_family_report",
-      title: "Общее",
+      mode: "personal",
+      title: "Финансы",
       income: { value: 250, currency: "USD" },
       expense: { value: 105.75, currency: "USD" },
       balanceDelta: { value: 144.25, currency: "USD" }
     });
-    expect(snapshot.reports[1]).toMatchObject({
-      mode: "combined_viewer_overview",
-      title: "Обзор"
-    });
+    expect(snapshot.reports).toHaveLength(1);
   });
 
   it("maps monthly investments from report summary totals, not account balances net worth", async () => {
@@ -847,7 +845,7 @@ describe("LiveFinanceApiClient", () => {
       endDate: "2026-06-30"
     });
 
-    expect(reportUrls).toHaveLength(3);
+    expect(reportUrls).toHaveLength(1);
   });
 
   it("retrieves category breakdown expenses sorted by amount", async () => {

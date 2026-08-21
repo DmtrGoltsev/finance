@@ -844,7 +844,7 @@ describe("PWA finance experience", () => {
     expect(client.createDemoOperation).not.toHaveBeenCalled();
   });
 
-  it("preserves shared visibility when adding an asset from quick add", async () => {
+  it("creates quick-add assets in personal scope without a scope selector", async () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<App client={client} />);
@@ -858,7 +858,7 @@ describe("PWA finance experience", () => {
     await user.type(within(sheet).getByLabelText("Сумма"), "222");
     await user.selectOptions(within(sheet).getByLabelText("Тип"), "deposit");
     await user.click(within(sheet).getByText("Еще"));
-    await user.click(within(sheet).getByLabelText("Общее"));
+    expect(within(sheet).queryByRole("group", { name: "Куда сохранить" })).not.toBeInTheDocument();
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -866,15 +866,15 @@ describe("PWA finance experience", () => {
         expect.objectContaining({
           kind: "deposit",
           initialBalance: 222,
-          ownershipType: "shared",
-          householdId: "household-1"
+          ownershipType: "personal",
+          householdId: null
         })
       );
     });
     expect(client.createDemoOperation).not.toHaveBeenCalled();
   });
 
-  it("disables shared asset creation when the current session has no household", async () => {
+  it("does not expose shared asset creation when the session has no household", async () => {
     const user = userEvent.setup();
     const client = makeClient({
       ...financeSnapshot,
@@ -891,7 +891,8 @@ describe("PWA finance experience", () => {
     await user.click(within(sheet).getByRole("button", { name: /Актив/i }));
     await user.click(within(sheet).getByText("Еще"));
 
-    expect(within(sheet).getByLabelText("Общее")).toBeDisabled();
+    expect(within(sheet).queryByText("Общее")).not.toBeInTheDocument();
+    expect(within(sheet).queryByText("Личное")).not.toBeInTheDocument();
   });
 
   it("creates and edits categories from the categories UI", async () => {
@@ -904,20 +905,21 @@ describe("PWA finance experience", () => {
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
 
     const form = screen.getByRole("form", { name: "Управление категорией" });
-    await user.type(within(form).getByLabelText("Название"), "Подработка");
-    await user.selectOptions(within(form).getByLabelText("Тип"), "income");
-    await user.selectOptions(within(form).getByLabelText("Доступ"), "household");
-    await user.selectOptions(within(form).getByLabelText("Иконка"), "income");
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
+    expect(within(form).queryByLabelText("Тип")).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText("Доступ")).not.toBeInTheDocument();
+    await user.type(within(form).getByLabelText("Название"), "Дом");
+    await user.selectOptions(within(form).getByLabelText("Иконка"), "home");
     fireEvent.change(within(form).getByLabelText("Цвет"), { target: { value: "#087F5B" } });
     await user.click(within(form).getByRole("button", { name: "Создать" }));
 
     await waitFor(() => {
       expect(client.createDemoCategory).toHaveBeenCalledWith({
-        name: "Подработка",
-        direction: "income",
-        scope: "household",
-        householdId: "household-1",
-        iconKey: "income",
+        name: "Дом",
+        direction: "expense",
+        scope: "personal",
+        householdId: null,
+        iconKey: "home",
         color: "#087f5b"
       });
     });
@@ -952,8 +954,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByText(/Карта Мир → Вклад/)).toBeInTheDocument();
   });
 
-  it("does not fall back to another report mode when overview report is absent", async () => {
-    const user = userEvent.setup();
+  it("does not fall back to a shared report when the personal report is absent", async () => {
     render(
       <App
         client={makeClient({
@@ -966,11 +967,10 @@ describe("PWA finance experience", () => {
     );
 
     await screen.findByRole("heading", { name: "Деньги" });
-    await user.click(screen.getByRole("button", { name: /Обзор/i }));
-
     const spendingMetric = screen.getByText("Расходы месяца").closest("article");
     expect(spendingMetric).toHaveTextContent("0 $");
     expect(spendingMetric).not.toHaveTextContent("30");
+    expect(screen.queryByRole("group", { name: "Режим просмотра" })).not.toBeInTheDocument();
   });
 
   it("hides transfers when only one side is visible in the current scope", async () => {
@@ -1012,7 +1012,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByText("Карта Мир")).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
-    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
     expect(screen.getByText("Продукты")).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
@@ -1095,7 +1095,7 @@ describe("PWA finance experience", () => {
 
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
 
-    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
     expect(screen.getByText("Продукты")).toBeInTheDocument();
   });
 
@@ -1333,28 +1333,13 @@ describe("PWA finance experience", () => {
       );
     });
   });
-  it("shows explicit personal, shared and overview modes without technical wording", async () => {
-    const user = userEvent.setup();
+  it("shows only personal finance data without scope modes", async () => {
     render(<App client={makeClient()} />);
 
     await screen.findByRole("heading", { name: "Деньги" });
-    const modeSwitch = screen.getByRole("group", { name: "Режим просмотра" });
-    expect(within(modeSwitch).getByRole("button", { name: /Личное/i })).toBeInTheDocument();
-    expect(within(modeSwitch).getByRole("button", { name: /Общее/i })).toBeInTheDocument();
-    expect(within(modeSwitch).getByRole("button", { name: /Обзор/i })).toBeInTheDocument();
-    expect(screen.getByText("Личное видно только вам")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Режим просмотра" })).not.toBeInTheDocument();
     expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
     expect(screen.queryByText("Домашняя покупка")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Общее/i }));
-    expect(screen.getByText("Общее для семьи")).toBeInTheDocument();
-    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
-    expect(screen.queryByText("Покупка продуктов")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Обзор/i }));
-    expect(screen.getByText("Мой обзор: личное + общее, без личных данных других участников")).toBeInTheDocument();
-    expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
-    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
-    expect(document.body).not.toHaveTextContent(/combined_viewer_overview|shared_family_report/i);
+    expect(document.body).not.toHaveTextContent(/Общее|Мой обзор|combined_viewer_overview|shared_family_report/i);
   });
 });
