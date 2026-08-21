@@ -156,9 +156,10 @@ fun PlanningUi(
     val coroutineScope = rememberCoroutineScope()
     var month by rememberSaveable { mutableStateOf(nextPlanningMonth()) }
     val boundedMonth = month.coercePlanningMonthAtLeastCurrent()
-    val resolvedScope = selectedMode.toPlanningScope(dashboard?.session?.householdId)
+    val personalMode = FinanceMode.Personal
+    val resolvedScope = requireNotNull(personalMode.toPlanningScope(null))
     val userId = dashboard?.session?.userId?.takeIf { it.isNotBlank() }
-    val currency = remember(dashboard, selectedMode) { dashboard.planningCurrency(selectedMode) }
+    val currency = remember(dashboard) { dashboard.planningCurrency(personalMode) }
     var plan by remember { mutableStateOf<PlanningPlan?>(null) }
     var history by remember { mutableStateOf<List<PlanningPlan>>(emptyList()) }
     var isLoading by rememberSaveable { mutableStateOf(false) }
@@ -323,23 +324,10 @@ fun PlanningUi(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PlanningScopeCard(
-            selectedMode = selectedMode,
-            hasHousehold = !dashboard?.session?.householdId.isNullOrBlank(),
             month = boundedMonth,
             currency = currency,
-            onModeSelected = onModeSelected,
             onMonthSelected = { month = it.coercePlanningMonthAtLeastCurrent() },
         )
-
-        if (selectedMode == FinanceMode.Overview) {
-            PlanningOverviewGate(onModeSelected)
-            return@Column
-        }
-
-        if (resolvedScope == null) {
-            PlanningMessageCard("Общее планирование недоступно без активного общего бюджета. Выберите Личное или подключите общий бюджет.")
-            return@Column
-        }
 
         if (!message.isNullOrBlank()) {
             PlanningMessageCard(message.orEmpty())
@@ -654,11 +642,8 @@ fun PlanningUi(
 
 @Composable
 private fun PlanningScopeCard(
-    selectedMode: FinanceMode,
-    hasHousehold: Boolean,
     month: String,
     currency: String,
-    onModeSelected: (FinanceMode) -> Unit,
     onMonthSelected: (String) -> Unit,
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
@@ -677,15 +662,6 @@ private fun PlanningScopeCard(
             }
             Text("Месяц плана", style = MaterialTheme.typography.labelLarge)
             PlanningMonthPicker(selectedMonth = month, onSelected = onMonthSelected)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(writableFinanceModes(hasHousehold)) { mode ->
-                    FilterChip(
-                        selected = selectedMode == mode,
-                        onClick = { onModeSelected(mode) },
-                        label = { Text(mode.title) },
-                    )
-                }
-            }
         }
     }
 }
@@ -709,30 +685,6 @@ private fun PlanningMonthPicker(
 }
 
 @Composable
-private fun PlanningOverviewGate(onModeSelected: (FinanceMode) -> Unit) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("Обзор не создаёт единый план", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Планирование работает в одном режиме. Выберите личный или общий план, чтобы не смешивать бюджеты небезопасным агрегатом.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onModeSelected(FinanceMode.Personal) }, modifier = Modifier.weight(1f)) {
-                    Text("Личное")
-                }
-                OutlinedButton(onClick = { onModeSelected(FinanceMode.Shared) }, modifier = Modifier.weight(1f)) {
-                    Text("Общее")
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PlanningPlanCard(
     plan: PlanningPlan?,
     month: String,
@@ -749,7 +701,7 @@ private fun PlanningPlanCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Текущий план", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(plan?.let { "${it.scope.localizedPlanningScope()} • ${it.month.localizedPlanningMonth()} • ${it.currency}" } ?: "План на ${month.localizedPlanningMonth()} ещё не создан", style = MaterialTheme.typography.bodySmall)
+                    Text(plan?.let { "${it.month.localizedPlanningMonth()} • ${it.currency}" } ?: "План на ${month.localizedPlanningMonth()} ещё не создан", style = MaterialTheme.typography.bodySmall)
                 }
                 IconButton(onClick = onRefresh, enabled = !isLoading) {
                     Icon(painterResource(R.drawable.ic_refresh_24), contentDescription = "Обновить")
@@ -1037,7 +989,7 @@ private fun AllocationsCard(
             ) {
                 Text("Распределения в плане", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 if (plan.allocations.isEmpty()) {
-                    Text("В плане ${plan.scope.localizedPlanningScope()} пока нет распределений. Добавьте расходную или инвестиционную цель.", style = MaterialTheme.typography.bodySmall)
+                    Text("В плане пока нет распределений. Добавьте расходную или инвестиционную цель.", style = MaterialTheme.typography.bodySmall)
                 } else {
                     plan.allocations.forEach { allocation ->
                         AllocationRow(
@@ -1429,7 +1381,7 @@ private fun PlanningHistoryCard(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(plan.month.localizedPlanningMonth(), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Text("${plan.scope.localizedPlanningScope()} • ${plan.currency}", style = MaterialTheme.typography.bodySmall)
+                                Text(plan.currency, style = MaterialTheme.typography.bodySmall)
                             }
                             TextButton(onClick = { onCopy(plan) }, enabled = !isLoading) {
                                 Text("Копировать")
@@ -1457,7 +1409,7 @@ private fun PlanningCreateCategorySheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Новая категория • ${mode.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Новая категория расходов", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -1498,7 +1450,7 @@ private fun PlanningCreateAccountSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("${targetType.localizedNewTargetTitle()} • ${mode.title}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(targetType.localizedNewTargetTitle(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -1727,13 +1679,6 @@ private fun AccountSummary.planningDisplayName(): String = userFacingSeedText(na
 private fun CategorySummary.planningDisplayName(): String = userFacingSeedText(name)
 
 private fun AssetCategory.planningDisplayName(): String = userFacingSeedText(name)
-
-private fun String.localizedPlanningScope(): String = when (this) {
-    "personal" -> "Личное"
-    "household" -> "Общее"
-    "shared" -> "Общее"
-    else -> "Личное"
-}
 
 private fun String.localizedTargetType(): String = when (this) {
     TARGET_EXPENSE_CATEGORY -> "Расходы"

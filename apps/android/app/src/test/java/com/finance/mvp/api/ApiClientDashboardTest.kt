@@ -98,6 +98,35 @@ class ApiClientDashboardTest {
         }
     }
 
+    @Test
+    fun dashboardUsesPersonalScopeAndFiltersSharedEntitiesWhenMembershipExists() = runBlocking {
+        withScriptedJsonServer(
+            ScriptedJsonResponse(body = """{"data":{"actor":{"id":"user-1","memberships":[{"householdId":"household-1","status":"active"}]}}}"""),
+            ScriptedJsonResponse(body = """{"items":[{"id":"acc-personal","name":"Card","accountType":"card","ownershipType":"personal","currency":"RUB","currentBalance":"100.00"},{"id":"acc-shared","name":"Shared","accountType":"bank","ownershipType":"shared","householdId":"household-1","currency":"RUB","currentBalance":"900.00"}]}"""),
+            ScriptedJsonResponse(body = """{"items":[{"id":"cat-personal","name":"Food","type":"expense","scope":"personal"},{"id":"cat-shared","name":"Home","type":"expense","scope":"household","householdId":"household-1"}]}"""),
+            ScriptedJsonResponse(body = """{"items":[{"id":"asset-personal","name":"Broker","scopeType":"personal","currency":"RUB","manualAmount":"0"},{"id":"asset-shared","name":"Shared broker","scopeType":"household","householdId":"household-1","currency":"RUB","manualAmount":"0"}]}"""),
+            ScriptedJsonResponse(body = """{"items":[{"id":"tx-personal","transactionType":"expense","accountId":"acc-personal","categoryId":"cat-personal","amount":"10.00","currency":"RUB","transactionDate":"2026-07-01"},{"id":"tx-shared","transactionType":"expense","accountId":"acc-shared","categoryId":"cat-shared","amount":"20.00","currency":"RUB","transactionDate":"2026-07-01"}]}"""),
+            ScriptedJsonResponse(body = """{"data":{"totalsByCurrency":[]}}"""),
+            ScriptedJsonResponse(body = """{"data":{"assetCategoryGroups":[]}}"""),
+            ScriptedJsonResponse(body = """{"data":{"items":[]}}"""),
+        ) { baseUrl, requests ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.dashboard("2026-07-01", "2026-07-31")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val dashboard = (result as ApiResult.Success).value
+            assertEquals(listOf("acc-personal"), dashboard.accounts.map { it.id })
+            assertEquals(listOf("cat-personal"), dashboard.categories.map { it.id })
+            assertEquals(listOf("asset-personal"), dashboard.assetCategories.map { it.id })
+            assertEquals(listOf("tx-personal"), dashboard.transactions.map { it.id })
+            val reportRequests = requests.filter { it.contains("/api/v1/reports/") }
+            assertTrue(reportRequests.isNotEmpty())
+            assertTrue(reportRequests.all { it.contains("reportMode=personal") })
+            assertTrue(reportRequests.none { it.contains("combined_viewer_overview") || it.contains("householdId=") })
+        }
+    }
+
     private data class ScriptedJsonResponse(
         val statusCode: Int = 200,
         val body: String,
@@ -141,6 +170,7 @@ class ApiClientDashboardTest {
         ScriptedJsonResponse(body = """{"items": []}"""),
         ScriptedJsonResponse(body = summaryBody),
         ScriptedJsonResponse(body = accountBalancesBody),
+        ScriptedJsonResponse(body = """{"data": {"items": []}}"""),
     )
 
     private fun accountBalancesWithInvestments(amount: String): String = """

@@ -622,29 +622,32 @@ class LiveFinanceApiClient(
 
     override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> = safeCall {
         val session = parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
-        val accounts = request(path = "/api/v1/accounts", method = "GET").items().map(::parseAccount)
-        val categories = request(path = "/api/v1/categories", method = "GET").items().map(::parseCategory)
+        val accounts = request(path = "/api/v1/accounts", method = "GET")
+            .items()
+            .map(::parseAccount)
+            .filter { it.ownershipType != "shared" }
+        val categories = request(path = "/api/v1/categories", method = "GET")
+            .items()
+            .map(::parseCategory)
+            .filter { it.scope != "household" }
         val assetCategories = runCatching {
-            request(path = "/api/v1/asset-categories", method = "GET").items().map(::parseAssetCategory)
+            request(path = "/api/v1/asset-categories", method = "GET")
+                .items()
+                .map(::parseAssetCategory)
+                .filter { it.scopeType != "household" }
         }.getOrDefault(emptyList())
         val dateQuery = reportDateQuery(startDate, endDate)
+        val personalAccountIds = accounts.map { it.id }.toSet()
         val transactions = request(
             path = "/api/v1/transactions",
             method = "GET",
             query = dateQuery,
-        ).items().map(::parseTransaction)
+        ).items().map(::parseTransaction).filter { it.accountId in personalAccountIds }
         val reportData = runCatching {
-            val householdId = session.householdId
             request(
                 path = "/api/v1/reports/summary",
                 method = "GET",
-                query = (
-                    if (householdId.isNullOrBlank()) {
-                        mapOf("reportMode" to "personal")
-                    } else {
-                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
-                    }
-                    ) + dateQuery,
+                query = mapOf("reportMode" to "personal") + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val totals = reportData
@@ -653,17 +656,10 @@ class LiveFinanceApiClient(
             ?.map(::parseMoneyTotal)
             ?: emptyList()
         val accountBalancesData = runCatching {
-            val householdId = session.householdId
             request(
                 path = "/api/v1/reports/account-balances",
                 method = "GET",
-                query = (
-                    if (householdId.isNullOrBlank()) {
-                        mapOf("reportMode" to "personal")
-                    } else {
-                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
-                    }
-                    ) + dateQuery,
+                query = mapOf("reportMode" to "personal") + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val assetCategoryGroups = accountBalancesData
@@ -674,13 +670,12 @@ class LiveFinanceApiClient(
         val investmentsByCurrency = reportData?.investmentTotalsByCurrency().orEmpty()
         val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
             ?: investmentsByCurrency.firstOrNull()
-        val reportTransferCount = session.householdId?.let { householdId ->
+        val reportTransferCount = runCatching {
             request(
                 path = "/api/v1/reports/transactions",
                 method = "GET",
                 query = mapOf(
-                    "reportMode" to "combined_viewer_overview",
-                    "householdId" to householdId,
+                    "reportMode" to "personal",
                     "currency" to (accounts.firstOrNull()?.currency ?: "USD"),
                     "transactionTypes" to "transfer",
                 ) + dateQuery,
@@ -688,7 +683,7 @@ class LiveFinanceApiClient(
                 ?.optJSONArray("items")
                 ?.length()
                 ?: 0
-        } ?: 0
+        }.getOrDefault(0)
 
         FinanceDashboard(
             session = session,

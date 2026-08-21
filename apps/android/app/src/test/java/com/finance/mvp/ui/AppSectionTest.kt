@@ -18,7 +18,7 @@ class AppSectionTest {
     fun exposesMobileFinanceSectionsWithCategoryManagement() {
         val titles = financeSections().map { it.title }
 
-        assertEquals(listOf("Главная", "Операции", "Активы", "Категории", "Аналитика"), titles)
+        assertEquals(listOf("Главная", "Операции", "Активы", "Категории расходов", "Аналитика"), titles)
     }
 
     @Test
@@ -221,15 +221,15 @@ class AppSectionTest {
 
         assertEquals("Для перевода нужны два совместимых счета в одном scope и одной валюте.", transferPairValidationMessage(personal, null))
         assertEquals("Выберите два разных счета", transferPairValidationMessage(personal, personal))
-        assertEquals("Перед отправкой выберите счета одного scope: Личное с Личным или Общее с Общим.", transferPairValidationMessage(personal, shared))
+        assertEquals("Перед отправкой выберите два личных счёта.", transferPairValidationMessage(personal, shared))
         assertEquals("Перед отправкой выберите счета в одной валюте: конвертация в переводе недоступна.", transferPairValidationMessage(personal, eur))
         assertEquals(null, transferPairValidationMessage(personal, personal.copy(id = "personal-2")))
     }
 
     @Test
-    fun writableModesExcludeOverviewForWriteFlows() {
+    fun writableModesAreAlwaysPersonalEvenWhenSessionHasHousehold() {
         assertEquals(listOf(FinanceMode.Personal), writableFinanceModes(hasHousehold = false))
-        assertEquals(listOf(FinanceMode.Personal, FinanceMode.Shared), writableFinanceModes(hasHousehold = true))
+        assertEquals(listOf(FinanceMode.Personal), writableFinanceModes(hasHousehold = true))
         assertFalse(writableFinanceModes(hasHousehold = true).contains(FinanceMode.Overview))
     }
 
@@ -255,8 +255,8 @@ class AppSectionTest {
             transferValidation = null,
         )
 
-        assertTrue(overviewReason.orEmpty().contains("Мой обзор read-only"))
-        assertTrue(missingCategoryReason.orEmpty().contains("нет категории"))
+        assertTrue(overviewReason.orEmpty().contains("личных финансах"))
+        assertTrue(missingCategoryReason.orEmpty().contains("нет категории", ignoreCase = true))
         assertFalse(quickAddEntryTypes().contains(QuickEntryType.Asset))
     }
 
@@ -750,7 +750,7 @@ class AppSectionTest {
     }
 
     @Test
-    fun emptyOverviewLegacyInvestmentMigrationRequiresExplicitScope() {
+    fun emptyLegacyInvestmentMigrationFallsBackToPersonalScope() {
         val selection = selectLegacyAssetCategoryMigrationTarget(
             selectedMode = FinanceMode.Overview,
             accounts = emptyList(),
@@ -759,8 +759,10 @@ class AppSectionTest {
             groupName = "Брокер",
         )
 
-        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Blocked)
-        assertTrue((selection as LegacyAssetCategoryMigrationTargetSelection.Blocked).message.contains("Переключитесь"))
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Ready)
+        val target = (selection as LegacyAssetCategoryMigrationTargetSelection.Ready).target
+        assertEquals("personal", target.scopeType)
+        assertEquals(null, target.householdId)
     }
 
     @Test
