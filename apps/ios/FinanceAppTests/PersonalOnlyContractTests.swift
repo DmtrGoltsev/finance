@@ -1,8 +1,44 @@
 import XCTest
+import Security
 @testable import FinanceApp
 
 @MainActor
 final class PersonalOnlyContractTests: XCTestCase {
+    func testKeychainUsesDeviceBoundAccessibility() {
+        XCTAssertTrue(CFEqual(
+            DeviceBoundKeychain.accessibility,
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ))
+        XCTAssertTrue(CFEqual(
+            CategoryAggregateMappingStore.keychainAccessibility,
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ))
+    }
+
+    func testDeviceBoundKeychainPersistsThisDeviceOnlyAttribute() throws {
+        let service = "com.finance.tests.\(UUID().uuidString)"
+        let account = "device-bound"
+        defer { DeviceBoundKeychain.delete(service: service, account: account) }
+
+        XCTAssertEqual(
+            DeviceBoundKeychain.saveString("secret", service: service, account: account),
+            errSecSuccess
+        )
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ] as CFDictionary, &result)
+        XCTAssertEqual(status, errSecSuccess)
+        let attributes = try XCTUnwrap(result as? [String: Any])
+        let accessibility = try XCTUnwrap(attributes[kSecAttrAccessible as String])
+        XCTAssertTrue(CFEqual(accessibility as CFTypeRef, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly))
+    }
+
     func testPersonalCreatePayloadsNeverCarryHousehold() throws {
         let account = AccountCreateRequest(
             name: "Card",

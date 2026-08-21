@@ -1,9 +1,9 @@
 import Foundation
-import Security
 import CryptoKit
 
 final class CategoryAggregateMappingStore: @unchecked Sendable {
     static let shared = CategoryAggregateMappingStore()
+    static let keychainAccessibility = DeviceBoundKeychain.accessibility
 
     private let servicePrefix = "com.finance.app.category-mapping"
     private let indexedServicesKey = "finance.category-mapping.services"
@@ -21,44 +21,17 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
     func save(label: String, categoryId: String) {
         let service = serviceKey(label)
         rememberService(service)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "mapping",
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard let data = categoryId.data(using: .utf8) else { return }
-        let attributes: [String: Any] = query.merging([
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]) { _, new in new }
-        SecItemAdd(attributes as CFDictionary, nil)
+        DeviceBoundKeychain.saveString(categoryId, service: service, account: "mapping")
     }
 
     func get(label: String) -> String? {
-        let service = serviceKey(label)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "mapping",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        DeviceBoundKeychain.loadString(service: serviceKey(label), account: "mapping")
     }
 
     func clearAll() {
         indexedServices().forEach(deleteService)
         defaults.removeObject(forKey: indexedServicesKey)
 
-        let legacyQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: "mapping",
-        ]
-        SecItemDelete(legacyQuery as CFDictionary)
     }
 
     private func rememberService(_ service: String) {
@@ -73,11 +46,6 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
     }
 
     private func deleteService(_ service: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "mapping",
-        ]
-        SecItemDelete(query as CFDictionary)
+        DeviceBoundKeychain.delete(service: service, account: "mapping")
     }
 }

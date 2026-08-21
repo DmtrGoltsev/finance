@@ -106,7 +106,8 @@ struct PlanningView: View {
                     entityType: .planningPlans,
                     entityId: localPlan.id,
                     operation: .create,
-                    payload: localPlan,
+                    request: request,
+                    optimisticEntity: localPlan,
                     planId: localPlan.id,
                     baseVersion: nil
                 )
@@ -135,7 +136,8 @@ struct PlanningView: View {
                     entityType: .planningIncomeSources,
                     entityId: source.id,
                     operation: .create,
-                    payload: source,
+                    request: request,
+                    optimisticEntity: source,
                     planId: planId,
                     baseVersion: nil
                 )
@@ -164,7 +166,8 @@ struct PlanningView: View {
                     entityType: .planningIncomeSources,
                     entityId: updated.id,
                     operation: .update,
-                    payload: updated,
+                    request: PlanningIncomeSourceOfflineUpdateRequest(request),
+                    optimisticEntity: updated,
                     planId: updated.planId,
                     baseVersion: source.version
                 )
@@ -189,11 +192,11 @@ struct PlanningView: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
                 let confirmed = confirmedIncomeSource(source)
-                try await enqueuePlanning(
+                try await enqueuePlanningAction(
                     entityType: .planningIncomeSources,
                     entityId: confirmed.id,
                     operation: .confirm,
-                    payload: confirmed,
+                    optimisticEntity: confirmed,
                     planId: confirmed.planId,
                     baseVersion: source.version
                 )
@@ -220,6 +223,7 @@ struct PlanningView: View {
                 try await enqueuePlanningDelete(
                     entityType: .planningIncomeSources,
                     entityId: source.id,
+                    optimisticEntity: source,
                     planId: source.planId,
                     baseVersion: source.version
                 )
@@ -248,7 +252,8 @@ struct PlanningView: View {
                     entityType: .planningAllocations,
                     entityId: allocation.id,
                     operation: .create,
-                    payload: allocation,
+                    request: request,
+                    optimisticEntity: allocation,
                     planId: planId,
                     baseVersion: nil
                 )
@@ -277,7 +282,8 @@ struct PlanningView: View {
                     entityType: .planningAllocations,
                     entityId: updated.id,
                     operation: .update,
-                    payload: updated,
+                    request: PlanningAllocationOfflineUpdateRequest(request),
+                    optimisticEntity: updated,
                     planId: updated.planId,
                     baseVersion: allocation.version
                 )
@@ -304,6 +310,7 @@ struct PlanningView: View {
                 try await enqueuePlanningDelete(
                     entityType: .planningAllocations,
                     entityId: allocation.id,
+                    optimisticEntity: allocation,
                     planId: allocation.planId,
                     baseVersion: allocation.version
                 )
@@ -348,11 +355,12 @@ struct PlanningView: View {
         }
     }
 
-    private func enqueuePlanning<T: Encodable>(
+    private func enqueuePlanning<Request: Encodable, OptimisticEntity: Encodable>(
         entityType: SyncEntityType,
         entityId: String,
         operation: SyncOperation,
-        payload: T,
+        request: Request,
+        optimisticEntity: OptimisticEntity,
         planId: String?,
         baseVersion: Int?
     ) async throws {
@@ -363,16 +371,20 @@ struct PlanningView: View {
             entityId: entityId,
             operation: operation,
             baseVersion: baseVersion,
-            request: payload,
+            request: request,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: planningOwnershipContext,
             planId: planId,
             month: plan?.month ?? boundedMonth,
             planningScope: .personal
         )
     }
 
-    private func enqueuePlanningDelete(
+    private func enqueuePlanningAction<OptimisticEntity: Encodable>(
         entityType: SyncEntityType,
         entityId: String,
+        operation: SyncOperation,
+        optimisticEntity: OptimisticEntity,
         planId: String?,
         baseVersion: Int?
     ) async throws {
@@ -381,18 +393,48 @@ struct PlanningView: View {
             scope: localScope,
             entityType: entityType,
             entityId: entityId,
-            operation: .delete,
+            operation: operation,
             baseVersion: baseVersion,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: planningOwnershipContext,
             planId: planId,
             month: plan?.month ?? boundedMonth,
             planningScope: .personal
         )
     }
 
+    private func enqueuePlanningDelete<OptimisticEntity: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        optimisticEntity: OptimisticEntity,
+        planId: String?,
+        baseVersion: Int?
+    ) async throws {
+        try await enqueuePlanningAction(
+            entityType: entityType,
+            entityId: entityId,
+            operation: .delete,
+            optimisticEntity: optimisticEntity,
+            planId: planId,
+            baseVersion: baseVersion
+        )
+    }
+
+    private var planningOwnershipContext: PersonalOwnershipContext {
+        PersonalOwnershipContext(
+            viewerUserId: localScope?.viewerUserId,
+            accounts: dashboard?.accounts ?? [],
+            categories: dashboard?.categories ?? [],
+            assetCategories: dashboard?.assetCategories ?? [],
+            plans: plan.map { [$0] } ?? []
+        )
+    }
+
     private func localPlanningPlan(from request: PlanningPlanCreateRequest) -> PlanningPlan {
         PlanningPlan(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             scope: request.scope,
+            ownerUserId: localScope?.viewerUserId,
             month: request.month,
             currency: request.currency,
             householdId: nil,
@@ -405,7 +447,7 @@ struct PlanningView: View {
 
     private func localIncomeSource(planId: String, from request: PlanningIncomeSourceCreateRequest) -> PlanningIncomeSource {
         PlanningIncomeSource(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             planId: planId,
             amount: request.amount,
             source: request.source,
@@ -453,7 +495,7 @@ struct PlanningView: View {
 
     private func localAllocation(planId: String, from request: PlanningAllocationCreateRequest) -> PlanningAllocation {
         PlanningAllocation(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             planId: planId,
             targetType: request.targetType,
             targetId: request.targetId,
@@ -593,6 +635,7 @@ struct PlanningView: View {
         PlanningPlan(
             id: current.id,
             scope: current.scope,
+            ownerUserId: current.ownerUserId,
             month: current.month,
             currency: current.currency,
             householdId: nil,

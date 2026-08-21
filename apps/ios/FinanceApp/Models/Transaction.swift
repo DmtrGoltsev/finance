@@ -55,3 +55,29 @@ struct TransactionUpdateRequest: Codable, Sendable {
     let sourceType: String?
     let version: Int?
 }
+
+struct TransactionOfflineUpdateRequest: Codable, Sendable {
+    let transactionType: TransactionType?
+    let accountId: String?
+    let counterpartyAccountId: String?
+    let categoryId: String?
+    let amount: String?
+    let currency: CurrencyCode?
+    let occurredAt: String?
+    let transactionDate: String?
+    let description: String?
+    let sourceType: String?
+
+    init(_ request: TransactionUpdateRequest) {
+        transactionType = request.transactionType
+        accountId = request.accountId
+        counterpartyAccountId = request.counterpartyAccountId
+        categoryId = request.categoryId
+        amount = request.amount
+        currency = request.currency
+        occurredAt = request.occurredAt
+        transactionDate = request.transactionDate
+        description = request.description
+        sourceType = request.sourceType
+    }
+}

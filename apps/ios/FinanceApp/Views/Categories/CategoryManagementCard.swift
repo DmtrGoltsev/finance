@@ -132,7 +132,12 @@ struct CategoryManagementCard: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
                 let category = localCategory(from: request)
-                try await enqueueOptimistic(entityId: category.id, operation: .create, payload: category)
+                try await enqueueOptimistic(
+                    entityId: category.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: category
+                )
                 newCategoryName = ""
                 await onLocalSnapshotChanged()
                 message = "Категория добавлена локально, ожидает синхронизации"
@@ -169,7 +174,13 @@ struct CategoryManagementCard: View {
                     status: category.status,
                     version: category.version
                 )
-                try await enqueueOptimistic(entityId: category.id, operation: .update, baseVersion: category.version, payload: updated)
+                try await enqueueOptimistic(
+                    entityId: category.id,
+                    operation: .update,
+                    baseVersion: category.version,
+                    request: CategoryOfflineUpdateRequest(request),
+                    optimisticEntity: updated
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория обновлена локально, ожидает синхронизации"
             } catch {
@@ -186,8 +197,13 @@ struct CategoryManagementCard: View {
             await onRefresh()
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
-                let version = categories.first(where: { $0.id == id })?.version
-                try await enqueueOptimistic(entityId: id, operation: .archive, baseVersion: version, payload: Optional<Category>.none)
+                guard let category = categories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                try await enqueueOptimistic(
+                    entityId: id,
+                    operation: .archive,
+                    baseVersion: category.version,
+                    optimisticEntity: category
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория архивирована локально, ожидает синхронизации"
             } catch {
@@ -217,7 +233,12 @@ struct CategoryManagementCard: View {
                     status: .active,
                     version: category.version
                 )
-                try await enqueueOptimistic(entityId: id, operation: .restore, baseVersion: category.version, payload: restored)
+                try await enqueueOptimistic(
+                    entityId: id,
+                    operation: .restore,
+                    baseVersion: category.version,
+                    optimisticEntity: restored
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория восстановлена локально, ожидает синхронизации"
             } catch {
@@ -228,36 +249,53 @@ struct CategoryManagementCard: View {
         }
     }
 
-    private func enqueueOptimistic<T: Encodable>(
+    private func enqueueOptimistic<Request: Encodable, OptimisticEntity: Encodable>(
         entityId: String,
         operation: SyncOperation,
         baseVersion: Int? = nil,
-        payload: T?
+        request: Request,
+        optimisticEntity: OptimisticEntity
     ) async throws {
         guard let localScope else { throw LocalOptimisticError.missingLocalScope }
-        if let payload {
-            try await syncService.enqueueOptimisticMutation(
-                scope: localScope,
-                entityType: .categories,
-                entityId: entityId,
-                operation: operation,
-                baseVersion: baseVersion,
-                request: payload
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: .categories,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            request: request,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: PersonalOwnershipContext(
+                viewerUserId: localScope.viewerUserId,
+                categories: categories
             )
-        } else {
-            try await syncService.enqueueOptimisticMutation(
-                scope: localScope,
-                entityType: .categories,
-                entityId: entityId,
-                operation: operation,
-                baseVersion: baseVersion
+        )
+    }
+
+    private func enqueueOptimistic<OptimisticEntity: Encodable>(
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        optimisticEntity: OptimisticEntity
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: .categories,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: PersonalOwnershipContext(
+                viewerUserId: localScope.viewerUserId,
+                categories: categories
             )
-        }
+        )
     }
 
     private func localCategory(from request: CategoryCreateRequest) -> Category {
         Category(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             name: request.name,
             type: request.type,
             scope: request.scope,

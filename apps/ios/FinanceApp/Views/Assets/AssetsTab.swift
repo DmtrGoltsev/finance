@@ -38,6 +38,15 @@ struct AssetsTab: View {
         localScope?.viewerUserId
     }
 
+    private var personalOwnershipContext: PersonalOwnershipContext {
+        PersonalOwnershipContext(
+            viewerUserId: localScope?.viewerUserId,
+            accounts: dashboard?.accounts ?? [],
+            categories: dashboard?.categories ?? [],
+            assetCategories: dashboard?.assetCategories ?? []
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
@@ -168,7 +177,13 @@ struct AssetsTab: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
                 let category = localAssetCategory(from: request)
-                try await enqueueOptimistic(entityType: .assetCategories, entityId: category.id, operation: .create, payload: category)
+                try await enqueueOptimistic(
+                    entityType: .assetCategories,
+                    entityId: category.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: category
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория создана локально, ожидает синхронизации"
             } catch {
@@ -189,7 +204,14 @@ struct AssetsTab: View {
             do {
                 guard let current = assetCategories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
                 let category = updatedAssetCategory(current, request: request)
-                try await enqueueOptimistic(entityType: .assetCategories, entityId: id, operation: .update, baseVersion: current.version, payload: category)
+                try await enqueueOptimistic(
+                    entityType: .assetCategories,
+                    entityId: id,
+                    operation: .update,
+                    baseVersion: current.version,
+                    request: AssetCategoryOfflineUpdateRequest(request),
+                    optimisticEntity: category
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория обновлена локально, ожидает синхронизации"
             } catch {
@@ -207,8 +229,14 @@ struct AssetsTab: View {
             message = "Категория архивирована"
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
-                let version = assetCategories.first(where: { $0.id == id })?.version
-                try await enqueueOptimistic(entityType: .assetCategories, entityId: id, operation: .archive, baseVersion: version, payload: Optional<AssetCategory>.none)
+                guard let category = assetCategories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                try await enqueueOptimistic(
+                    entityType: .assetCategories,
+                    entityId: id,
+                    operation: .archive,
+                    baseVersion: category.version,
+                    optimisticEntity: category
+                )
                 await onLocalSnapshotChanged()
                 message = "Категория архивирована локально, ожидает синхронизации"
             } catch {
@@ -228,7 +256,13 @@ struct AssetsTab: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
                 let account = localAccount(from: request)
-                try await enqueueOptimistic(entityType: .accounts, entityId: account.id, operation: .create, payload: account)
+                try await enqueueOptimistic(
+                    entityType: .accounts,
+                    entityId: account.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: account
+                )
                 await onLocalSnapshotChanged()
                 message = "Счёт создан локально, ожидает синхронизации"
             } catch {
@@ -250,8 +284,18 @@ struct AssetsTab: View {
                 guard let current = visibleAccounts.first(where: { $0.id == id }) ?? dashboard?.accounts.first(where: { $0.id == id }) else {
                     throw LocalOptimisticError.missingCurrentEntity
                 }
+                if let requestedBalance = request.currentBalance, requestedBalance != current.currentBalance {
+                    throw LocalStoreError.invalidOfflinePayload("currentBalance can only be changed online")
+                }
                 let account = updatedAccount(current, request: request)
-                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .update, baseVersion: current.version, payload: account)
+                try await enqueueOptimistic(
+                    entityType: .accounts,
+                    entityId: id,
+                    operation: .update,
+                    baseVersion: current.version,
+                    request: AccountOfflineUpdateRequest(request),
+                    optimisticEntity: account
+                )
                 await onLocalSnapshotChanged()
                 message = "Счёт обновлён локально, ожидает синхронизации"
             } catch {
@@ -269,8 +313,14 @@ struct AssetsTab: View {
             message = "Счёт архивирован"
         } catch where OfflineMutationFallback.canQueue(after: error) {
             do {
-                let version = dashboard?.accounts.first(where: { $0.id == id })?.version
-                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .archive, baseVersion: version, payload: Optional<Account>.none)
+                guard let account = dashboard?.accounts.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                try await enqueueOptimistic(
+                    entityType: .accounts,
+                    entityId: id,
+                    operation: .archive,
+                    baseVersion: account.version,
+                    optimisticEntity: account
+                )
                 await onLocalSnapshotChanged()
                 message = "Счёт архивирован локально, ожидает синхронизации"
             } catch {
@@ -304,7 +354,13 @@ struct AssetsTab: View {
                     status: .active,
                     version: current.version
                 )
-                try await enqueueOptimistic(entityType: .accounts, entityId: id, operation: .restore, baseVersion: current.version, payload: account)
+                try await enqueueOptimistic(
+                    entityType: .accounts,
+                    entityId: id,
+                    operation: .restore,
+                    baseVersion: current.version,
+                    optimisticEntity: account
+                )
                 await onLocalSnapshotChanged()
                 message = "Счёт восстановлен локально, ожидает синхронизации"
             } catch {
@@ -315,24 +371,49 @@ struct AssetsTab: View {
         }
     }
 
-    private func enqueueOptimistic<T: Encodable>(
+    private func enqueueOptimistic<Request: Encodable, OptimisticEntity: Encodable>(
         entityType: SyncEntityType,
         entityId: String,
         operation: SyncOperation,
         baseVersion: Int? = nil,
-        payload: T?
+        request: Request,
+        optimisticEntity: OptimisticEntity
     ) async throws {
         guard let localScope else { throw LocalOptimisticError.missingLocalScope }
-        if let payload {
-            try await syncService.enqueueOptimisticMutation(scope: localScope, entityType: entityType, entityId: entityId, operation: operation, baseVersion: baseVersion, request: payload)
-        } else {
-            try await syncService.enqueueOptimisticMutation(scope: localScope, entityType: entityType, entityId: entityId, operation: operation, baseVersion: baseVersion)
-        }
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            request: request,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: personalOwnershipContext
+        )
+    }
+
+    private func enqueueOptimistic<OptimisticEntity: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        optimisticEntity: OptimisticEntity
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: personalOwnershipContext
+        )
     }
 
     private func localAssetCategory(from request: AssetCategoryCreateRequest) -> AssetCategory {
         AssetCategory(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             name: request.name,
             scopeType: .personal,
             ownerUserId: viewerUserId,
@@ -366,7 +447,7 @@ struct AssetsTab: View {
 
     private func localAccount(from request: AccountCreateRequest) -> Account {
         Account(
-            id: "local-\(UUID().uuidString)",
+            id: UUID().uuidString,
             name: request.name,
             accountType: request.accountType,
             ownershipType: .personal,
@@ -376,7 +457,7 @@ struct AssetsTab: View {
             currency: request.currency,
             initialBalance: request.initialBalance,
             currentBalance: request.initialBalance,
-            isPaymentAccount: request.isPaymentAccount ?? false,
+            isPaymentAccount: request.isPaymentAccount ?? true,
             status: .active,
             version: nil
         )

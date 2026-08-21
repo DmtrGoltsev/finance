@@ -36,3 +36,15 @@ struct CategoryUpdateRequest: Codable, Sendable {
     let color: String?
     let version: Int?
 }
+
+struct CategoryOfflineUpdateRequest: Codable, Sendable {
+    let name: String?
+    let iconKey: String?
+    let color: String?
+
+    init(_ request: CategoryUpdateRequest) {
+        name = request.name
+        iconKey = request.iconKey
+        color = request.color
+    }
+}

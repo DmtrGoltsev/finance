@@ -98,6 +98,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
     let operation: SyncOperation
     let baseVersion: Int?
     let payload: [String: SyncJSONValue]?
+    let ownershipEvidence: SyncOwnershipEvidence?
     var status: PendingMutationStatus
     var attemptCount: Int
     let createdAt: String
@@ -114,6 +115,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
         operation: SyncOperation,
         baseVersion: Int? = nil,
         payload: [String: SyncJSONValue]? = nil,
+        ownershipEvidence: SyncOwnershipEvidence? = nil,
         status: PendingMutationStatus = .queued
     ) {
         let now = Date().ISO8601Format()
@@ -125,6 +127,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
         self.operation = operation
         self.baseVersion = baseVersion
         self.payload = payload
+        self.ownershipEvidence = ownershipEvidence
         self.status = status
         self.attemptCount = 0
         self.createdAt = now
@@ -223,12 +226,18 @@ protocol FinanceLocalStore: Sendable {
     func markFailed(scope: LocalStoreScope, deviceId: String, mutationId: String, message: String?) async throws
     func retryIssue(scope: LocalStoreScope, deviceId: String, issueId: String) async throws
     func applyPullResponse(scope: LocalStoreScope, deviceId: String, response: SyncPullResponse) async throws
+    func quarantinePullChanges(scope: LocalStoreScope, deviceId: String, changes: [SyncChange]) async throws
     func issues(scope: LocalStoreScope, deviceId: String) async throws -> [SyncIssue]
     func wipe(scope: LocalStoreScope) async throws
     func wipeAllProtectedData() async throws
 }
 
 actor FileBackedFinanceLocalStore: FinanceLocalStore {
+    static let snapshotWritingOptions: Data.WritingOptions = [
+        .atomic,
+        .completeFileProtectionUntilFirstUserAuthentication,
+    ]
+
     private let rootURL: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -246,12 +255,24 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
     }
 
     func loadSnapshot(scope: LocalStoreScope, deviceId: String) async throws -> FinanceLocalSnapshot {
+        guard !scope.viewerUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              scope.householdId == nil else {
+            throw LocalStoreError.accountScopeMismatch
+        }
+        try ensureRootExists()
         let url = snapshotURL(scope: scope)
         guard fileManager.fileExists(atPath: url.path) else {
             return .empty(scope: scope, deviceId: deviceId)
         }
+        try protectAndExcludeFromBackup(url)
         let data = try Data(contentsOf: url)
         var snapshot = try decoder.decode(FinanceLocalSnapshot.self, from: data)
+        guard snapshot.scope.viewerUserId == scope.viewerUserId,
+              snapshot.scope.accessVersion == scope.accessVersion,
+              snapshot.scope.householdId == nil,
+              scope.householdId == nil else {
+            throw LocalStoreError.accountScopeMismatch
+        }
         if snapshot.syncState.deviceId != deviceId {
             snapshot.syncState.deviceId = deviceId
         }
@@ -259,11 +280,17 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
     }
 
     func saveSnapshot(_ snapshot: FinanceLocalSnapshot) async throws {
+        guard !snapshot.scope.viewerUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              snapshot.scope.householdId == nil else {
+            throw LocalStoreError.accountScopeMismatch
+        }
         try ensureRootExists()
         var snapshot = snapshot
         snapshot.updatedAt = Date().ISO8601Format()
         let data = try encoder.encode(snapshot)
-        try data.write(to: snapshotURL(scope: snapshot.scope), options: [.atomic])
+        let url = snapshotURL(scope: snapshot.scope)
+        try data.write(to: url, options: Self.snapshotWritingOptions)
+        try protectAndExcludeFromBackup(url)
     }
 
     func enqueueMutation(_ mutation: PendingMutation, planningMetadata: PlanningMutationMetadata? = nil) async throws {
@@ -275,7 +302,8 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
         if let planningMetadata {
             snapshot.planningMutationMetadata.append(planningMetadata)
         }
-        if mutation.operation == .delete || mutation.operation == .archive {
+        if (mutation.operation == .delete || mutation.operation == .archive),
+           !snapshot.tombstones.contains(where: { $0.pendingMutationId == mutation.clientMutationId }) {
             snapshot.tombstones.append(
                 SyncTombstone(
                     entityType: mutation.entityType,
@@ -432,6 +460,38 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
         snapshot.syncState.cursor = response.nextCursor
         snapshot.syncState.lastPulledAt = response.serverTime
         snapshot.syncState.lastError = nil
+        try await saveSnapshot(snapshot)
+    }
+
+    func quarantinePullChanges(
+        scope: LocalStoreScope,
+        deviceId: String,
+        changes: [SyncChange]
+    ) async throws {
+        guard !changes.isEmpty else { return }
+        var snapshot = try await loadSnapshot(scope: scope, deviceId: deviceId)
+        for change in changes {
+            let now = Date().ISO8601Format()
+            upsertIssue(
+                SyncIssue(
+                    id: "quarantine-\(change.seq)-\(change.entityType.rawValue)-\(change.entityId)",
+                    mutationId: nil,
+                    entityType: change.entityType,
+                    entityId: change.entityId,
+                    operation: SyncOperation(rawValue: change.changeType),
+                    status: .rejected,
+                    decision: .editOrDiscardOnly,
+                    title: "Серверное изменение изолировано",
+                    safeDescription: "Личная принадлежность изменения не подтверждена. Данные не применены локально.",
+                    errorCode: "PERSONAL_ONLY_PULL_QUARANTINED",
+                    attempts: 0,
+                    createdAt: now,
+                    updatedAt: now
+                ),
+                in: &snapshot
+            )
+        }
+        snapshot.syncState.issueIds = snapshot.issues.map(\.id)
         try await saveSnapshot(snapshot)
     }
 
@@ -615,6 +675,18 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
 
     private func ensureRootExists() throws {
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try protectAndExcludeFromBackup(rootURL)
+    }
+
+    private func protectAndExcludeFromBackup(_ url: URL) throws {
+        try fileManager.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
     }
 
     private func snapshotURL(scope: LocalStoreScope) -> URL {
@@ -624,11 +696,20 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
 
 enum LocalStoreError: Error, LocalizedError {
     case unsupportedOfflineMutation(entityType: String, operation: String)
+    case invalidOfflinePayload(String)
+    case uncertainPersonalOwnership(entityType: String)
+    case accountScopeMismatch
 
     var errorDescription: String? {
         switch self {
         case .unsupportedOfflineMutation(let entityType, let operation):
             return "Offline-очередь не поддерживает операцию \(entityType):\(operation)."
+        case .invalidOfflinePayload(let reason):
+            return "Изменение нельзя безопасно поставить в очередь: \(reason)."
+        case .uncertainPersonalOwnership(let entityType):
+            return "Не удалось подтвердить личную принадлежность \(entityType). Изменение не отправлено."
+        case .accountScopeMismatch:
+            return "Локальные данные принадлежат другому аккаунту и не были открыты."
         }
     }
 }

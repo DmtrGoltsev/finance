@@ -42,6 +42,7 @@ enum JSONValue: Codable, Sendable, Equatable {
 struct PlanningPlan: Codable, Identifiable, Sendable {
     let id: String
     let scope: PlanningScope
+    let ownerUserId: String?
     let month: String
     let currency: CurrencyCode
     let householdId: String?
@@ -125,6 +126,20 @@ struct PlanningIncomeSourceUpdateRequest: Codable, Sendable {
     let version: Int?
 }
 
+struct PlanningIncomeSourceOfflineUpdateRequest: Codable, Sendable {
+    let amount: String?
+    let source: String?
+    let description: String?
+    let dayOfMonth: Int?
+
+    init(_ request: PlanningIncomeSourceUpdateRequest) {
+        amount = request.amount
+        source = request.source
+        description = request.description
+        dayOfMonth = request.dayOfMonth
+    }
+}
+
 struct PlanningAllocationCreateRequest: Codable, Sendable {
     let targetType: AllocationTargetType
     let targetId: String
@@ -148,4 +163,28 @@ struct PlanningAllocationUpdateRequest: Codable, Sendable {
     let goalTargetAmount: String?
     let goalDueMonth: String?
     let version: Int?
+}
+
+struct PlanningAllocationOfflineUpdateRequest: Codable, Sendable {
+    let targetType: AllocationTargetType?
+    let targetId: String?
+    let comment: String?
+    let allocationMode: AllocationMode?
+    let allocationValue: String?
+    let recurrenceType: AllocationRecurrenceType?
+    let isSavingsGoal: Bool?
+    let goalTargetAmount: String?
+    let goalDueMonth: String?
+
+    init(_ request: PlanningAllocationUpdateRequest) {
+        targetType = request.targetType
+        targetId = request.targetId
+        comment = request.comment
+        allocationMode = request.allocationMode
+        allocationValue = request.allocationValue
+        recurrenceType = request.recurrenceType
+        isSavingsGoal = request.isSavingsGoal
+        goalTargetAmount = request.goalTargetAmount
+        goalDueMonth = request.goalDueMonth
+    }
 }

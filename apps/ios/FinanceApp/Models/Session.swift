@@ -16,6 +16,35 @@ struct SessionStatus: Codable, Sendable {
     }
 }
 
+struct SessionIdentityBinding: Codable, Equatable, Sendable {
+    let userId: String
+    let displayName: String?
+
+    init?(session: SessionStatus) {
+        guard session.isAuthenticated,
+              let userId = session.userId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userId.isEmpty else {
+            return nil
+        }
+        self.userId = userId
+        self.displayName = session.displayName
+    }
+}
+
+enum SessionRestorePolicy {
+    static func isConfirmedInvalidIdentity(_ error: Error) -> Bool {
+        guard let apiError = error as? FinanceApiError else { return false }
+        switch apiError {
+        case .unauthorized:
+            return true
+        case .httpError(let statusCode, _):
+            return statusCode == 401
+        default:
+            return false
+        }
+    }
+}
+
 struct ActorContext: Codable, Sendable {
     let userId: String
     let sessionId: String?

@@ -17,6 +17,7 @@ struct FinanceAppView: View {
     @State private var syncResult: ManualSyncResult?
     @State private var isSyncing = false
     @State private var showSyncSheet = false
+    @State private var activeLocalScope: LocalStoreScope?
 
     var body: some View {
         Group {
@@ -309,22 +310,27 @@ struct FinanceAppView: View {
     }
 
     private func restoreSession() async {
-        guard configurationError == nil else {
-            await wipeProtectedState(message: configurationError ?? "")
+        isLoading = true
+        if let configurationError {
+            if !(await restoreBoundOfflineSession(message: "Офлайн-режим. \(configurationError)")) {
+                message = configurationError
+            }
+            isLoading = false
             return
         }
-        isLoading = true
         do {
             let status = try await apiClient.sessionStatus()
             if status.isAuthenticated {
-                await wipeForAccountSwitchIfNeeded(newSession: status)
-                isAuthenticated = true
-                await loadDashboard()
+                await activateAuthenticatedSession(status)
             } else {
-                await wipeProtectedState(message: "Войдите, чтобы увидеть финансы")
+                await wipeConfirmedIdentityState(message: "Войдите, чтобы увидеть финансы")
             }
+        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
         } catch {
-            await wipeProtectedState(message: "Войдите, чтобы увидеть финансы")
+            if !(await restoreBoundOfflineSession(message: "Нет связи с сервером. Доступны сохранённые данные.")) {
+                message = error.localizedDescription
+            }
         }
         isLoading = false
     }
@@ -343,9 +349,7 @@ struct FinanceAppView: View {
         do {
             let status = try await apiClient.login(email: email, password: password)
             if status.isAuthenticated {
-                await wipeForAccountSwitchIfNeeded(newSession: status)
-                isAuthenticated = true
-                await loadDashboard()
+                await activateAuthenticatedSession(status)
             } else {
                 message = "Не удалось войти"
             }
@@ -380,9 +384,7 @@ struct FinanceAppView: View {
             )
             switch result {
             case .authenticated(let status):
-                await wipeForAccountSwitchIfNeeded(newSession: status)
-                isAuthenticated = true
-                await loadDashboard()
+                await activateAuthenticatedSession(status)
             case .accepted:
                 message = "Заявка принята. Если аккаунт доступен, войдите по email и паролю."
             }
@@ -404,10 +406,12 @@ struct FinanceAppView: View {
             )
             await refreshLocalSnapshotAndOverview()
             message = "Данные обновлены"
-        } catch let error as FinanceApiError where error.isAuthError {
-            await wipeProtectedState(message: "Сессия истекла. Войдите снова.")
+        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
         } catch {
-            message = error.localizedDescription
+            if !(await restoreBoundOfflineSession(message: "Нет связи с сервером. Доступны сохранённые данные.")) {
+                message = error.localizedDescription
+            }
         }
         isLoading = false
     }
@@ -417,15 +421,18 @@ struct FinanceAppView: View {
         message = "Выходим"
         do {
             try await apiClient.logout()
-            await wipeProtectedState(message: "Войдите, чтобы увидеть финансы")
+            await wipeConfirmedIdentityState(message: "Войдите, чтобы увидеть финансы")
         } catch {
-            await wipeProtectedState(message: "Сессия завершена локально. \(error.localizedDescription)")
+            await wipeConfirmedIdentityState(message: "Сессия завершена локально. \(error.localizedDescription)")
         }
         isLoading = false
     }
 
-    private func wipeProtectedState(message: String) async {
+    private func wipeConfirmedIdentityState(message: String) async {
         await wipeProtectedStores()
+        SessionIdentityStore.shared.clear()
+        CSRFTokenStore.shared.clear()
+        activeLocalScope = nil
         dashboard = nil
         selectedTab = 0
         showQuickAdd = false
@@ -438,6 +445,7 @@ struct FinanceAppView: View {
     }
 
     private var currentLocalScope: LocalStoreScope? {
+        if let activeLocalScope { return activeLocalScope }
         guard let session = dashboard?.session,
               let userId = session.userId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !userId.isEmpty else {
@@ -446,25 +454,88 @@ struct FinanceAppView: View {
         return LocalStoreScope.fromSession(session, fallbackUserId: userId)
     }
 
+    private var personalOwnershipContext: PersonalOwnershipContext {
+        PersonalOwnershipContext(
+            viewerUserId: currentLocalScope?.viewerUserId,
+            accounts: dashboard?.accounts ?? [],
+            categories: dashboard?.categories ?? [],
+            assetCategories: dashboard?.assetCategories ?? []
+        )
+    }
+
     private func wipeForAccountSwitchIfNeeded(newSession: SessionStatus) async {
-        guard let currentSession = dashboard?.session,
-              currentSession.userId != newSession.userId else {
+        guard let newBinding = SessionIdentityBinding(session: newSession) else { return }
+        let existingUserId = activeLocalScope?.viewerUserId ?? SessionIdentityStore.shared.load()?.userId
+        guard let existingUserId, existingUserId != newBinding.userId else {
             return
         }
-        await wipeProtectedStores()
+        do {
+            try await sessionDataWiper.wipeCurrentUser(scope: LocalStoreScope(viewerUserId: existingUserId))
+        } catch {
+            // A failed cleanup must not expose the previous account; the new scope is still isolated by user id.
+        }
+        CategoryAggregateMappingStore.shared.clearAll()
     }
 
     private func wipeProtectedStores() async {
         do {
-            if let scope = currentLocalScope {
-                try await sessionDataWiper.wipeCurrentUser(scope: scope)
-            } else {
-                try await sessionDataWiper.wipeAllProtectedLocalData()
+            let scope = currentLocalScope ?? SessionIdentityStore.shared.load().map {
+                LocalStoreScope(viewerUserId: $0.userId)
             }
+            if let scope { try await sessionDataWiper.wipeCurrentUser(scope: scope) }
         } catch {
             // Best-effort local privacy cleanup; auth state still has to be cleared.
         }
         CategoryAggregateMappingStore.shared.clearAll()
+    }
+
+    private func activateAuthenticatedSession(_ status: SessionStatus) async {
+        guard let binding = SessionIdentityBinding(session: status) else {
+            await wipeConfirmedIdentityState(message: "Сервер не подтвердил пользователя.")
+            return
+        }
+        let previousUserId = activeLocalScope?.viewerUserId ?? SessionIdentityStore.shared.load()?.userId
+        await wipeForAccountSwitchIfNeeded(newSession: status)
+        if let previousUserId, previousUserId != binding.userId {
+            dashboard = nil
+            syncOverview = .empty
+        }
+        SessionIdentityStore.shared.save(binding)
+        activeLocalScope = LocalStoreScope.fromSession(status, fallbackUserId: binding.userId)
+        isAuthenticated = true
+        await loadDashboard()
+    }
+
+    @discardableResult
+    private func restoreBoundOfflineSession(message: String) async -> Bool {
+        guard let binding = SessionIdentityStore.shared.load() else { return false }
+        let scope = LocalStoreScope(viewerUserId: binding.userId)
+        do {
+            let snapshot = try await syncService.localSnapshot(scope: scope)
+            let session = SessionStatus(
+                isAuthenticated: true,
+                displayName: binding.displayName,
+                householdId: nil,
+                userId: binding.userId,
+                sessionId: nil
+            )
+            dashboard = FinanceDashboard(
+                session: session,
+                accounts: snapshot.accounts.map(\.entity),
+                categories: snapshot.categories.map(\.entity),
+                transactions: snapshot.transactions.map(\.entity),
+                assetCategories: snapshot.assetCategories.map(\.entity)
+            )
+            activeLocalScope = scope
+            isAuthenticated = true
+            await applyLocalSnapshotToDashboard()
+            await refreshSyncOverview()
+            self.message = message
+            return true
+        } catch {
+            self.message = "Сохранённые данные не открыты: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func openSyncSheet() async {
@@ -500,19 +571,25 @@ struct FinanceAppView: View {
                 localRecords: snapshot.accounts,
                 tombstones: snapshot.tombstones,
                 entityType: .accounts
-            ).filter { $0.ownershipType == .personal && $0.householdId == nil }
+            ).filter {
+                $0.ownershipType == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
             dashboard.categories = mergedEntities(
                 existing: dashboard.categories,
                 localRecords: snapshot.categories,
                 tombstones: snapshot.tombstones,
                 entityType: .categories
-            ).filter { $0.scope == .personal && $0.householdId == nil }
+            ).filter {
+                $0.scope == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
             dashboard.assetCategories = mergedEntities(
                 existing: dashboard.assetCategories,
                 localRecords: snapshot.assetCategories,
                 tombstones: snapshot.tombstones,
                 entityType: .assetCategories
-            ).filter { $0.scopeType == .personal && $0.householdId == nil }
+            ).filter {
+                $0.scopeType == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
             let personalAccountIds = Set(dashboard.accounts.map(\.id))
             dashboard.transactions = mergedTransactions.filter { transaction in
                 personalAccountIds.contains(transaction.accountId) &&
@@ -595,7 +672,13 @@ struct FinanceAppView: View {
     private func runManualSync() async {
         guard let scope = currentLocalScope else { return }
         isSyncing = true
-        syncResult = await syncService.syncNow(scope: scope)
+        let result = await syncService.syncNow(scope: scope)
+        if result.requiresReauthentication {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
+            isSyncing = false
+            return
+        }
+        syncResult = result
         await refreshLocalSnapshotAndOverview()
         isSyncing = false
     }
@@ -605,7 +688,13 @@ struct FinanceAppView: View {
         isSyncing = true
         do {
             try await syncService.retryIssue(scope: scope, issueId: issue.id)
-            syncResult = await syncService.syncNow(scope: scope)
+            let result = await syncService.syncNow(scope: scope)
+            if result.requiresReauthentication {
+                await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
+                isSyncing = false
+                return
+            }
+            syncResult = result
         } catch {
             syncOverview = LocalSyncOverview(
                 pendingCount: syncOverview.pendingCount,
@@ -618,6 +707,7 @@ struct FinanceAppView: View {
     }
 
     private func deleteTransaction(_ id: String) async {
+        let localTransaction = dashboard?.transactions.first(where: { $0.id == id })
         isLoading = true
         message = "Удаляем операцию"
         do {
@@ -627,11 +717,15 @@ struct FinanceAppView: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             if let scope = currentLocalScope {
                 do {
+                    guard let localTransaction else { throw LocalOptimisticError.missingCurrentEntity }
                     try await syncService.enqueueOptimisticMutation(
                         scope: scope,
                         entityType: .transactions,
                         entityId: id,
-                        operation: .delete
+                        operation: .delete,
+                        baseVersion: localTransaction.version,
+                        optimisticEntity: localTransaction,
+                        ownershipContext: personalOwnershipContext
                     )
                     await refreshLocalSnapshotAndOverview()
                     message = "Операция удалена локально, ожидает синхронизации"
@@ -760,7 +854,7 @@ struct FinanceAppView: View {
         } catch where OfflineMutationFallback.canQueue(after: error) {
             guard let scope = currentLocalScope else { throw error }
             let transaction = Transaction(
-                id: "local-\(UUID().uuidString)",
+                id: UUID().uuidString,
                 transactionType: request.transactionType,
                 accountId: request.accountId,
                 counterpartyAccountId: request.counterpartyAccountId,
@@ -780,7 +874,9 @@ struct FinanceAppView: View {
                 entityType: .transactions,
                 entityId: transaction.id,
                 operation: .create,
-                request: transaction
+                request: request,
+                optimisticEntity: transaction,
+                ownershipContext: personalOwnershipContext
             )
             await refreshLocalSnapshotAndOverview()
             return true

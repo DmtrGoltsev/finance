@@ -13,6 +13,7 @@ struct ManualSyncResult: Codable, Sendable {
     let pulledChanges: Int
     let hasMorePullChanges: Bool
     let issues: [SyncIssue]
+    let requiresReauthentication: Bool
 }
 
 struct LocalSyncOverview: Codable, Sendable {
@@ -43,6 +44,7 @@ actor FinanceSyncService {
         var pushSummary = SyncPushSummary()
         var pulledChanges = 0
         var hasMore = false
+        var requiresReauthentication = false
 
         do {
             pushSummary = try await pushPending(scope: scope, deviceId: deviceId, limit: limit)
@@ -50,21 +52,30 @@ actor FinanceSyncService {
             pulledChanges = pull.changes.count
             hasMore = pull.hasMore
         } catch {
-            let pending = (try? await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)) ?? []
-            for mutation in pending {
-                try? await localStore.markFailed(
-                    scope: scope,
-                    deviceId: deviceId,
-                    mutationId: mutation.clientMutationId,
-                    message: error.localizedDescription
-                )
+            requiresReauthentication = SessionRestorePolicy.isConfirmedInvalidIdentity(error)
+            if !requiresReauthentication {
+                let pending = (try? await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)) ?? []
+                for mutation in pending {
+                    try? await localStore.markFailed(
+                        scope: scope,
+                        deviceId: deviceId,
+                        mutationId: mutation.clientMutationId,
+                        message: error.localizedDescription
+                    )
+                }
+                pushSummary.failed += pending.count
+                pushSummary.retry += pending.count
             }
-            pushSummary.failed += pending.count
-            pushSummary.retry += pending.count
         }
 
         let issues = (try? await localStore.issues(scope: scope, deviceId: deviceId)) ?? []
-        return ManualSyncResult(push: pushSummary, pulledChanges: pulledChanges, hasMorePullChanges: hasMore, issues: issues)
+        return ManualSyncResult(
+            push: pushSummary,
+            pulledChanges: pulledChanges,
+            hasMorePullChanges: hasMore,
+            issues: issues,
+            requiresReauthentication: requiresReauthentication
+        )
     }
 
     func retryIssue(scope: LocalStoreScope, issueId: String) async throws {
@@ -94,128 +105,72 @@ actor FinanceSyncService {
         try await localStore.loadSnapshot(scope: scope, deviceId: deviceIdentityStore.deviceId())
     }
 
-    func enqueueMutation(
+    func enqueueOptimisticMutation<Request: Encodable, OptimisticEntity: Encodable>(
         scope: LocalStoreScope,
         entityType: SyncEntityType,
         entityId: String,
         operation: SyncOperation,
         baseVersion: Int? = nil,
-        payload: [String: SyncJSONValue]? = nil,
+        request: Request,
+        optimisticEntity: OptimisticEntity,
+        ownershipContext: PersonalOwnershipContext = .empty,
         planningMetadata: PlanningMutationMetadata? = nil
     ) async throws {
-        guard SyncQueuePolicy.isSyncable(entityType: entityType, operation: operation) else {
-            throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
-        }
-        let mutation = PendingMutation(
-            deviceId: deviceIdentityStore.deviceId(),
-            scope: scope,
+        let queuePayload = try OfflineSyncPayloadContract.payload(
             entityType: entityType,
-            entityId: entityId,
             operation: operation,
-            baseVersion: baseVersion,
-            payload: payload
+            request: request
         )
-        try await localStore.enqueueMutation(mutation, planningMetadata: planningMetadata)
-    }
-
-    func enqueueOptimisticMutation(
-        scope: LocalStoreScope,
-        entityType: SyncEntityType,
-        entityId: String,
-        operation: SyncOperation,
-        baseVersion: Int? = nil,
-        payload: [String: SyncJSONValue]? = nil,
-        planningMetadata: PlanningMutationMetadata? = nil
-    ) async throws {
-        guard SyncQueuePolicy.isSyncable(entityType: entityType, operation: operation) else {
-            throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
-        }
-
-        let mutation = PendingMutation(
-            deviceId: deviceIdentityStore.deviceId(),
+        try await enqueuePreparedMutation(
             scope: scope,
             entityType: entityType,
             entityId: entityId,
             operation: operation,
             baseVersion: baseVersion,
-            payload: payload
-        )
-
-        switch operation {
-        case .delete, .archive:
-            try await localStore.optimisticDelete(
-                scope: scope,
-                deviceId: mutation.deviceId,
-                entityType: entityType,
-                entityId: entityId,
-                operation: operation,
-                baseVersion: baseVersion,
-                pendingMutationId: mutation.clientMutationId
-            )
-        case .create, .update, .restore, .confirm:
-            if let payload {
-                try await localStore.optimisticUpsert(
-                    scope: scope,
-                    deviceId: mutation.deviceId,
-                    entityType: entityType,
-                    entityId: entityId,
-                    baseVersion: baseVersion,
-                    pendingMutationId: mutation.clientMutationId,
-                    payload: payload
-                )
-            }
-        }
-
-        try await localStore.enqueueMutation(mutation, planningMetadata: planningMetadata)
-    }
-
-    func enqueueOptimisticMutation<T: Encodable>(
-        scope: LocalStoreScope,
-        entityType: SyncEntityType,
-        entityId: String,
-        operation: SyncOperation,
-        baseVersion: Int? = nil,
-        request: T,
-        planningMetadata: PlanningMutationMetadata? = nil
-    ) async throws {
-        try await enqueueOptimisticMutation(
-            scope: scope,
-            entityType: entityType,
-            entityId: entityId,
-            operation: operation,
-            baseVersion: baseVersion,
-            payload: try SyncJSONValue.object(from: request),
+            queuePayload: queuePayload,
+            optimisticPayload: try SyncJSONValue.object(from: optimisticEntity),
+            ownershipContext: ownershipContext,
             planningMetadata: planningMetadata
         )
     }
 
-    func enqueueMutation<T: Encodable>(
+    func enqueueOptimisticMutation<OptimisticEntity: Encodable>(
         scope: LocalStoreScope,
         entityType: SyncEntityType,
         entityId: String,
         operation: SyncOperation,
         baseVersion: Int? = nil,
-        request: T,
+        optimisticEntity: OptimisticEntity,
+        ownershipContext: PersonalOwnershipContext = .empty,
         planningMetadata: PlanningMutationMetadata? = nil
     ) async throws {
-        try await enqueueMutation(
+        try OfflineSyncPayloadContract.validate(
+            payload: nil,
+            entityType: entityType,
+            operation: operation
+        )
+        try await enqueuePreparedMutation(
             scope: scope,
             entityType: entityType,
             entityId: entityId,
             operation: operation,
             baseVersion: baseVersion,
-            payload: try SyncJSONValue.object(from: request),
+            queuePayload: nil,
+            optimisticPayload: try SyncJSONValue.object(from: optimisticEntity),
+            ownershipContext: ownershipContext,
             planningMetadata: planningMetadata
         )
     }
 
-    func enqueueOptimisticPlanningMutation(
+    func enqueueOptimisticPlanningMutation<Request: Encodable, OptimisticEntity: Encodable>(
         scope: LocalStoreScope,
         entityType: SyncEntityType,
         entityId: String,
         operation: SyncOperation,
         baseVersion: Int? = nil,
-        payload: [String: SyncJSONValue]? = nil,
+        request: Request,
+        optimisticEntity: OptimisticEntity,
+        ownershipContext: PersonalOwnershipContext = .empty,
         planId: String?,
         month: String?,
         planningScope: PlanningScope?
@@ -223,36 +178,121 @@ actor FinanceSyncService {
         guard entityType.isPlanningEntity else {
             throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
         }
-        guard SyncQueuePolicy.isSyncable(entityType: entityType, operation: operation) else {
-            throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
-        }
-
-        let mutation = PendingMutation(
-            deviceId: deviceIdentityStore.deviceId(),
+        let queuePayload = try OfflineSyncPayloadContract.payload(
+            entityType: entityType,
+            operation: operation,
+            request: request,
+            planId: planId
+        )
+        try await enqueuePreparedMutation(
             scope: scope,
             entityType: entityType,
             entityId: entityId,
             operation: operation,
             baseVersion: baseVersion,
-            payload: payload
+            queuePayload: queuePayload,
+            optimisticPayload: try SyncJSONValue.object(from: optimisticEntity),
+            ownershipContext: ownershipContext,
+            planningContext: (planId, month, planningScope)
         )
-        let metadata = PlanningMutationMetadata(
-            pendingMutationId: mutation.clientMutationId,
-            planId: planId,
-            month: month,
-            scope: planningScope,
+    }
+
+    func enqueueOptimisticPlanningMutation<OptimisticEntity: Encodable>(
+        scope: LocalStoreScope,
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        optimisticEntity: OptimisticEntity,
+        ownershipContext: PersonalOwnershipContext = .empty,
+        planId: String?,
+        month: String?,
+        planningScope: PlanningScope?
+    ) async throws {
+        guard entityType.isPlanningEntity else {
+            throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
+        }
+        try OfflineSyncPayloadContract.validate(payload: nil, entityType: entityType, operation: operation)
+        try await enqueuePreparedMutation(
+            scope: scope,
             entityType: entityType,
             entityId: entityId,
             operation: operation,
             baseVersion: baseVersion,
-            localModifiedAt: Date().ISO8601Format()
+            queuePayload: nil,
+            optimisticPayload: try SyncJSONValue.object(from: optimisticEntity),
+            ownershipContext: ownershipContext,
+            planningContext: (planId, month, planningScope)
         )
+    }
+
+    private func enqueuePreparedMutation(
+        scope: LocalStoreScope,
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int?,
+        queuePayload: [String: SyncJSONValue]?,
+        optimisticPayload: [String: SyncJSONValue],
+        ownershipContext: PersonalOwnershipContext,
+        planningMetadata: PlanningMutationMetadata? = nil,
+        planningContext: (planId: String?, month: String?, scope: PlanningScope?)? = nil
+    ) async throws {
+        guard SyncQueuePolicy.isSyncable(entityType: entityType, operation: operation) else {
+            throw LocalStoreError.unsupportedOfflineMutation(entityType: entityType.rawValue, operation: operation.rawValue)
+        }
+        try OfflineSyncPayloadContract.validateEnvelope(
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion
+        )
+        try OfflineSyncPayloadContract.validate(payload: queuePayload, entityType: entityType, operation: operation)
+
+        let deviceId = deviceIdentityStore.deviceId()
+        let snapshot = try await localStore.loadSnapshot(scope: scope, deviceId: deviceId)
+        var ownershipPayload = optimisticPayload
+        if let context = planningContext,
+           context.scope == .personal,
+           let planId = context.planId {
+            ownershipPayload["planId"] = .string(planId)
+        }
+        let ownershipEvidence = try PersonalSyncOwnershipValidator.evidence(
+            scope: scope,
+            entityType: entityType,
+            entityId: entityId,
+            ownershipPayload: ownershipPayload,
+            snapshot: snapshot,
+            trustedContext: ownershipContext
+        )
+        let mutation = PendingMutation(
+            deviceId: deviceId,
+            scope: scope,
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            payload: queuePayload,
+            ownershipEvidence: ownershipEvidence
+        )
+        let metadata = planningContext.map { context in
+            PlanningMutationMetadata(
+                pendingMutationId: mutation.clientMutationId,
+                planId: context.planId,
+                month: context.month,
+                scope: context.scope,
+                entityType: entityType,
+                entityId: entityId,
+                operation: operation,
+                baseVersion: baseVersion,
+                localModifiedAt: Date().ISO8601Format()
+            )
+        } ?? planningMetadata
 
         switch operation {
         case .delete, .archive:
             try await localStore.optimisticDelete(
                 scope: scope,
-                deviceId: mutation.deviceId,
+                deviceId: deviceId,
                 entityType: entityType,
                 entityId: entityId,
                 operation: operation,
@@ -260,44 +300,17 @@ actor FinanceSyncService {
                 pendingMutationId: mutation.clientMutationId
             )
         case .create, .update, .restore, .confirm:
-            if let payload {
-                try await localStore.optimisticUpsert(
-                    scope: scope,
-                    deviceId: mutation.deviceId,
-                    entityType: entityType,
-                    entityId: entityId,
-                    baseVersion: baseVersion,
-                    pendingMutationId: mutation.clientMutationId,
-                    payload: payload
-                )
-            }
+            try await localStore.optimisticUpsert(
+                scope: scope,
+                deviceId: deviceId,
+                entityType: entityType,
+                entityId: entityId,
+                baseVersion: baseVersion,
+                pendingMutationId: mutation.clientMutationId,
+                payload: optimisticPayload
+            )
         }
-
         try await localStore.enqueueMutation(mutation, planningMetadata: metadata)
-    }
-
-    func enqueueOptimisticPlanningMutation<T: Encodable>(
-        scope: LocalStoreScope,
-        entityType: SyncEntityType,
-        entityId: String,
-        operation: SyncOperation,
-        baseVersion: Int? = nil,
-        request: T,
-        planId: String?,
-        month: String?,
-        planningScope: PlanningScope?
-    ) async throws {
-        try await enqueueOptimisticPlanningMutation(
-            scope: scope,
-            entityType: entityType,
-            entityId: entityId,
-            operation: operation,
-            baseVersion: baseVersion,
-            payload: try SyncJSONValue.object(from: request),
-            planId: planId,
-            month: month,
-            planningScope: planningScope
-        )
     }
 
     func rejectOnlineOnlyOperation(_ operation: OnlineOnlySyncOperation) -> SyncIssue {
@@ -320,8 +333,9 @@ actor FinanceSyncService {
     }
 
     private func pushPending(scope: LocalStoreScope, deviceId: String, limit: Int) async throws -> SyncPushSummary {
+        let snapshot = try await localStore.loadSnapshot(scope: scope, deviceId: deviceId)
         let loadedPending = try await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)
-        let blocked = loadedPending.filter { !Self.isPersonalOnlyMutation($0) }
+        let blocked = loadedPending.filter { !Self.isPersonalOnlyMutation($0, snapshot: snapshot) }
         for mutation in blocked {
             try await localStore.markRejected(
                 scope: scope,
@@ -330,7 +344,7 @@ actor FinanceSyncService {
                 issue: personalOnlyRejection(for: mutation)
             )
         }
-        let pending = loadedPending.filter { Self.isPersonalOnlyMutation($0) }
+        let pending = loadedPending.filter { Self.isPersonalOnlyMutation($0, snapshot: snapshot) }
         guard !pending.isEmpty else { return SyncPushSummary(rejected: blocked.count) }
 
         for mutation in pending {
@@ -384,8 +398,27 @@ actor FinanceSyncService {
                 entityTypes: entityTypes
             )
         )
+        var ownershipIndex = PersonalOwnershipIndex(snapshot: snapshot)
+        ownershipIndex.includeClearlyPersonalParents(
+            from: response.changes,
+            viewerUserId: scope.viewerUserId
+        )
+        let personalChanges = response.changes.filter {
+                PersonalSyncOwnershipValidator.allows(
+                    change: $0,
+                    snapshot: snapshot,
+                    index: ownershipIndex
+                )
+            }
+        let personalChangeIds = Set(personalChanges.map(\.id))
+        let quarantined = response.changes.filter { !personalChangeIds.contains($0.id) }
+        try await localStore.quarantinePullChanges(
+            scope: scope,
+            deviceId: deviceId,
+            changes: quarantined
+        )
         let personalResponse = SyncPullResponse(
-            changes: response.changes.filter(isPersonalOnlyChange),
+            changes: personalChanges,
             nextCursor: response.nextCursor,
             hasMore: response.hasMore,
             serverTime: response.serverTime
@@ -394,38 +427,11 @@ actor FinanceSyncService {
         return personalResponse
     }
 
-    static func isPersonalOnlyMutation(_ mutation: PendingMutation) -> Bool {
-        guard let payload = mutation.payload else { return true }
-        return isPersonalOnlyPayload(payload, entityType: mutation.entityType)
-    }
-
-    private func isPersonalOnlyChange(_ change: SyncChange) -> Bool {
-        guard let payload = change.payload else { return true }
-        return isPersonalOnlyPayload(payload, entityType: change.entityType)
-    }
-
-    private static func isPersonalOnlyPayload(
-        _ payload: [String: SyncJSONValue],
-        entityType: SyncEntityType
+    static func isPersonalOnlyMutation(
+        _ mutation: PendingMutation,
+        snapshot: FinanceLocalSnapshot
     ) -> Bool {
-        let hasNoHousehold = payload["householdId"] == nil || payload["householdId"] == .null
-        switch entityType {
-        case .accounts:
-            return hasNoHousehold && stringValue(payload["ownershipType"]).map { $0 == OwnershipType.personal.rawValue } != false
-        case .categories:
-            return hasNoHousehold && stringValue(payload["scope"]).map { $0 == CategoryScope.personal.rawValue } != false
-        case .assetCategories:
-            return hasNoHousehold && stringValue(payload["scopeType"]).map { $0 == AssetCategoryScope.personal.rawValue } != false
-        case .planningPlans:
-            return hasNoHousehold && stringValue(payload["scope"]).map { $0 == PlanningScope.personal.rawValue } != false
-        case .transactions, .investmentMigrations, .planningIncomeSources, .planningAllocations:
-            return hasNoHousehold
-        }
-    }
-
-    private static func stringValue(_ value: SyncJSONValue?) -> String? {
-        guard case .string(let string)? = value else { return nil }
-        return string
+        PersonalSyncOwnershipValidator.allows(mutation: mutation, snapshot: snapshot)
     }
 
     private func personalOnlyRejection(for mutation: PendingMutation) -> SyncIssue {

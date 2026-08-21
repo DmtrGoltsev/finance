@@ -242,9 +242,9 @@ enum SyncQueuePolicy {
              (.categories, .create), (.categories, .update), (.categories, .archive), (.categories, .delete), (.categories, .restore),
              (.assetCategories, .create), (.assetCategories, .update), (.assetCategories, .archive), (.assetCategories, .delete), (.assetCategories, .restore),
              (.investmentMigrations, .create),
-             (.planningPlans, .create), (.planningPlans, .update), (.planningPlans, .delete), (.planningPlans, .restore),
-             (.planningIncomeSources, .create), (.planningIncomeSources, .update), (.planningIncomeSources, .confirm), (.planningIncomeSources, .delete), (.planningIncomeSources, .restore),
-             (.planningAllocations, .create), (.planningAllocations, .update), (.planningAllocations, .delete), (.planningAllocations, .restore):
+             (.planningPlans, .create),
+             (.planningIncomeSources, .create), (.planningIncomeSources, .update), (.planningIncomeSources, .confirm), (.planningIncomeSources, .delete),
+             (.planningAllocations, .create), (.planningAllocations, .update), (.planningAllocations, .delete):
             return true
         default:
             return false
