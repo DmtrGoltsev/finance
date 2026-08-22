@@ -45,9 +45,6 @@ targets:
         PersonalSideloadHTTP:
           FINANCE_API_BASE_URL: "$(FINANCE_RELEASE_API_BASE_URL)"
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited)"
-    info:
-      path: FinanceApp/Info.plist
-
   FinanceAppTests:
     type: bundle.unit-test
     platform: iOS
@@ -89,9 +86,6 @@ targets:
           FINANCE_API_BASE_URL: "http://45.10.110.42/finance-api"
           ENABLE_TESTABILITY: YES
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
-    info:
-      path: FinanceApp/Info-PersonalSideloadHTTP.plist
-
   FinanceAppPersonalHTTPTests:
     type: bundle.unit-test
     platform: iOS
