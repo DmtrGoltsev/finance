@@ -3,10 +3,6 @@ import XCTest
 
 final class DashboardAndDateTests: XCTestCase {
     func testDashboardFiltersPersonalDataAndSortsNewestFirstWithStableTiebreakers() {
-        let expenseAugust = TestFixtures.transaction(id: "expense-aug", accountId: "card", categoryId: "food", amount: "250", transactionDate: "2026-08-03", version: nil)
-        let expenseJuly = TestFixtures.transaction(id: "expense-jul", accountId: "card", categoryId: "food", amount: "900", transactionDate: "2026-07-31", version: nil)
-        let investmentAugust = TestFixtures.transaction(id: "investment-aug", accountId: "card", type: .transfer, amount: "1000", transactionDate: "2026-08-10", counterpartyAccountId: "broker", transferStatus: .posted, version: nil)
-        let ordinaryTransfer = TestFixtures.transaction(id: "ordinary-transfer", accountId: "card", type: .transfer, amount: "500", transactionDate: "2026-08-10", counterpartyAccountId: "card", transferStatus: .posted, version: nil)
         let dashboard = FinanceDashboard(
             accounts: [
                 TestFixtures.account(id: "personal", payment: true, balance: "100"),
@@ -59,6 +55,10 @@ final class DashboardAndDateTests: XCTestCase {
     }
 
     func testPendingOverlayIncludesOnlySelectedMonthAndInvestmentDestinations() {
+        let expenseAugust = TestFixtures.transaction(id: "expense-aug", accountId: "card", categoryId: "food", amount: "250", transactionDate: "2026-08-03", version: nil)
+        let expenseJuly = TestFixtures.transaction(id: "expense-jul", accountId: "card", categoryId: "food", amount: "900", transactionDate: "2026-07-31", version: nil)
+        let investmentAugust = TestFixtures.transaction(id: "investment-aug", accountId: "card", type: .transfer, amount: "1000", transactionDate: "2026-08-10", counterpartyAccountId: "broker", transferStatus: .posted, version: nil)
+        let ordinaryTransfer = TestFixtures.transaction(id: "ordinary-transfer", accountId: "card", type: .transfer, amount: "500", transactionDate: "2026-08-10", counterpartyAccountId: "card", transferStatus: .posted, version: nil)
         let investmentCategory = AssetCategory(
             id: "broker-category",
             name: "Broker",
