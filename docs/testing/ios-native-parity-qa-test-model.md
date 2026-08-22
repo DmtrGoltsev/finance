@@ -4,7 +4,7 @@
 
 Целевая ветка: `codex/ios-native-current-parity-20260822`
 
-Интегрированный commit: `33df6710a7ee3fb6386634563a0e8c5a33b80d20`
+Финальный одобренный commit: `a5a332093587fc2467383686cca089877d03f90e`
 
 Статус: автоматические gates PASS; physical iPhone/signing и production HTTPS/ATS NOT RUN/BLOCKED.
 
@@ -26,12 +26,12 @@
 
 | Gate | Требование | Статус | Доказательство |
 | --- | --- | --- | --- |
-| IOS-GIT-001 | Branch и remote указывают на один commit | PASS | `codex/ios-native-current-parity-20260822`, `33df6710...`. |
-| IOS-BE-001 | Backend auth/migration contract | PASS CI | Run `32556492248`: 29 tests, Ruff PASS, одна Alembic head `20260822_0018`. |
-| IOS-BLD-001 | XcodeGen | PASS CI | Run `32556492248`. |
-| IOS-BLD-002 | Debug build | PASS CI | Run `32556492248`. |
+| IOS-GIT-001 | Branch и remote указывают на один commit | PASS | `codex/ios-native-current-parity-20260822`, `a5a3320...`. |
+| IOS-BE-001 | Backend auth/migration contract | PASS CI | Run `32563222674`: 63 tests, Ruff PASS, одна Alembic head `20260822_0019`; full local backend 313 passed/6 skipped. |
+| IOS-BLD-001 | XcodeGen | PASS CI | Run `32563222674`. |
+| IOS-BLD-002 | Debug build | PASS CI | Run `32563222674`. |
 | IOS-BLD-003 | Release build с безопасным placeholder HTTPS | PASS CI | Доказывает компиляцию, не production connectivity. |
-| IOS-TST-001 | XCTest | PASS CI | `69/69`. |
+| IOS-TST-001 | XCTest | PASS CI | `77/77`. |
 | IOS-UI-001 | Launch UI smoke | PASS CI | `1/1`. |
 | IOS-DEV-001 | Apple signing/provisioning и установка на физический iPhone | NOT RUN/BLOCKED | Требуются Mac, Xcode, Team/provisioning и устройство. |
 | IOS-NET-001 | Trusted production HTTPS и ATS smoke | NOT RUN/BLOCKED | Production endpoint остаётся plain HTTP; ATS нельзя ослаблять. |
@@ -127,19 +127,40 @@ or contract is covered by XCTest.
 
 | Stream | Commit/run | Result |
 | --- | --- | --- |
-| Backend `ios_bearer` contract | `407e5628`; local backend suite 304 passed/6 skipped, targeted 61 and 29 passed | PASS; migration not deployed to production |
+| Backend `ios_bearer` contract | Final `a5a3320`; full backend 313 passed/6 skipped; CI auth/migration 63 | PASS; migrations through `20260822_0019` not deployed to production |
 | Secure iOS session | `13bff57b`; run `32554005096` | Debug/Release PASS, XCTest 57/57, UI 1/1 |
 | SwiftData/account sync | `640f93e2`; run `32554343934` | Debug/Release PASS, XCTest 52/52, UI 1/1 |
 | UX parity | `ba195e2`; run `32552813248` | PASS |
-| Integrated branch | `33df6710`; run `32556492248` | Backend 29, iOS 69, UI 1; all PASS |
+| Final approved branch | `a5a3320`; run `32563222674` | Backend CI 63, iOS 77/77, UI 1/1, Debug/Release PASS; reviewer APPROVE |
 
-Worker runs prove their isolated branches. Release status is based only on the integrated run at the exact integrated SHA.
+Worker runs prove their isolated branches. Final code/CI status is based only on
+run `32563222674` at exact SHA
+`a5a332093587fc2467383686cca089877d03f90e`.
+
+## Closed reviewer findings
+
+| Cycle | Finding | Final evidence/status |
+| --- | --- | --- |
+| 1 | 72-hour offline cap was not applied during Keychain restore | FIXED; real restore path enforces the cap and clears credentials without deleting scoped financial data |
+| 1 | Refresh rotation did not extend session lifetime | FIXED and superseded by separate access/refresh expiry model |
+| 1 | Offline edit/delete did not update analytics before sync | FIXED; queued edit/delete and month movement are covered |
+| 1 | Logout could race with committed refresh | FIXED; stable session-bound revoke proof is used |
+| 2 | Refresh was unreachable after access expiry | FIXED; access TTL is 15 minutes, sliding refresh/session TTL is 30 days, 401 -> refresh -> one retry is covered |
+| 2 | Partial edit -> delete sync retained stale analytics baseline | FIXED; dependent delete is rebased to applied edit payload/version |
+| 2 | Uncategorized expense edit/delete left category breakdown stale | FIXED; canonical `uncategorized` delta is applied |
+
+Final independent reviewer verdict: **APPROVE for code/CI**. No P0/P1 code
+finding remains open in the reviewed scope.
 
 ## External blockers and non-results
 
 - **Physical iPhone/signing: NOT RUN/BLOCKED.** There is no signed IPA or device evidence. Mac, Xcode, Apple Team/provisioning and a connected iPhone are required.
 - **Production HTTPS/ATS: NOT RUN/BLOCKED.** Current production API is plain HTTP. Release must use an owned trusted HTTPS endpoint. `NSAllowsArbitraryLoads` or broad production ATS exceptions are prohibited.
-- **Production backend deploy: NOT PERFORMED in this iOS QA wave.** Migration `20260822_0018` is CI-tested but not proven on live production DB.
+- **Production backend deploy: PREFLIGHT BLOCKED / NOT PERFORMED.** GitHub
+  environment `production` reports `protection_rules=[]`; local branch
+  `prod/release-finance-ios-backend-20260822` is not pushed; production DB is
+  still `20260618_0017`; health is HTTP 200; HTTPS/FQDN is absent. Migration
+  head `20260822_0019` is CI-tested but not proven on live production DB.
 - **Physical OCR and end-to-end offline convergence: NOT RUN.** Automated boundaries pass; device behavior must still be evidenced.
 
 ## Definition of Done for final device release

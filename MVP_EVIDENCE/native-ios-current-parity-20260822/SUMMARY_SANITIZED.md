@@ -1,78 +1,90 @@
-# Native iOS current parity: integrated QA evidence
+# Native iOS current parity: final approved QA evidence
 
 Run date: 2026-08-22 (Europe/Moscow)
 
 Branch: `codex/ios-native-current-parity-20260822`
 
-Integrated commit: `33df6710a7ee3fb6386634563a0e8c5a33b80d20`
+Final code commit: `a5a332093587fc2467383686cca089877d03f90e`
 
-Result: **AUTOMATED PASS with external release blockers**
+Result: **CODE/CI APPROVE with external production and device blockers**
 
 This report is sanitized. It contains no passwords, access/refresh tokens,
 cookies, session identifiers, Apple signing data, private keys, production
 financial payloads, raw OCR text or screenshots.
 
-## Integrated CI
+## Final CI
 
 GitHub Actions:
-`https://github.com/DmtrGoltsev/finance/actions/runs/32556492248`
+`https://github.com/DmtrGoltsev/finance/actions/runs/32563222674`
 
 | Gate | Result |
 | --- | --- |
-| Exact branch/SHA | PASS: `codex/ios-native-current-parity-20260822` / `33df6710...` |
-| Backend auth/migration tests | PASS: 29 |
+| Exact branch/SHA | PASS: `codex/ios-native-current-parity-20260822` / `a5a3320...` |
+| Full local backend suite | PASS: 313 passed, 6 skipped |
+| CI backend auth/migration tests | PASS: 63 |
 | Backend Ruff | PASS |
-| Alembic heads | PASS: one head, `20260822_0018` |
+| Alembic heads | PASS: one head, `20260822_0019` |
 | XcodeGen | PASS |
 | iOS Debug build | PASS |
 | iOS Release build | PASS |
-| XCTest | PASS: 69/69 |
+| XCTest | PASS: 77/77 |
 | Launch UI test | PASS: 1/1 |
+| Final independent review | APPROVE |
 
-CI artifact: `ios-build-test-evidence-32556492248`, artifact id
-`9471631068`, size `542519` bytes, digest
-`sha256:40641f8822e91a36737fd7c9c448e43a12edd689aaecb38878729fad13aadc3a`.
+CI artifact: `ios-build-test-evidence-32563222674`, artifact id
+`9473425949`, size `571076` bytes, digest
+`sha256:028cd3b931aec26c119ca649eb4f392eda1d1d60182c1295fd57e3302d22e801`.
 The artifact is retained by GitHub Actions and was not copied into the repository.
 
-## Worker evidence
+## Closed review findings
 
-| Stream | Evidence | Result |
-| --- | --- | --- |
-| Backend `ios_bearer` | commit `407e5628112f7d819b5f898f87d2f6a3f666689b` | Local backend 304 passed/6 skipped; targeted 61 and 29; Ruff PASS; one Alembic head |
-| Secure session | run `32554005096`, commit `13bff57b8c1961ce67aa0bd35ec25a31dc132a4f` | Debug/Release, XCTest 57/57, UI 1/1 PASS |
-| SwiftData/sync | run `32554343934`, commit `640f93e254d34f56025c2c5366d9251e44cfc407` | Debug/Release, XCTest 52/52, UI 1/1 PASS |
-| UX parity | run `32552813248`, commit `ba195e2d0d1590b492d71b5bb972a54f822149de` | PASS |
+Cycle 1 closed the real-path 72-hour offline restore cap, session refresh
+lifetime rotation, offline edit/delete analytics overlay, and the
+refresh-versus-logout revocation race.
 
-Worker evidence is supporting evidence only. The integrated release claim is
-based on run `32556492248` at the exact integrated SHA.
+Cycle 2 separated the 15-minute access-token expiry from the 30-day sliding
+refresh/session lifetime, rebased partial edit -> delete sync analytics on the
+applied edit, and fixed uncategorized expense edit/delete analytics using the
+canonical `uncategorized` key.
+
+No P0/P1 code finding remains open in the final reviewed scope.
 
 ## Covered automated behavior
 
 - secure persistent `ios_bearer` session with no password persistence;
-- single-flight refresh, one retry, safe `403`, offline logout and stale refresh rejection;
+- single-flight refresh, one retry, safe `403`, 72-hour offline cap, stable
+  logout revocation and stale refresh rejection;
+- separate access/refresh expiry with replay protection;
 - A -> B account isolation and session-bound sync lease;
 - SwiftData JSON migration/recovery, atomic writes and rollback;
-- stale push response rejection;
+- stale and partial push response handling;
 - category partial-text search in a modal vertical list;
-- newest-first operation ordering with stable tie-breakers;
-- operation edit wiring for amount/date/category/account;
-- selected-month pending investment overlay;
-- personal-only UI/API contracts;
-- OCR online-only boundary;
-- payment-account filtering;
-- compact month switcher and current-month shortcut.
+- newest-first operation ordering and operation editing;
+- selected-month pending investment and edit/delete analytics overlays;
+- personal-only UI/API contracts and OCR online-only boundary;
+- payment-account filtering and compact month switching.
+
+## Production deploy preflight
+
+Result: **BLOCKED / NOT DEPLOYED**.
+
+- GitHub environment `production`: `protection_rules=[]`.
+- Release branch `prod/release-finance-ios-backend-20260822`: local only and
+  not pushed.
+- Production database revision: `20260618_0017`.
+- Public health: HTTP 200.
+- Trusted HTTPS/FQDN: absent.
+- Alembic head `20260822_0019` is not applied to production.
+
+No direct SSH/SCP deploy was performed and production data was not mutated.
 
 ## Explicit non-results and blockers
 
-- **Physical iPhone/signing: NOT RUN/BLOCKED.** No signed IPA was produced and no
-  installation on a real iPhone was performed. Mac/Xcode, Apple Team/provisioning
-  and a connected device are required.
-- **Production HTTPS/ATS: NOT RUN/BLOCKED.** The current production Finance API
-  endpoint is plain HTTP. Native iOS Release requires a publicly trusted HTTPS
-  endpoint. No broad ATS exception may be added.
-- **Production backend deploy: NOT PERFORMED.** Migration `20260822_0018` passed
-  CI contract checks but was not applied to the live production database in this
-  QA wave.
+- **Physical iPhone/signing: NOT RUN/BLOCKED.** No signed IPA was produced and
+  no installation on a real iPhone was performed. Mac/Xcode, Apple
+  Team/provisioning and a connected device are required.
+- **Production HTTPS/ATS: NOT RUN/BLOCKED.** Native iOS Release requires a
+  publicly trusted HTTPS endpoint. No broad ATS exception may be added.
 - **Physical OCR and complete offline reconnect flow: NOT RUN.** Automated
   boundaries passed; device evidence is still required.
 

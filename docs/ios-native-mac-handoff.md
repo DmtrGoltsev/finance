@@ -4,10 +4,10 @@
 
 - Repository: `DmtrGoltsev/finance`
 - Branch: `codex/ios-native-current-parity-20260822`
-- Verified commit: `33df6710a7ee3fb6386634563a0e8c5a33b80d20`
+- Verified commit: `a5a332093587fc2467383686cca089877d03f90e`
 - Native target: `apps/ios`
 - Minimum deployment target: iOS 17.0
-- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32556492248`
+- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32563222674`
 
 `apps/web-pwa/ios` is the legacy Capacitor wrapper. It is not the target native
 application and must not be used for the native iPhone handoff.
@@ -40,7 +40,7 @@ open FinanceApp.xcodeproj
 ```
 
 The expected `git rev-parse HEAD` for this handoff is
-`33df6710a7ee3fb6386634563a0e8c5a33b80d20`.
+`a5a332093587fc2467383686cca089877d03f90e`.
 
 ## Production API requirement
 
@@ -102,9 +102,10 @@ xcodebuild build \
 ```
 
 Run the `FinanceApp` scheme tests on an available iPhone simulator. The verified
-integrated CI baseline is 69 XCTest plus 1 launch UI test with zero failures.
-The same run also passed the backend `ios_bearer`/migration gate with 29 tests,
-Ruff and one Alembic head `20260822_0018`.
+final CI baseline is 77 XCTest plus 1 launch UI test with zero failures. The
+same run also passed the backend `ios_bearer`/migration gate with 63 tests,
+Ruff and one Alembic head `20260822_0019`. The full local backend suite passed
+with 313 tests and 6 skips. Final independent code review verdict is APPROVE.
 
 ## Install on a physical iPhone without App Store
 
@@ -144,8 +145,11 @@ Use the paid developer team when stable long-lived installation is required.
   prove Release compilation. It does not prove production connectivity.
 - Actual production login remains blocked until the trusted HTTPS endpoint is
   chosen and configured.
-- Backend migration `20260822_0018` is CI-tested but was not deployed to
-  production by this iOS QA/documentation wave.
+- Backend migrations through `20260822_0019` are CI-tested but were not deployed
+  to production by this iOS QA/documentation wave. Production preflight found
+  `protection_rules=[]`; local branch
+  `prod/release-finance-ios-backend-20260822` is not pushed, production DB is
+  still `20260618_0017`, health is HTTP 200, and trusted HTTPS/FQDN is absent.
 - Backend/PWA compatibility types may still contain legacy household vocabulary;
   native product UI and reachable API behavior are personal-only.
 
