@@ -850,6 +850,19 @@ class AppSectionTest {
     }
 
     @Test
+    fun reportMonthSwitcherKeepsMonthNavigationCompactAndDeterministic() {
+        val state = reportMonthSwitcherState(
+            selectedMonth = "2026-08",
+            currentMonth = "2026-08",
+        )
+
+        assertEquals("Август 2026", state.label)
+        assertEquals("2026-07", state.previousMonth)
+        assertEquals("2026-08", state.currentMonth)
+        assertEquals("2026-09", state.nextMonth)
+    }
+
+    @Test
     fun operationsSortNewestByDateThenOccurredCreatedAndId() {
         val oldest = TransactionSummary(
             type = "income",

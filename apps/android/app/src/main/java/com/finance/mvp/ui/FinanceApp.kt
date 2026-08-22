@@ -64,8 +64,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -3667,34 +3671,95 @@ private fun DatePickerField(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReportMonthSwitcher(
+internal fun ReportMonthSwitcher(
     selectedMonth: String,
     onSelected: (String) -> Unit,
 ) {
-    val month = selectedMonth.toYearMonthOrCurrent()
+    val state = reportMonthSwitcherState(selectedMonth)
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = { onSelected(month.minusMonths(1).toString()) }) {
-                Text("<")
-            }
-            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(month.displayReportMonth(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                val boundaries = month.toString().reportMonthBoundary()
-                Text("${boundaries.startDate} - ${boundaries.endDate}", style = MaterialTheme.typography.labelSmall)
-            }
-            OutlinedButton(onClick = { onSelected(currentReportMonth()) }) {
-                Text("Текущий")
-            }
-            OutlinedButton(onClick = { onSelected(month.plusMonths(1).toString()) }) {
-                Text(">")
-            }
+            ReportMonthActionButton(
+                icon = R.drawable.ic_chevron_left_24,
+                contentDescription = "Предыдущий месяц",
+                onClick = { onSelected(state.previousMonth) },
+            )
+            Text(
+                text = state.label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 4.dp)
+                    .testTag("report-month-label"),
+            )
+            ReportMonthActionButton(
+                icon = R.drawable.ic_calendar_today_24,
+                contentDescription = "Текущий месяц",
+                onClick = { onSelected(state.currentMonth) },
+            )
+            ReportMonthActionButton(
+                icon = R.drawable.ic_chevron_right_24,
+                contentDescription = "Следующий месяц",
+                onClick = { onSelected(state.nextMonth) },
+            )
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReportMonthActionButton(
+    @DrawableRes icon: Int,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(contentDescription) } },
+        state = rememberTooltipState(),
+    ) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(44.dp)
+                .testTag("report-month-action-$contentDescription"),
+        ) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+internal data class ReportMonthSwitcherState(
+    val label: String,
+    val previousMonth: String,
+    val currentMonth: String,
+    val nextMonth: String,
+)
+
+internal fun reportMonthSwitcherState(
+    selectedMonth: String,
+    currentMonth: String = currentReportMonth(),
+): ReportMonthSwitcherState {
+    val month = selectedMonth.toYearMonthOrCurrent()
+    return ReportMonthSwitcherState(
+        label = month.displayReportMonth(),
+        previousMonth = month.minusMonths(1).toString(),
+        currentMonth = currentMonth,
+        nextMonth = month.plusMonths(1).toString(),
+    )
 }
 
 @Composable
