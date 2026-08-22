@@ -363,6 +363,7 @@ private class FakeFinanceApiClient(
         source: AccountSummary,
         destination: AccountSummary,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
         return ApiResult.Failure("unused")
     }

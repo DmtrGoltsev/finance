@@ -849,6 +849,61 @@ class AppSectionTest {
         assertFalse("2026-02-28T00:00:00Z".isDateOnly())
     }
 
+    @Test
+    fun operationsSortNewestByDateThenOccurredCreatedAndId() {
+        val oldest = TransactionSummary(
+            type = "income",
+            amount = "1",
+            currency = "USD",
+            occurredAt = "2026-08-22T12:00:00Z",
+            description = "oldest",
+            transferScope = null,
+            transferStatus = null,
+            id = "a",
+            accountId = "payment",
+            transactionDate = "2026-08-22",
+            createdAt = "2026-08-22T12:01:00Z",
+        )
+        val newerExpense = oldest.copy(
+            type = "expense",
+            description = "newer expense",
+            id = "b",
+            createdAt = "2026-08-22T12:02:00Z",
+        )
+        val newestTransfer = oldest.copy(
+            type = "transfer",
+            description = "newest transfer",
+            id = "c",
+            counterpartyAccountId = "broker",
+            createdAt = "2026-08-22T12:03:00Z",
+        )
+
+        assertEquals(
+            listOf("c", "b", "a"),
+            listOf(oldest, newestTransfer, newerExpense).sortedNewestFirst().map { it.id },
+        )
+    }
+
+    @Test
+    fun categorySearchMatchesPartialTextAndSortsVerticalOptions() {
+        val categories = listOf(
+            CategorySummary("Супермаркеты", "expense", "personal", id = "market"),
+            CategorySummary("Кафе и рестораны", "expense", "personal", id = "cafe"),
+            CategorySummary("Такси", "expense", "personal", id = "taxi"),
+        )
+
+        assertEquals(listOf("cafe"), categories.filterCategories("рест").map { it.id })
+        assertEquals(listOf("cafe", "market", "taxi"), categories.filterCategories("").map { it.id })
+    }
+
+    @Test
+    fun quickAddSelectionImmediatelyAdoptsNewlyLoadedPaymentAccount() {
+        assertEquals("", resolvedSelectionId("", emptyList()))
+        assertEquals("payment", resolvedSelectionId("", listOf("payment")))
+        assertEquals("payment", resolvedSelectionId("stale", listOf("payment", "cash")))
+        assertEquals("cash", resolvedSelectionId("cash", listOf("payment", "cash")))
+    }
+
     private fun dashboardFixture(): FinanceDashboard {
         return FinanceDashboard(
             session = SessionStatus(true, "Пользователь", "household"),

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -902,7 +903,12 @@ fun FinanceApp(
                                 transactionDate = draft.transactionDate,
                                 note = "Между счетами",
                             )
-                            when (val apiResult = apiClient.createDemoTransfer(source, destination, amount)) {
+                            when (val apiResult = apiClient.createDemoTransfer(
+                                source,
+                                destination,
+                                amount,
+                                draft.transactionDate,
+                            )) {
                                 is ApiResult.Success -> QuickAddSubmitResult.Success
                                 is ApiResult.Failure -> QuickAddSubmitResult.Failure(apiResult, offlineDraft)
                             }
@@ -1879,7 +1885,7 @@ private fun LazyListScope.operationsContent(
         }
     }
     item { Text("Операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-    items(items.sortedBy { it.sortDateKey() }) { transaction ->
+    items(items.sortedNewestFirst(), key = { it.id }) { transaction ->
         TransactionRow(transaction, dashboard?.categories.orEmpty()) {
             onDeleteTransaction(transaction.id)
         }
@@ -4146,11 +4152,22 @@ private fun QuickAddSheet(
     val categories = dashboard?.categories.orEmpty()
         .filter { it.type == type.apiValue && it.status == "active" }
         .filter { it.matchesWritableMode(visibility) }
-    val firstAccountId = operationAccounts.firstOrNull()?.id.orEmpty()
-    val firstCategoryId = categories.firstOrNull()?.id.orEmpty()
-    val selectedSource = scopedAccounts.firstByIdOrFirst(accountId)
+    val selectableAccounts = if (type == QuickEntryType.Transfer) scopedAccounts else operationAccounts
+    val selectedAccountId = resolvedSelectionId(accountId, selectableAccounts.map { it.id })
+    val selectedCategoryId = resolvedSelectionId(categoryId, categories.map { it.id })
+    val selectedSource = scopedAccounts.firstOrNull { it.id == selectedAccountId }
     val compatibleDestinations = scopedAccounts.compatibleTransferDestinations(selectedSource)
-    val selectedDestination = compatibleDestinations.firstByIdOrFirst(destinationAccountId)
+    val selectedDestinationId = resolvedSelectionId(destinationAccountId, compatibleDestinations.map { it.id })
+    val selectedDestination = compatibleDestinations.firstOrNull { it.id == selectedDestinationId }
+    LaunchedEffect(type, selectableAccounts.map { it.id }) {
+        accountId = selectedAccountId
+    }
+    LaunchedEffect(type, categories.map { it.id }) {
+        categoryId = selectedCategoryId
+    }
+    LaunchedEffect(type, selectedAccountId, compatibleDestinations.map { it.id }) {
+        destinationAccountId = selectedDestinationId
+    }
     val transferPreflight = if (type == QuickEntryType.Transfer) {
         transferPairValidationMessage(selectedSource, selectedDestination)
             ?: "Перевод будет сохранён нейтрально: между счетами одного scope и одной валюты."
@@ -4211,14 +4228,14 @@ private fun QuickAddSheet(
                 AccountPicker(
                     title = if (type == QuickEntryType.Transfer) "Со счета" else "Счет",
                     accounts = if (type == QuickEntryType.Transfer) scopedAccounts else operationAccounts,
-                    selectedId = accountId.ifBlank { firstAccountId },
+                    selectedId = selectedAccountId,
                     onSelected = { accountId = it },
                 )
                 if (type == QuickEntryType.Transfer) {
                     AccountPicker(
                         title = "На счет",
                         accounts = compatibleDestinations,
-                        selectedId = destinationAccountId,
+                        selectedId = selectedDestinationId,
                         onSelected = { destinationAccountId = it },
                     )
                     transferPreflight?.let {
@@ -4228,12 +4245,12 @@ private fun QuickAddSheet(
                 if (type != QuickEntryType.Transfer && categories.isNotEmpty()) {
                     CategoryPicker(
                         categories = categories,
-                        selectedId = categoryId.ifBlank { firstCategoryId },
+                        selectedId = selectedCategoryId,
                         onSelected = { categoryId = it },
                     )
                 }
             }
-            if (type == QuickEntryType.Expense || type == QuickEntryType.Income) {
+            if (type != QuickEntryType.Asset) {
                 DatePickerField(
                     label = "Дата операции",
                     date = transactionDate,
@@ -4256,9 +4273,9 @@ private fun QuickAddSheet(
                             QuickAddDraft(
                                 amount = amount,
                                 type = type,
-                                accountId = accountId.ifBlank { firstAccountId },
-                                destinationAccountId = destinationAccountId,
-                                categoryId = categoryId.ifBlank { firstCategoryId },
+                                accountId = selectedAccountId,
+                                destinationAccountId = selectedDestinationId,
+                                categoryId = selectedCategoryId,
                                 assetKind = assetKind,
                                 visibility = FinanceMode.Personal,
                                 transactionDate = transactionDate,
@@ -4447,29 +4464,107 @@ private fun CategoryPicker(
     selectedId: String,
     onSelected: (String) -> Unit,
 ) {
+    var showPicker by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val selected = categories.firstOrNull { it.id == selectedId }
+    val filtered = categories.filterCategories(query)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Категория", style = MaterialTheme.typography.labelLarge)
         if (categories.isEmpty()) {
             Text("Нет подходящей категории. Создайте её в разделе «Категории расходов».", style = MaterialTheme.typography.bodySmall)
         } else {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(categories) { category ->
-                    FilterChip(
-                        selected = selectedId == category.id,
-                        onClick = { onSelected(category.id) },
-                        label = { Text(category.displayName()) },
-                        leadingIcon = {
-                            Icon(
-                                painter = painterResource(category.icon()),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                    )
-                }
+            OutlinedButton(
+                onClick = { showPicker = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("category-picker-button"),
+            ) {
+                Icon(
+                    painter = painterResource(selected?.icon() ?: R.drawable.ic_category_24),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(selected?.displayName() ?: "Выбрать категорию")
             }
         }
     }
+    if (showPicker) {
+        AlertDialog(
+            modifier = Modifier.testTag("category-picker-dialog"),
+            onDismissRequest = {
+                query = ""
+                showPicker = false
+            },
+            title = { Text("Выберите категорию") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("Поиск") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("category-search"),
+                    )
+                    if (filtered.isEmpty()) {
+                        Text("Ничего не найдено", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(filtered, key = { it.id }) { category ->
+                                OutlinedButton(
+                                    onClick = {
+                                        onSelected(category.id)
+                                        query = ""
+                                        showPicker = false
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("category-option-${category.id}"),
+                                ) {
+                                    Icon(
+                                        painter = painterResource(category.icon()),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(category.displayName(), modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    query = ""
+                    showPicker = false
+                }) {
+                    Text("Закрыть")
+                }
+            },
+        )
+    }
+}
+
+internal fun resolvedSelectionId(selectedId: String, availableIds: List<String>): String =
+    selectedId.takeIf { it in availableIds } ?: availableIds.firstOrNull().orEmpty()
+
+internal fun List<CategorySummary>.filterCategories(query: String): List<CategorySummary> {
+    val normalizedQuery = query.trim().lowercase(Locale.getDefault())
+    return asSequence()
+        .filter {
+            normalizedQuery.isBlank() ||
+                it.displayName().lowercase(Locale.getDefault()).contains(normalizedQuery)
+        }
+        .sortedBy { it.displayName().lowercase(Locale.getDefault()) }
+        .toList()
 }
 
 data class SyncUiState(
@@ -4743,7 +4838,7 @@ fun sectionCards(section: AppSection, dashboard: FinanceDashboard?): List<Sectio
             SectionCard("Капитал", view.capital.formatMoney(view.primaryCurrency), "${view.accountCount} активов"),
             SectionCard("Расходы месяца", view.monthExpenses.formatMoney(view.primaryCurrency), "переводы отдельно"),
         )
-        AppSection.Operations -> dashboard?.transactions.orEmpty().map {
+        AppSection.Operations -> dashboard?.transactions.orEmpty().sortedNewestFirst().map {
             SectionCard(it.displayDescription(), it.signedAmount(), it.displayDate())
         }
         AppSection.Assets -> view.assetSummaries.map {
@@ -4798,7 +4893,7 @@ fun FinanceDashboard?.viewFor(mode: FinanceMode): DashboardView {
         operationCount = transactions.size,
         assetSummaries = assetSummaries(accounts),
         topCategories = topCategories(transactions, dashboard?.categories.orEmpty(), currency),
-        recentTransactions = transactions.sortedByDescending { it.sortDateKey() }.take(6),
+        recentTransactions = transactions.sortedNewestFirst().take(6),
     )
 }
 
@@ -5290,9 +5385,12 @@ private fun TransactionSummary.displayDate(): String {
     return transactionDate.ifBlank { occurredAt.take(10) }
 }
 
-private fun TransactionSummary.sortDateKey(): String {
-    return transactionDate.ifBlank { occurredAt }
-}
+internal fun List<TransactionSummary>.sortedNewestFirst(): List<TransactionSummary> = sortedWith(
+    compareByDescending<TransactionSummary> { it.transactionDate.ifBlank { it.occurredAt.take(10) } }
+        .thenByDescending { it.occurredAt }
+        .thenByDescending { it.createdAt }
+        .thenByDescending { it.id },
+)
 
 private fun TransactionSummary.localizedType(): String = when (type) {
     "income" -> "Доход"
@@ -5623,8 +5721,9 @@ private class PreviewFinanceApiClient : FinanceApiClient {
         source: AccountSummary,
         destination: AccountSummary,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
-        return ApiResult.Success(TransactionSummary("transfer", amount, source.currency, "2026-05-18T09:00:00Z", "Между счетами", "personal_same_owner", "posted", id = "txn-transfer-created", accountId = source.id, counterpartyAccountId = destination.id, version = 1))
+        return ApiResult.Success(TransactionSummary("transfer", amount, source.currency, "${transactionDate}T12:00:00Z", "Между счетами", "personal_same_owner", "posted", id = "txn-transfer-created", accountId = source.id, counterpartyAccountId = destination.id, version = 1, transactionDate = transactionDate))
     }
 
     override suspend fun logout(): ApiResult<Unit> = ApiResult.Success(Unit)

@@ -99,6 +99,61 @@ class ApiClientDashboardTest {
     }
 
     @Test
+    fun dashboardCountsSelectedMonthTransferIntoBrokerageWhenLegacyAccountHasNoAssetCategory() = runBlocking {
+        withScriptedJsonServer(
+            ScriptedJsonResponse(body = """{"data":{"actor":{"id":"user-1","memberships":[]}}}"""),
+            ScriptedJsonResponse(
+                body = """{"items":[
+                    {"id":"payment","name":"Payment","accountType":"bank","ownershipType":"personal","currency":"USD","currentBalance":"99.67","isPaymentAccount":true},
+                    {"id":"broker","name":"Broker","accountType":"brokerage","ownershipType":"personal","currency":"USD","currentBalance":"0.33","isPaymentAccount":false}
+                ]}""",
+            ),
+            ScriptedJsonResponse(body = """{"items":[]}"""),
+            ScriptedJsonResponse(body = """{"items":[]}"""),
+            ScriptedJsonResponse(
+                body = """{"items":[
+                    {"id":"transfer","transactionType":"transfer","accountId":"payment","counterpartyAccountId":"broker","amount":"0.3300","currency":"USD","transactionDate":"2026-08-22","occurredAt":"2026-08-22T12:00:00Z","createdAt":"2026-08-22T12:01:00Z","sourceType":"manual"}
+                ]}""",
+            ),
+            ScriptedJsonResponse(
+                body = """{"data":{"totalsByCurrency":[{"currency":"USD","incomeTotal":"0","expenseTotal":"0","netTotal":"0","investmentsTotal":"0.0000"}]}}""",
+            ),
+            ScriptedJsonResponse(body = """{"data":{"assetCategoryGroups":[]}}"""),
+            ScriptedJsonResponse(body = """{"data":{"items":[]}}"""),
+        ) { baseUrl, requests ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+
+            val result = client.dashboard("2026-08-01", "2026-08-31")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            val dashboard = (result as ApiResult.Success).value
+            assertEquals("0.3300", dashboard.investmentsByCurrency.single().amount)
+            assertEquals("0.3300", dashboard.investmentsTotal?.amount)
+            assertTrue(requests.any { it.contains("startDate=2026-08-01") && it.contains("endDate=2026-08-31") })
+        }
+    }
+
+    @Test
+    fun manualTransferSendsSelectedTransactionDate() = runBlocking {
+        withScriptedJsonServer(
+            ScriptedJsonResponse(
+                statusCode = 201,
+                body = """{"data":{"id":"transfer","transactionType":"transfer","accountId":"payment","counterpartyAccountId":"broker","amount":"0.33","currency":"USD","transactionDate":"2026-08-15","occurredAt":"2026-08-15T12:00:00Z","createdAt":"2026-08-22T12:00:00Z","sourceType":"manual"}}""",
+            ),
+        ) { baseUrl, requests ->
+            val client = LiveFinanceApiClient(ApiConfig(baseUrl), InMemorySecureTokenStore())
+            val source = AccountSummary("Payment", "bank", "personal", "USD", "100", id = "payment")
+            val destination = AccountSummary("Broker", "brokerage", "personal", "USD", "0", id = "broker")
+
+            val result = client.createDemoTransfer(source, destination, "0.33", "2026-08-15")
+
+            assertTrue("Expected success, got $result", result is ApiResult.Success)
+            assertTrue(requests.single().contains("\"transactionDate\":\"2026-08-15\""))
+            assertTrue(requests.single().contains("\"counterpartyAccountId\":\"broker\""))
+        }
+    }
+
+    @Test
     fun dashboardUsesPersonalScopeAndFiltersSharedEntitiesWhenMembershipExists() = runBlocking {
         withScriptedJsonServer(
             ScriptedJsonResponse(body = """{"data":{"actor":{"id":"user-1","memberships":[{"householdId":"household-1","status":"active"}]}}}"""),

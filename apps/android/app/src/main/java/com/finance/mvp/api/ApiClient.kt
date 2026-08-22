@@ -10,6 +10,7 @@ import java.math.RoundingMode
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -91,6 +92,7 @@ interface FinanceApiClient {
         source: AccountSummary,
         destination: AccountSummary,
         amount: String = "1.00",
+        transactionDate: String = todayDate(),
     ): ApiResult<TransactionSummary>
     suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> =
         ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
@@ -289,6 +291,7 @@ data class TransactionSummary(
     val sourceType: String = "manual",
     val version: Int? = null,
     val transactionDate: String = occurredAt.take(10),
+    val createdAt: String = occurredAt,
 )
 
 data class MoneyTotal(
@@ -666,7 +669,7 @@ class LiveFinanceApiClient(
                         ) &&
                     (transaction.type != "transfer" || transaction.counterpartyAccountId != null)
             }
-            .sortedByDescending { it.occurredAt }
+            .sortedWith(transactionNewestFirstComparator)
         val reportData = runCatching {
             request(
                 path = "/api/v1/reports/summary",
@@ -691,9 +694,14 @@ class LiveFinanceApiClient(
             ?.toObjectList()
             ?.map(::parseAssetCategoryGroup)
             ?: emptyList()
-        val investmentsByCurrency = reportData?.investmentTotalsByCurrency().orEmpty()
-        val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
-            ?: investmentsByCurrency.firstOrNull()
+        val calculatedInvestmentsByCurrency = monthlyInvestmentTransfers(
+            transactions = transactions,
+            accounts = accounts,
+            assetCategories = assetCategories,
+        )
+        val reportedInvestmentsByCurrency = reportData?.investmentTotalsByCurrency().orEmpty()
+        val investmentsByCurrency = calculatedInvestmentsByCurrency.ifEmpty { reportedInvestmentsByCurrency }
+        val investmentsTotal = investmentsByCurrency.firstOrNull()
         val reportTransferCount = runCatching {
             requestAllPages(
                 path = "/api/v1/reports/transactions",
@@ -954,6 +962,7 @@ class LiveFinanceApiClient(
         source: AccountSummary,
         destination: AccountSummary,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> = safeCall {
         request(
             path = "/api/v1/transactions",
@@ -964,7 +973,7 @@ class LiveFinanceApiClient(
                 .put("counterpartyAccountId", destination.id)
                 .put("amount", amount)
                 .put("currency", source.currency)
-                .put("occurredAt", nowIso())
+                .put("transactionDate", transactionDate)
                 .put("description", "Между счетами")
                 .put("sourceType", "manual")
                 .toString(),
@@ -1849,7 +1858,43 @@ private fun parseTransaction(json: JSONObject): TransactionSummary {
         sourceType = json.optString("sourceType", "manual"),
         version = json.optIntOrNull("version"),
         transactionDate = json.optString("transactionDate").ifBlank { occurredAt.take(10) },
+        createdAt = json.optString("createdAt").ifBlank { occurredAt },
     )
+}
+
+private val transactionNewestFirstComparator =
+    compareByDescending<TransactionSummary> { it.transactionDate }
+        .thenByDescending { it.occurredAt }
+        .thenByDescending { it.createdAt }
+        .thenByDescending { it.id }
+
+private fun monthlyInvestmentTransfers(
+    transactions: List<TransactionSummary>,
+    accounts: List<AccountSummary>,
+    assetCategories: List<AssetCategory>,
+): List<MoneyAmount> {
+    val accountsById = accounts.associateBy { it.id }
+    val investmentCategoryIds = assetCategories
+        .filter { it.recordStatus == "active" && it.isInvestment }
+        .mapTo(mutableSetOf()) { it.id }
+    return transactions
+        .asSequence()
+        .filter { it.type == "transfer" && it.counterpartyAccountId != null }
+        .mapNotNull { transaction ->
+            val destination = accountsById[transaction.counterpartyAccountId] ?: return@mapNotNull null
+            val isInvestmentDestination = destination.assetCategoryId in investmentCategoryIds ||
+                destination.type.lowercase(Locale.US) in setOf("brokerage", "investment")
+            transaction.takeIf { isInvestmentDestination }
+        }
+        .groupBy { it.currency }
+        .map { (currency, items) ->
+            MoneyAmount(
+                currency = currency,
+                amount = items.fold(BigDecimal.ZERO) { total, item -> total + item.amount.toBigDecimal() }
+                    .toPlainString(),
+            )
+        }
+        .sortedBy { it.currency }
 }
 
 private fun parseMoneyTotal(json: JSONObject): MoneyTotal {
@@ -2440,7 +2485,5 @@ private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse 
     }
     return ScreenshotOcrResponse(items = items)
 }
-
-private fun nowIso(): String = java.time.Instant.now().toString()
 
 private fun todayDate(): String = java.time.LocalDate.now().toString()
