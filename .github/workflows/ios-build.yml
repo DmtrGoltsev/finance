@@ -3,19 +3,74 @@ name: iOS Build
 on:
   push:
     branches:
-      - codex/ios-native-personal-parity-20260820
+      - "codex/ios-native-*"
     paths:
       - "apps/ios/**"
+      - "apps/backend/src/app/auth/**"
+      - "apps/backend/src/app/db/model_enums.py"
+      - "apps/backend/tests/auth/**"
+      - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "api/openapi/openapi.yaml"
+      - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
   pull_request:
     paths:
       - "apps/ios/**"
+      - "apps/backend/src/app/auth/**"
+      - "apps/backend/src/app/db/model_enums.py"
+      - "apps/backend/tests/auth/**"
+      - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "api/openapi/openapi.yaml"
+      - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
   workflow_dispatch:
 
 jobs:
+  backend-auth-and-migration-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/backend[dev]"
+
+      - name: Lint backend auth and migration changes
+        working-directory: apps/backend
+        run: >-
+          python -m ruff check
+          src/app/auth
+          src/app/db/model_enums.py
+          tests/auth
+          tests/db/test_ios_bearer_sessions_migration.py
+          ../../db/migrations/versions/20260822_0018_ios_bearer_sessions.py
+
+      - name: Test iOS bearer auth and migration contract
+        working-directory: apps/backend
+        run: >-
+          python -m pytest
+          tests/auth/test_registration_flow.py
+          tests/auth/test_session_flow.py
+          tests/db/test_ios_bearer_sessions_migration.py
+
+      - name: Verify single Alembic head
+        working-directory: apps/backend
+        run: |
+          set -o pipefail
+          python -m alembic -c alembic.ini heads | tee /tmp/alembic-heads.txt
+          test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
+          grep -q '^20260822_0018 ' /tmp/alembic-heads.txt
+
   build-and-test:
     runs-on: macos-15
+    needs: backend-auth-and-migration-gates
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

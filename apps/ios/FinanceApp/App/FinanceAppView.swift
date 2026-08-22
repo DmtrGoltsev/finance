@@ -1,8 +1,9 @@
 import SwiftUI
 
 struct FinanceAppView: View {
-    let apiClient: FinanceApiClient
+    let apiClient: LiveApiClient
     let syncService: FinanceSyncService
+    let syncLeaseProvider: AuthBoundSyncSessionLeaseProvider
     let sessionDataWiper: FinanceSessionDataWiper
     let configurationError: String?
 
@@ -11,6 +12,7 @@ struct FinanceAppView: View {
     @State private var selectedTab = 0
     @State private var message: String?
     @State private var isAuthenticated = false
+    @State private var isRestoringSession = true
     @State private var showQuickAdd = false
     @State private var quickAddError: String?
     @State private var syncOverview = LocalSyncOverview.empty
@@ -21,7 +23,9 @@ struct FinanceAppView: View {
 
     var body: some View {
         Group {
-            if !isAuthenticated {
+            if isRestoringSession {
+                sessionRestoringView
+            } else if !isAuthenticated {
                 authView
             } else {
                 mainView
@@ -30,6 +34,18 @@ struct FinanceAppView: View {
         .task {
             await restoreSession()
         }
+    }
+
+    private var sessionRestoringView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Открываем финансы")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Восстановление сохранённой сессии")
     }
 
     private var authView: some View {
@@ -75,7 +91,10 @@ struct FinanceAppView: View {
                     dashboard: dashboard,
                     onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
                     apiClient: apiClient,
-                    onRefreshDashboard: loadDashboard
+                    onRefreshDashboard: loadDashboard,
+                    onUpdateTransaction: { id, request in
+                        try await updateTransactionOnlineOrQueue(id: id, request: request)
+                    }
                 )
                 .tabItem {
                     Image(systemName: "list.bullet")
@@ -311,14 +330,31 @@ struct FinanceAppView: View {
 
     private func restoreSession() async {
         isLoading = true
-        if let configurationError {
-            if !(await restoreBoundOfflineSession(message: "Офлайн-режим. \(configurationError)")) {
-                message = configurationError
-            }
+        defer {
             isLoading = false
+            isRestoringSession = false
+        }
+
+        guard let persistedStatus = await apiClient.persistedSessionStatus() else {
+            message = configurationError ?? "Войдите, чтобы увидеть финансы"
             return
         }
+
         do {
+            try await syncLeaseProvider.activate(session: persistedStatus)
+            activeLocalScope = LocalStoreScope.fromSession(
+                persistedStatus,
+                fallbackUserId: persistedStatus.userId ?? ""
+            )
+            isAuthenticated = true
+
+            if let configurationError {
+                if !(await restoreBoundOfflineSession(status: persistedStatus, message: "Офлайн-режим. \(configurationError)")) {
+                    message = configurationError
+                }
+                return
+            }
+
             let status = try await apiClient.sessionStatus()
             if status.isAuthenticated {
                 await activateAuthenticatedSession(status)
@@ -328,11 +364,10 @@ struct FinanceAppView: View {
         } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
             await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
         } catch {
-            if !(await restoreBoundOfflineSession(message: "Нет связи с сервером. Доступны сохранённые данные.")) {
+            if !(await restoreBoundOfflineSession(status: persistedStatus, message: "Нет связи с сервером. Доступны сохранённые данные.")) {
                 message = error.localizedDescription
             }
         }
-        isLoading = false
     }
 
     private func performLogin(email: String, password: String) async {
@@ -419,6 +454,8 @@ struct FinanceAppView: View {
     private func performLogout() async {
         isLoading = true
         message = "Выходим"
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
         let result = await apiClient.logout()
         let statusMessage = result.remoteSessionRevoked
             ? "Сессия завершена"
@@ -428,9 +465,9 @@ struct FinanceAppView: View {
     }
 
     private func wipeConfirmedIdentityState(message: String) async {
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
         await wipeProtectedStores()
-        SessionIdentityStore.shared.clear()
-        CSRFTokenStore.shared.clear()
         activeLocalScope = nil
         dashboard = nil
         selectedTab = 0
@@ -464,10 +501,12 @@ struct FinanceAppView: View {
 
     private func wipeForAccountSwitchIfNeeded(newSession: SessionStatus) async {
         guard let newBinding = SessionIdentityBinding(session: newSession) else { return }
-        let existingUserId = activeLocalScope?.viewerUserId ?? SessionIdentityStore.shared.load()?.userId
+        let existingUserId = activeLocalScope?.viewerUserId
         guard let existingUserId, existingUserId != newBinding.userId else {
             return
         }
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
         do {
             try await sessionDataWiper.wipeCurrentUser(scope: LocalStoreScope(viewerUserId: existingUserId))
         } catch {
@@ -478,10 +517,9 @@ struct FinanceAppView: View {
 
     private func wipeProtectedStores() async {
         do {
-            let scope = currentLocalScope ?? SessionIdentityStore.shared.load().map {
-                LocalStoreScope(viewerUserId: $0.userId)
+            if let scope = currentLocalScope {
+                try await sessionDataWiper.wipeCurrentUser(scope: scope)
             }
-            if let scope { try await sessionDataWiper.wipeCurrentUser(scope: scope) }
         } catch {
             // Best-effort local privacy cleanup; auth state still has to be cleared.
         }
@@ -493,13 +531,18 @@ struct FinanceAppView: View {
             await wipeConfirmedIdentityState(message: "Сервер не подтвердил пользователя.")
             return
         }
-        let previousUserId = activeLocalScope?.viewerUserId ?? SessionIdentityStore.shared.load()?.userId
+        let previousUserId = activeLocalScope?.viewerUserId
         await wipeForAccountSwitchIfNeeded(newSession: status)
         if let previousUserId, previousUserId != binding.userId {
             dashboard = nil
             syncOverview = .empty
         }
-        SessionIdentityStore.shared.save(binding)
+        do {
+            try await syncLeaseProvider.activate(session: status)
+        } catch {
+            await wipeConfirmedIdentityState(message: error.localizedDescription)
+            return
+        }
         activeLocalScope = LocalStoreScope.fromSession(status, fallbackUserId: binding.userId)
         isAuthenticated = true
         await loadDashboard()
@@ -507,23 +550,19 @@ struct FinanceAppView: View {
 
     @discardableResult
     private func restoreBoundOfflineSession(message: String) async -> Bool {
-        guard let binding = SessionIdentityStore.shared.load() else { return false }
-        guard OfflineSessionRestorePolicy.canRestore(storedExpiry: CSRFTokenStore.shared.sessionExpiry) else {
-            self.message = "Срок офлайн-доступа истёк. Подключитесь к серверу и войдите снова."
-            return false
-        }
-        let scope = LocalStoreScope(viewerUserId: binding.userId)
+        guard let status = await apiClient.persistedSessionStatus() else { return false }
+        return await restoreBoundOfflineSession(status: status, message: message)
+    }
+
+    @discardableResult
+    private func restoreBoundOfflineSession(status: SessionStatus, message: String) async -> Bool {
+        guard let binding = SessionIdentityBinding(session: status) else { return false }
+        let scope = LocalStoreScope.fromSession(status, fallbackUserId: binding.userId)
         do {
+            try await syncLeaseProvider.activate(session: status)
             let snapshot = try await syncService.localSnapshot(scope: scope)
-            let session = SessionStatus(
-                isAuthenticated: true,
-                displayName: binding.displayName,
-                householdId: nil,
-                userId: binding.userId,
-                sessionId: nil
-            )
             dashboard = FinanceDashboard(
-                session: session,
+                session: status,
                 accounts: snapshot.accounts.map(\.entity),
                 categories: snapshot.categories.map(\.entity),
                 transactions: snapshot.transactions.map(\.entity),
@@ -742,6 +781,50 @@ struct FinanceAppView: View {
         } catch {
             message = error.localizedDescription
             isLoading = false
+        }
+    }
+
+    private func updateTransactionOnlineOrQueue(
+        id: String,
+        request: TransactionUpdateRequest
+    ) async throws {
+        guard let current = dashboard?.transactions.first(where: { $0.id == id }) else {
+            throw LocalOptimisticError.missingCurrentEntity
+        }
+
+        do {
+            _ = try await apiClient.updateTransaction(transactionId: id, request)
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            guard let scope = currentLocalScope else { throw error }
+            let optimistic = Transaction(
+                id: current.id,
+                transactionType: request.transactionType ?? current.transactionType,
+                accountId: request.accountId ?? current.accountId,
+                counterpartyAccountId: request.counterpartyAccountId ?? current.counterpartyAccountId,
+                categoryId: request.categoryId ?? current.categoryId,
+                amount: request.amount ?? current.amount,
+                currency: request.currency ?? current.currency,
+                occurredAt: request.occurredAt ?? current.occurredAt,
+                transactionDate: request.transactionDate ?? current.transactionDate,
+                description: request.description ?? current.description,
+                sourceType: request.sourceType ?? current.sourceType,
+                transferScope: current.transferScope,
+                transferStatus: current.transferStatus,
+                createdAt: current.createdAt,
+                version: current.version
+            )
+            try await syncService.enqueueOptimisticMutation(
+                scope: scope,
+                entityType: .transactions,
+                entityId: id,
+                operation: .update,
+                baseVersion: current.version,
+                request: TransactionOfflineUpdateRequest(request),
+                optimisticEntity: optimistic,
+                ownershipContext: personalOwnershipContext
+            )
+            await refreshLocalSnapshotAndOverview()
+            message = "Изменения сохранены локально и ожидают синхронизации"
         }
     }
 
