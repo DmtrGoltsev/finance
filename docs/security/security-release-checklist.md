@@ -25,7 +25,7 @@
 - [ ] Logs, audit, telemetry, crash reports или debug output содержат суммы, остатки, описания операций, названия счетов/категорий, raw request/response bodies с финансовыми данными или токены.
 - [ ] Cookie-based PWA state-changing endpoints работают без CSRF protection или CORS допускает wildcard origin с credentials.
 - [ ] Logout, password reset, membership revoke/leave или suspected compromise не инвалидируют server-side session/refresh token/access cache.
-- [ ] Production/staging с реальными данными доступны без HTTPS.
+- [ ] Production/staging с реальными данными доступны без HTTPS. Отдельный P0 blocker: personal HTTP sideload попал в public/App Store/normal Release либо утратил границы [owner waiver](ios-personal-http-waiver-2026-08-22.md).
 - [ ] Production database или backups не имеют encryption at rest.
 - [ ] Restore не проходил успешно минимум один раз на отдельном окружении до релиза.
 - [ ] В MVP появились endpoints, поля, настройки или хранилища для imports, bank API, broker API, SMS/push credentials, SMS/push/notification interception, raw SMS/push/notification body или raw bank statements. Capture drafts допускают только user-initiated OCR из выбранного скриншота, structured pending drafts и отсутствие raw body server-side.
@@ -132,6 +132,7 @@
 - [ ] Wildcard CORS origin with credentials is disabled.
 - [ ] Production/staging with real data uses HTTPS only.
 - [ ] HSTS decision is recorded before public launch.
+- [ ] Для любого personal HTTP sideload проверен действующий owner waiver: scope только owner/family iPhone, target `FinanceAppPersonalHTTP`, bundle id `com.codex.FinanceApp.PersonalSideload`, exact URL `http://45.10.110.42/finance-api`, Apple Development signing и archive configuration `PersonalSideloadHTTP` (no App Store export), review date не просрочена. Waiver не применяется к public/App Store/normal Release.
 
 ### Контроль доступа и нейтральные ошибки
 

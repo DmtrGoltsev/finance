@@ -19,9 +19,6 @@ settings:
       FINANCE_API_BASE_URL: "http://127.0.0.1:8000/finance-api"
     Release:
       FINANCE_API_BASE_URL: "$(FINANCE_RELEASE_API_BASE_URL)"
-    PersonalSideloadHTTP:
-      FINANCE_API_BASE_URL: "http://45.10.110.42/finance-api"
-      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
 
 targets:
   FinanceApp:
@@ -31,6 +28,7 @@ targets:
       - path: FinanceApp
         excludes:
           - "**/.DS_Store"
+          - "Info-Debug.plist"
           - "Info-PersonalSideloadHTTP.plist"
     settings:
       base:
@@ -42,8 +40,11 @@ targets:
         GENERATE_INFOPLIST_FILE: false
         INFOPLIST_FILE: FinanceApp/Info.plist
       configs:
+        Debug:
+          INFOPLIST_FILE: FinanceApp/Info-Debug.plist
         PersonalSideloadHTTP:
-          INFOPLIST_FILE: FinanceApp/Info-PersonalSideloadHTTP.plist
+          FINANCE_API_BASE_URL: "$(FINANCE_RELEASE_API_BASE_URL)"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited)"
     info:
       path: FinanceApp/Info.plist
 
@@ -58,6 +59,50 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceAppTests
         GENERATE_INFOPLIST_FILE: true
+
+  FinanceAppPersonalHTTP:
+    type: application
+    platform: iOS
+    sources:
+      - path: FinanceApp
+        excludes:
+          - "**/.DS_Store"
+          - "Info.plist"
+          - "Info-Debug.plist"
+          - "Info-PersonalSideloadHTTP.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp.PersonalSideload
+        PRODUCT_NAME: Finance Personal HTTP
+        PRODUCT_MODULE_NAME: FinanceApp
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+        GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: FinanceApp/Info-PersonalSideloadHTTP.plist
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: Apple Development
+      configs:
+        PersonalSideloadHTTP:
+          FINANCE_API_BASE_URL: "http://45.10.110.42/finance-api"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
+    info:
+      path: FinanceApp/Info-PersonalSideloadHTTP.plist
+
+  FinanceAppPersonalHTTPTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FinanceAppTests
+    dependencies:
+      - target: FinanceAppPersonalHTTP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp.PersonalSideloadTests
+        GENERATE_INFOPLIST_FILE: true
+      configs:
+        PersonalSideloadHTTP:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
 
   FinanceAppUITests:
     type: bundle.ui-testing
@@ -92,16 +137,14 @@ schemes:
   FinanceAppPersonalHTTP:
     build:
       targets:
-        FinanceApp: all
+        FinanceAppPersonalHTTP: all
     run:
       config: PersonalSideloadHTTP
     test:
-      config: Debug
+      config: PersonalSideloadHTTP
       gatherCoverageData: true
       targets:
-        - name: FinanceAppTests
-          parallelizable: false
-        - name: FinanceAppUITests
+        - name: FinanceAppPersonalHTTPTests
           parallelizable: false
     archive:
       config: PersonalSideloadHTTP
