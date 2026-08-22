@@ -52,14 +52,14 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 ## Native iOS current parity (2026-08-22)
 
 - Integrated branch: `codex/ios-native-current-parity-20260822`.
-- Final approved source: `a5a332093587fc2467383686cca089877d03f90e`.
+- Current verified source: `cd69581375be2f40e42771fa6be79d129b32873c`.
 - Native target remains `apps/ios`; legacy `apps/web-pwa/ios` is not the
   release target.
-- GitHub Actions run `32563222674` PASS on the exact final SHA:
+- GitHub Actions run `32574558652` PASS on the exact current SHA:
   backend auth/migration 63 tests, Ruff PASS, one Alembic head
-  `20260822_0019`, XcodeGen PASS, Debug/Release PASS, XCTest 77/77 and
-  launch UI 1/1. The full local backend suite also passed: 313 passed,
-  6 skipped.
+  `20260822_0019`, XcodeGen PASS, Debug/Release/PersonalSideloadHTTP PASS,
+  XCTest 85/85 and launch UI 1/1. The last full local backend baseline passed:
+  313 passed, 6 skipped.
 - Final independent reviewer verdict: **APPROVE for code/CI**. This approval
   does not imply production deployment or physical-device release approval.
 - Integrated behavior includes secure persistent session without password
@@ -79,15 +79,15 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   from the sliding refresh/session lifetime (30 days); partial edit -> delete
   sync rebases analytics on the applied edit; and uncategorized expenses use
   the canonical `uncategorized` analytics key.
-- **NOT RUN/BLOCKED:** physical iPhone signing/install and production HTTPS/ATS
-  smoke. No signed IPA exists. The current plain HTTP production API is not an
-  acceptable native iOS Release endpoint, and broad ATS exceptions are
-  prohibited.
+- **NOT RUN/BLOCKED:** physical iPhone signing/install and device smoke. No
+  signed IPA exists. Ordinary Release remains HTTPS-only. Personal sideload has
+  a separate restricted HTTP configuration for the exact production IP/path;
+  broad ATS exceptions remain prohibited.
 - **PRODUCTION DEPLOY PREFLIGHT BLOCKED / NOT DEPLOYED:** the GitHub
-  `production` environment currently reports `protection_rules=[]`; local
-  release branch `prod/release-finance-ios-backend-20260822` was not pushed;
-  production DB remains at `20260618_0017`; public health returns HTTP 200;
-  trusted HTTPS/FQDN is absent. Backend migrations `20260822_0018` and
+  `production` environment has no Required reviewer under the owner waiver and
+  permits only `prod/release-*`. No release branch was pushed for this status
+  update; production DB remains last documented at `20260618_0017`; public
+  health returns HTTP 200. Backend migrations `20260822_0018` and
   `20260822_0019` therefore remain unapplied to production.
 - QA model: `docs/testing/ios-native-parity-qa-test-model.md`.
 - Sanitized evidence:

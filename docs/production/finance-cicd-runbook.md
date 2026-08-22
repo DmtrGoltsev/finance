@@ -19,10 +19,9 @@ Primary workflow:
 
 - `.github/workflows/finance-hexcore-prod-deploy.yml`
 - `push` by the repository owner to `prod/release-*` is the explicit production
-  authorization under the Finance solo-owner waiver. It runs CI, tests, builds, packaging,
-  artifact upload, production frontend/backend deploy, automatic pre-migration
-  DB backup evidence, Alembic upgrade to the single repository head, backend
-  restart, and health checks.
+  authorization under the Finance solo-owner waiver. It runs both CI/package
+  lanes, the common package gate, a read-only host preflight, backend deployment
+  and migrations, frontend deployment, health checks, and evidence collection.
 - `workflow_dispatch`: same CI/package lanes, plus optional approved production
   deploy actions controlled by explicit inputs, exact migration revisions,
   operator backup proof, restart confirmation, and the GitHub `production`
@@ -83,6 +82,33 @@ Backend lane:
   `alembic.ini`, `pyproject.toml`, and `db/migrations`
 - includes `backend.sha256` and `release-manifest.txt`
 
+The `production-package-gate` waits for input validation and both package lanes.
+No production job can run unless all three results are `success`. A CI-only
+`workflow_dispatch` with every deploy, migration, and restart input set to
+`false` runs through this gate without referencing the `production` environment,
+environment secrets, or the production host.
+
+## Automated host preflight
+
+Any production action first runs `host-preflight` after both package lanes. It
+uses the pinned SSH trust path and performs read-only checks before upload,
+backup, migration, symlink change, or service restart:
+
+- frontend and backend `current` paths are symlinks resolving under their
+  respective release directories;
+- `finance-backend.service` is active and its unit/process wiring consumes
+  `/opt/finance/current`;
+- `pg_dump` is available;
+- `/opt/finance/backups/postgres` exists, is writable, and has at least 1 GiB
+  free;
+- the live Alembic revision is readable and is an ancestor of the requested or
+  single repository target revision;
+- exact current frontend/backend release ids are captured.
+
+The job uploads only `finance-host-preflight-<release-id>` sanitized evidence.
+It never writes host credentials, database URLs, passwords, or financial data.
+Failure blocks every deployment job.
+
 ## Release ids
 
 If `release_id` is empty, the workflow generates:
@@ -130,6 +156,8 @@ Release branch push behavior:
 - writes backup evidence next to the dump without logging DB passwords
 - runs `alembic upgrade <derived-target-revision>`
 - restarts `finance-backend.service`
+- backend deployment completes before frontend deployment is allowed to start;
+  a backend deployment failure therefore leaves the frontend pointer unchanged
 
 Manual inputs:
 
@@ -138,6 +166,10 @@ Manual inputs:
 - `restart_backend=true` only when the operator intentionally wants a service
   restart
 - `confirm_backend_restart=finance-backend.service` when restart is requested
+
+For a release-branch push, migrations and backend restart are automatic after
+both package lanes and host preflight succeed. The `workflow_dispatch` values
+remain opt-in and require the exact confirmations above.
 
 Required GitHub environment:
 
@@ -203,15 +235,20 @@ Frontend rollback inputs:
 
 - `component=frontend` or `component=both`
 - `frontend_release_id=<existing release id>`
+- `current_release_confirmation=frontend=<current-release-id>`
 - `confirm_rollback=finance-production-rollback`
+- `db_rollback_approved=false`
 
 Backend rollback inputs:
 
 - `component=backend` or `component=both`
 - `backend_release_id=<existing release id>`
+- `current_release_confirmation=backend=<current-release-id>`; for
+  `component=both`, include both comma-separated confirmations
 - `restart_backend=true` when the backend process should be restarted
 - `confirm_backend_restart=finance-backend.service` when restart is requested
 - `confirm_rollback=finance-production-rollback`
+- `db_rollback_approved=false`
 
 Rollback flips only symlinks to existing release directories and then runs the
 same local health checks. Database rollback is intentionally not automated.
@@ -219,6 +256,10 @@ same local health checks. Database rollback is intentionally not automated.
 ## Definition of done
 
 - CI lanes pass.
+- The common package gate proves both package jobs succeeded before any
+  production host access.
+- Automated host preflight succeeds and records current releases, service
+  wiring, backup readiness, free space, and migration lineage.
 - Frontend and backend artifacts exist with checksums and manifests.
 - Pinned SSH known hosts are configured through `HEXCORE_PROD_SSH_KNOWN_HOSTS`.
 - Production deploy jobs use the `production` environment, which has no
@@ -249,6 +290,7 @@ For a production deploy record, retain:
 - manual backup proof or automatic backup evidence, if migrations were run
 - post-deploy health check result
 - rollback candidate release ids
+- sanitized host-preflight artifact and its current release ids
 
 Do not copy secret values into evidence.
 
