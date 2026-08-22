@@ -153,6 +153,14 @@ jobs:
             2>&1 | tee ci-artifacts/personal-sideload-http-build.log
           PERSONAL_SIDELOAD_STATUS=${PIPESTATUS[0]}
 
+          xcodebuild -showBuildSettings \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceAppPersonalHTTP \
+            -configuration PersonalSideloadHTTP \
+            -sdk iphoneos \
+            > ci-artifacts/personal-sideload-http-settings.txt
+          PERSONAL_SETTINGS_STATUS=$?
+
           xcrun simctl list devices available -j > ci-artifacts/simulators.json
           SIMULATOR_UDID=$(ruby -rjson -e '
             data = JSON.parse(File.read(ARGV[0]))
@@ -178,31 +186,72 @@ jobs:
               FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
               2>&1 | tee ci-artifacts/xctest.log
             TEST_STATUS=${PIPESTATUS[0]}
+
+            xcodebuild test \
+              -project FinanceApp.xcodeproj \
+              -scheme FinanceAppPersonalHTTP \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -configuration PersonalSideloadHTTP \
+              -derivedDataPath "$RUNNER_TEMP/FinanceApp-PersonalSideloadHTTP-Tests" \
+              -resultBundlePath ci-artifacts/FinanceAppPersonalHTTPTests.xcresult \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              2>&1 | tee ci-artifacts/personal-sideload-http-xctest.log
+            PERSONAL_TEST_STATUS=${PIPESTATUS[0]}
           else
             TEST_STATUS=$SIMULATOR_STATUS
+            PERSONAL_TEST_STATUS=$SIMULATOR_STATUS
             echo "No available iPhone simulator" | tee ci-artifacts/xctest.log
+            echo "No available iPhone simulator" | tee ci-artifacts/personal-sideload-http-xctest.log
           fi
 
-          printf 'debug=%s\nrelease=%s\npersonal_sideload_http=%s\ntest=%s\n' \
-            "$DEBUG_STATUS" "$RELEASE_STATUS" "$PERSONAL_SIDELOAD_STATUS" "$TEST_STATUS" \
+          printf 'debug=%s\nrelease=%s\npersonal_sideload_http=%s\npersonal_settings=%s\ntest=%s\npersonal_sideload_test=%s\n' \
+            "$DEBUG_STATUS" "$RELEASE_STATUS" "$PERSONAL_SIDELOAD_STATUS" "$PERSONAL_SETTINGS_STATUS" "$TEST_STATUS" "$PERSONAL_TEST_STATUS" \
             | tee ci-artifacts/status.txt
 
-          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$PERSONAL_SIDELOAD_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
+          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$PERSONAL_SIDELOAD_STATUS" -ne 0 ] || [ "$PERSONAL_SETTINGS_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$PERSONAL_TEST_STATUS" -ne 0 ]; then
             exit 1
           fi
 
-      - name: Verify PersonalSideloadHTTP built app policy
+      - name: Verify isolated built plist, signing, and archive policy
         working-directory: apps/ios
         env:
-          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceApp.app/Info.plist
+          DEBUG_APP_PLIST: ${{ runner.temp }}/FinanceApp-Debug/Build/Products/Debug-iphoneos/FinanceApp.app/Info.plist
+          RELEASE_APP_PLIST: ${{ runner.temp }}/FinanceApp-Release/Build/Products/Release-iphoneos/FinanceApp.app/Info.plist
+          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceAppPersonalHTTP.app/Info.plist
         run: |
+          set -o pipefail
+          cp "$DEBUG_APP_PLIST" ci-artifacts/FinanceApp-Debug.plist
+          cp "$RELEASE_APP_PLIST" ci-artifacts/FinanceApp-Release.plist
+          cp "$PERSONAL_APP_PLIST" ci-artifacts/FinanceAppPersonalHTTP.plist
+
           python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
           import os
           import plistlib
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-          path = os.environ["PERSONAL_APP_PLIST"]
-          with open(path, "rb") as stream:
-              plist = plistlib.load(stream)
+          def load(name):
+              with open(os.environ[name], "rb") as stream:
+                  return plistlib.load(stream)
+
+          debug = load("DEBUG_APP_PLIST")
+          release = load("RELEASE_APP_PLIST")
+          personal = load("PERSONAL_APP_PLIST")
+
+          personal_ip = "45.10.110.42"
+          personal_url = "http://45.10.110.42/finance-api"
+          for name, plist in (("Debug", debug), ("Release", release)):
+              assert personal_ip not in repr(plist), f"{name} contains the personal IP"
+              assert personal_url not in repr(plist), f"{name} contains the personal HTTP URL"
+              assert plist.get("CFBundleIdentifier") == "com.codex.FinanceApp", (name, plist.get("CFBundleIdentifier"))
+              assert plist.get("CFBundleDisplayName") == "Finance", (name, plist.get("CFBundleDisplayName"))
+
+          assert debug.get("FINANCE_API_BASE_URL") == "http://127.0.0.1:8000/finance-api"
+          assert release.get("FINANCE_API_BASE_URL") == "https://finance.invalid/finance-api"
+          assert release.get("NSAppTransportSecurity") == {
+              "NSAllowsArbitraryLoads": False,
+              "NSAllowsLocalNetworking": False,
+          }
 
           expected_ats = {
               "NSAllowsArbitraryLoads": False,
@@ -214,10 +263,34 @@ jobs:
                   }
               },
           }
-          actual_ats = plist.get("NSAppTransportSecurity")
-          assert plist.get("FINANCE_API_BASE_URL") == "http://45.10.110.42/finance-api", plist.get("FINANCE_API_BASE_URL")
+          actual_ats = personal.get("NSAppTransportSecurity")
+          assert personal.get("CFBundleIdentifier") == "com.codex.FinanceApp.PersonalSideload"
+          assert personal.get("CFBundleIdentifier") != release.get("CFBundleIdentifier")
+          assert personal.get("CFBundleDisplayName") == "Finance Personal HTTP"
+          assert personal.get("CFBundleName") == "FinanceAppPersonalHTTP"
+          assert personal.get("FINANCE_API_BASE_URL") == personal_url, personal.get("FINANCE_API_BASE_URL")
           assert actual_ats == expected_ats, actual_ats
+          settings = Path("ci-artifacts/personal-sideload-http-settings.txt").read_text()
+          assert "PRODUCT_BUNDLE_IDENTIFIER = com.codex.FinanceApp.PersonalSideload" in settings
+          assert "CODE_SIGN_STYLE = Manual" in settings
+          assert "CODE_SIGN_IDENTITY = Apple Development" in settings
+          scheme = ET.parse("FinanceApp.xcodeproj/xcshareddata/xcschemes/FinanceAppPersonalHTTP.xcscheme")
+          archive_entries = [
+              entry for entry in scheme.findall(".//BuildActionEntry")
+              if entry.find("BuildableReference").attrib.get("BlueprintName") == "FinanceAppPersonalHTTP"
+          ]
+          assert len(archive_entries) == 1, archive_entries
+          assert archive_entries[0].attrib.get("buildForArchiving") == "NO", archive_entries[0].attrib
+          project = Path("project.yml").read_text()
+          personal_scheme = project[project.rfind("\n  FinanceAppPersonalHTTP:\n"):]
+          assert "archive:" not in personal_scheme
+          assert "FinanceAppPersonalHTTP: [run, test, profile, analyze]" in personal_scheme
+          assert "exportArchive" not in project
           print("FINANCE_API_BASE_URL=http://45.10.110.42/finance-api")
+          print("Debug and Release plists: no personal IP, personal HTTP URL, or personal ATS")
+          print("Personal bundle=com.codex.FinanceApp.PersonalSideload")
+          print("Personal signing=Manual Apple Development")
+          print("Personal app buildForArchiving=NO; no exportArchive; signing=Manual Apple Development")
           print("NSAllowsArbitraryLoads=false")
           print("NSAllowsLocalNetworking=false")
           print("NSExceptionDomains=[45.10.110.42]")
@@ -241,6 +314,7 @@ jobs:
             apps/ios/ci-artifacts/*.log
             apps/ios/ci-artifacts/*.txt
             apps/ios/ci-artifacts/*.json
+            apps/ios/ci-artifacts/*.plist
             apps/ios/ci-artifacts/*.xcresult
           if-no-files-found: warn
           retention-days: 14

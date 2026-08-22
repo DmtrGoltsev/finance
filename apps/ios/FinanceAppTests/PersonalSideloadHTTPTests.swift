@@ -3,8 +3,14 @@ import XCTest
 @testable import FinanceApp
 
 final class PersonalSideloadHTTPTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        URLProtocol.registerClass(PersonalHTTPURLProtocol.self)
+    }
+
     override func tearDown() {
         PersonalHTTPURLProtocol.reset()
+        URLProtocol.unregisterClass(PersonalHTTPURLProtocol.self)
         super.tearDown()
     }
 
@@ -88,6 +94,32 @@ final class PersonalSideloadHTTPTests: XCTestCase {
         XCTAssertNil(redirectedRequest)
     }
 
+    func testURLSessionIntegrationBlocks3xxRedirectBeforeDestinationRequest() async throws {
+        let sourceURL = try XCTUnwrap(URL(string: "http://45.10.110.42/finance-api/api/v1/sessions"))
+        let redirectURL = try XCTUnwrap(URL(string: "http://example.com/finance-api/api/v1/sessions"))
+        PersonalHTTPURLProtocol.redirectURL = redirectURL
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PersonalHTTPURLProtocol.self]
+        configuration.timeoutIntervalForRequest = 2
+        let redirectBlocked = expectation(description: "URLSession sent the 3xx to the personal redirect blocker")
+        let delegate = RedirectProbe(
+            blocker: try XCTUnwrap(
+                APITransportPolicy.personalSideloadHTTP.makeTaskDelegate() as? PersonalHTTPRedirectBlocker
+            ),
+            redirectBlocked: redirectBlocked
+        )
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        let task = session.dataTask(with: sourceURL)
+        task.resume()
+
+        await fulfillment(of: [redirectBlocked], timeout: 2)
+        task.cancel()
+        session.invalidateAndCancel()
+
+        XCTAssertEqual(PersonalHTTPURLProtocol.requestURLs, [sourceURL.absoluteString])
+    }
+
     func testReleaseRemainsHTTPSOnlyAndPersonalBuildRequiresExactURL() throws {
         let releaseHTTPS = AppEnvironment.validated(
             url: try XCTUnwrap(URL(string: "https://finance.example/finance-api")),
@@ -114,6 +146,18 @@ final class PersonalSideloadHTTPTests: XCTestCase {
             networkMode: .personalSideloadHTTP
         )
         XCTAssertFalse(personalOverride.isValid)
+    }
+
+    func testTargetNetworkModeUsesPersonalCompileConfigurationWhenBuiltForSideload() {
+        #if PERSONAL_SIDELOAD_HTTP
+        guard case .personalSideloadHTTP = AppNetworkMode.current else {
+            return XCTFail("Personal target must compile with PERSONAL_SIDELOAD_HTTP")
+        }
+        #else
+        guard case .debug = AppNetworkMode.current else {
+            return XCTFail("The standard Debug test target must not inherit the personal HTTP mode")
+        }
+        #endif
     }
 
     func testLiveClientRejectsDisallowedRequestBeforeTransport() async throws {
@@ -169,13 +213,46 @@ final class PersonalSideloadHTTPTests: XCTestCase {
     }
 }
 
+private final class RedirectProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let blocker: PersonalHTTPRedirectBlocker
+    private let redirectBlocked: XCTestExpectation
+
+    init(blocker: PersonalHTTPRedirectBlocker, redirectBlocked: XCTestExpectation) {
+        self.blocker = blocker
+        self.redirectBlocked = redirectBlocked
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        blocker.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: request
+        ) { redirectedRequest in
+            XCTAssertNil(redirectedRequest)
+            self.redirectBlocked.fulfill()
+            completionHandler(redirectedRequest)
+        }
+    }
+}
+
 private final class PersonalHTTPURLProtocol: URLProtocol {
     static var requestCount = 0
     static var responseURL: URL?
+    static var redirectURL: URL?
+    static var requestURLs: [String] = []
 
     static func reset() {
         requestCount = 0
         responseURL = nil
+        redirectURL = nil
+        requestURLs = []
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -183,6 +260,21 @@ private final class PersonalHTTPURLProtocol: URLProtocol {
 
     override func startLoading() {
         Self.requestCount += 1
+        Self.requestURLs.append(request.url?.absoluteString ?? "")
+        if let redirectURL = Self.redirectURL {
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 302,
+                httpVersion: nil,
+                headerFields: ["Location": redirectURL.absoluteString]
+            )!
+            client?.urlProtocol(
+                self,
+                wasRedirectedTo: URLRequest(url: redirectURL),
+                redirectResponse: response
+            )
+            return
+        }
         let url = Self.responseURL ?? request.url!
         let response = HTTPURLResponse(
             url: url,
