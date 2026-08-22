@@ -49,6 +49,35 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - Sanitized evidence:
   `MVP_EVIDENCE/android-production-release-20260822/SUMMARY_SANITIZED.md`.
 
+## Native iOS current parity (2026-08-22)
+
+- Integrated branch: `codex/ios-native-current-parity-20260822`.
+- Integrated source: `33df6710a7ee3fb6386634563a0e8c5a33b80d20`.
+- Native target remains `apps/ios`; legacy `apps/web-pwa/ios` is not the
+  release target.
+- GitHub Actions run `32556492248` PASS on the exact integrated SHA:
+  backend auth/migration 29 tests, Ruff PASS, one Alembic head
+  `20260822_0018`, XcodeGen PASS, Debug/Release PASS, XCTest 69/69 and
+  launch UI 1/1.
+- Integrated behavior includes secure persistent session without password
+  storage, single-flight refresh, safe `403`, offline logout, account-isolated
+  SwiftData/sync, JSON migration/recovery, transactional/stale-response guards,
+  searchable modal category picker, newest-first ordering, transaction editing,
+  selected-month pending investments, personal-only behavior, online-only OCR,
+  payment-account filtering and compact month switching.
+- Worker evidence: secure session run `32554005096`, SwiftData/sync run
+  `32554343934`, UX parity run `32552813248`. Integrated status is based on
+  run `32556492248`, not on worker runs alone.
+- **NOT RUN/BLOCKED:** physical iPhone signing/install and production HTTPS/ATS
+  smoke. No signed IPA exists. The current plain HTTP production API is not an
+  acceptable native iOS Release endpoint, and broad ATS exceptions are
+  prohibited.
+- **NOT DEPLOYED:** backend `ios_bearer` migration `20260822_0018` has CI
+  proof but was not applied to production in this wave.
+- QA model: `docs/testing/ios-native-parity-qa-test-model.md`.
+- Sanitized evidence:
+  `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md`.
+
 ## Production
 
 - Backend commit: `26b487d61b7d2d6de704f0a632bcb08ff7f240f7` / short `26b487d` (deployed 2026-06-12).

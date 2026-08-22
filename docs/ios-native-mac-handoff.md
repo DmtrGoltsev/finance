@@ -3,11 +3,11 @@
 ## Source of truth
 
 - Repository: `DmtrGoltsev/finance`
-- Branch: `codex/ios-native-personal-parity-20260820`
-- Verified commit: `96aa58226ad8f80834ea333192ebace7885d69c2`
+- Branch: `codex/ios-native-current-parity-20260822`
+- Verified commit: `33df6710a7ee3fb6386634563a0e8c5a33b80d20`
 - Native target: `apps/ios`
 - Minimum deployment target: iOS 17.0
-- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32523201106`
+- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32556492248`
 
 `apps/web-pwa/ios` is the legacy Capacitor wrapper. It is not the target native
 application and must not be used for the native iPhone handoff.
@@ -31,7 +31,7 @@ brew install xcodegen
 ```bash
 git clone git@github.com:DmtrGoltsev/finance.git
 cd finance
-git checkout codex/ios-native-personal-parity-20260820
+git checkout codex/ios-native-current-parity-20260822
 git pull --ff-only
 git rev-parse HEAD
 cd apps/ios
@@ -40,7 +40,7 @@ open FinanceApp.xcodeproj
 ```
 
 The expected `git rev-parse HEAD` for this handoff is
-`96aa58226ad8f80834ea333192ebace7885d69c2`.
+`33df6710a7ee3fb6386634563a0e8c5a33b80d20`.
 
 ## Production API requirement
 
@@ -102,7 +102,9 @@ xcodebuild build \
 ```
 
 Run the `FinanceApp` scheme tests on an available iPhone simulator. The verified
-CI baseline is 47 XCTest plus 1 launch UI test with zero failures.
+integrated CI baseline is 69 XCTest plus 1 launch UI test with zero failures.
+The same run also passed the backend `ios_bearer`/migration gate with 29 tests,
+Ruff and one Alembic head `20260822_0018`.
 
 ## Install on a physical iPhone without App Store
 
@@ -122,22 +124,28 @@ Use the paid developer team when stable long-lived installation is required.
   in Obsidian; retrieve its password only from the owner-managed secret store.
 - Confirm one-time login persists through force quit and relaunch; the password
   itself is not stored by the app.
-- Confirm logout wipes session, CSRF state, local snapshot and pending queue.
+- Confirm logout invalidates the bearer session and makes data from the previous
+  account inaccessible. Account-scoped local recovery data must never be visible
+  to another user.
 - Confirm categories show `Категории расходов` and expose no finance mode selector.
 - Exercise manual income, expense, transfer, date selection, category search,
   payment-account filtering, assets, investment transfer analytics and month switch.
 - Exercise offline create/edit/delete, relaunch, manual sync and server convergence.
-- Confirm 401 clears identity/session; 403 preserves identity and pending work.
+- Confirm concurrent 401 responses perform one refresh and retry each request at
+  most once; a second 401 clears the current session; 403 preserves identity and
+  pending work.
 - Confirm screenshot OCR is online-only and no image/raw OCR payload enters local
   storage, pending sync, logs or evidence.
 
 ## Known limitations
 
 - Windows cannot perform Apple signing or physical-device installation.
-- The successful CI build used a non-production placeholder HTTPS URL only to
+- The successful integrated CI build used a non-production placeholder HTTPS URL only to
   prove Release compilation. It does not prove production connectivity.
 - Actual production login remains blocked until the trusted HTTPS endpoint is
   chosen and configured.
+- Backend migration `20260822_0018` is CI-tested but was not deployed to
+  production by this iOS QA/documentation wave.
 - Backend/PWA compatibility types may still contain legacy household vocabulary;
   native product UI and reachable API behavior are personal-only.
 
