@@ -4,7 +4,20 @@ Run date: 2026-08-22 (Europe/Moscow)
 
 Branch: `codex/ios-native-current-parity-20260822`
 
-Current verified code commit: `cd69581375be2f40e42771fa6be79d129b32873c`
+Integrated deliverable: fetched remote head of
+`origin/codex/ios-native-current-parity-20260822`.
+
+Required ancestors:
+
+- governance: `4e1ef36724f804d648f2ea385da5259688915325`;
+- production pipeline: `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c`;
+- iOS personal transport security: `744a422c5d012149f6c0051dcaf291623fd9a19c`.
+
+Resolve the exact deliverable SHA with
+`git fetch origin && git rev-parse origin/codex/ios-native-current-parity-20260822`
+and require all three `git merge-base --is-ancestor <sha> <head>` checks. This
+identity rule deliberately avoids recording a false self-referential SHA in the
+same commit that contains this report.
 
 Result: **CODE/CI APPROVE with external production and device blockers**
 
@@ -14,26 +27,36 @@ financial payloads, raw OCR text or screenshots.
 
 ## Final CI
 
-GitHub Actions:
-`https://github.com/DmtrGoltsev/finance/actions/runs/32574558652`
+Worker GitHub Actions:
+
+- pipeline: `https://github.com/DmtrGoltsev/finance/actions/runs/32576848852`;
+- iOS security: `https://github.com/DmtrGoltsev/finance/actions/runs/32601960992`;
+- repeated iOS security proof:
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32602392746`.
+
+Final acceptance additionally requires a successful `iOS Build` run and a
+CI-only `Finance HexCore Production CI/CD` dispatch on the exact fetched target
+head. Their run IDs and artifact digests are recorded in the external delivery
+report; adding them here would create a new untested commit.
 
 | Gate | Result |
 | --- | --- |
-| Exact branch/SHA | PASS: `codex/ios-native-current-parity-20260822` / `cd69581...` |
-| Full local backend suite | PASS: 313 passed, 6 skipped |
+| Exact branch/ancestry | PASS when fetched target head contains all required ancestors above |
+| Pipeline worker CI-only | PASS: both packages and common gate; host/deploy skipped |
 | CI backend auth/migration tests | PASS: 63 |
 | Backend Ruff | PASS |
 | Alembic heads | PASS: one head, `20260822_0019` |
 | XcodeGen | PASS |
 | iOS Debug build | PASS |
 | iOS Release build | PASS; ordinary Release remains HTTPS-only |
-| PersonalSideloadHTTP build and plist policy | PASS |
-| XCTest | PASS: 85/85 |
+| PersonalSideloadHTTP build and plist policy | PASS; separate identity/manual development signing/no archive/export |
+| XCTest | PASS: normal suite plus 10/10 dedicated personal transport tests |
 | Launch UI test | PASS: 1/1 |
-| Final independent review | APPROVE |
+| Physical signing/install | NOT RUN |
 
-CI artifact: `ios-build-test-evidence-32574558652`, digest
-`sha256:3ce42ad490ac6559f8e4bcc15a6d381704f9beb48e4d2d8ecc24d303857763c4`.
+Latest repeated security worker artifact: `ios-build-test-evidence-32602392746`,
+id `9483356517`, digest
+`sha256:088b7f69e2702cecb729e7e4931356943d87c315d37ec88f1366f43fbacb0181`.
 The artifact is retained by GitHub Actions and was not copied into the repository.
 
 ## Closed review findings
@@ -47,7 +70,10 @@ refresh/session lifetime, rebased partial edit -> delete sync analytics on the
 applied edit, and fixed uncategorized expense edit/delete analytics using the
 canonical `uncategorized` key.
 
-No P0/P1 code finding remains open in the final reviewed scope.
+The personal target is isolated under bundle id
+`com.codex.FinanceApp.PersonalSideload`, manual Apple Development signing and a
+no-archive/no-export gate. The owner HTTP waiver is explicit, expires unless
+reviewed by 2026-11-22, and does not reduce the accepted plaintext risk.
 
 ## Covered automated behavior
 
@@ -70,6 +96,11 @@ Result: **BLOCKED / NOT DEPLOYED**.
 
 - GitHub environment `production`: no Required reviewer under the solo-owner
   waiver; custom deployment branch policy permits only `prod/release-*`.
+- The integrated workflow requires frontend package plus backend package, then
+  a common gate, then a read-only host preflight before backend and frontend
+  deployment. Backend precedes frontend.
+- A CI-only dispatch with all production actions false does not request the
+  production environment, host access or deployment.
 - No release branch was pushed for this evidence update.
 - Production database revision: last documented as `20260618_0017`; no fresh
   host preflight was claimed by this evidence update.

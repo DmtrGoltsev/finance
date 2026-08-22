@@ -10,6 +10,14 @@ Implementation SHA: `b043db83ebe7d04e020e42960ff7199a187ff7b8`
 
 Result: **CI-ONLY PASS / PRODUCTION UNCHANGED**
 
+Integrated target branch: `codex/ios-native-current-parity-20260822`. Its exact
+deliverable is the fetched remote branch head and must contain implementation
+ancestor `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c` plus iOS security ancestor
+`744a422c5d012149f6c0051dcaf291623fd9a19c`. Verify with `git fetch origin`,
+`git rev-parse origin/codex/ios-native-current-parity-20260822`, and
+`git merge-base --is-ancestor` for each required SHA. The exact target-head
+CI-only run is recorded externally to avoid a self-referential evidence commit.
+
 This evidence is sanitized. It contains no SSH host, username, host key,
 private key, database URL, password, token, cookie, or financial payload.
 

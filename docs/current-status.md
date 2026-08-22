@@ -52,16 +52,29 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 ## Native iOS current parity (2026-08-22)
 
 - Integrated branch: `codex/ios-native-current-parity-20260822`.
-- Current verified source: `cd69581375be2f40e42771fa6be79d129b32873c`.
+- Deliverable identity is the fetched remote branch head, not a SHA written into
+  the same commit as this status file. Verify it with
+  `git fetch origin && git rev-parse origin/codex/ios-native-current-parity-20260822`.
+  The fetched head must contain all three required ancestors:
+  `4e1ef36724f804d648f2ea385da5259688915325` (solo-owner governance),
+  `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c` (production pipeline gates), and
+  `744a422c5d012149f6c0051dcaf291623fd9a19c` (personal HTTP isolation).
 - Native target remains `apps/ios`; legacy `apps/web-pwa/ios` is not the
   release target.
-- GitHub Actions run `32574558652` PASS on the exact current SHA:
-  backend auth/migration 63 tests, Ruff PASS, one Alembic head
-  `20260822_0019`, XcodeGen PASS, Debug/Release/PersonalSideloadHTTP PASS,
-  XCTest 85/85 and launch UI 1/1. The last full local backend baseline passed:
-  313 passed, 6 skipped.
-- Final independent reviewer verdict: **APPROVE for code/CI**. This approval
-  does not imply production deployment or physical-device release approval.
+- Integrated production workflow ancestry is proven by worker run
+  `32576848852`: frontend and backend package jobs plus their common gate PASS;
+  host preflight and both deploy jobs SKIPPED; no GitHub deployment was created.
+- Integrated iOS security ancestry is proven by runs `32601960992` and
+  `32602392746` on exact SHA `744a422...`: backend auth/migration gates,
+  XcodeGen, Debug, ordinary Release, PersonalSideloadHTTP, normal XCTest/UI and
+  the dedicated personal transport tests all PASS. The built-plist check is
+  fail-closed and verifies target identity, ATS, manual Apple Development
+  signing settings and the no-archive/no-export policy.
+- Acceptance of the current fetched integration head additionally requires a
+  successful `iOS Build` run and a CI-only production workflow dispatch on that
+  exact head. Run IDs and artifact digests belong in the external delivery
+  report because adding them here would create a new, untested self-referential
+  commit.
 - Integrated behavior includes secure persistent session without password
   storage, single-flight refresh, safe `403`, offline logout, account-isolated
   SwiftData/sync, JSON migration/recovery, transactional/stale-response guards,
@@ -80,15 +93,19 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   sync rebases analytics on the applied edit; and uncategorized expenses use
   the canonical `uncategorized` analytics key.
 - **NOT RUN/BLOCKED:** physical iPhone signing/install and device smoke. No
-  signed IPA exists. Ordinary Release remains HTTPS-only. Personal sideload has
-  a separate restricted HTTP configuration for the exact production IP/path;
-  broad ATS exceptions remain prohibited.
-- **PRODUCTION DEPLOY PREFLIGHT BLOCKED / NOT DEPLOYED:** the GitHub
-  `production` environment has no Required reviewer under the owner waiver and
-  permits only `prod/release-*`. No release branch was pushed for this status
-  update; production DB remains last documented at `20260618_0017`; public
-  health returns HTTP 200. Backend migrations `20260822_0018` and
-  `20260822_0019` therefore remain unapplied to production.
+  signed IPA exists. Ordinary Release remains HTTPS-only. The separate
+  `FinanceAppPersonalHTTP` target uses bundle id
+  `com.codex.FinanceApp.PersonalSideload`, manual Apple Development signing,
+  cannot be archived/exported, and is restricted to the exact waived HTTP
+  endpoint. The owner waiver must be reviewed by 2026-11-22; broad ATS
+  exceptions remain prohibited.
+- **PRODUCTION NOT DEPLOYED:** the production workflow now enforces both package
+  lanes -> common gate -> host preflight -> backend -> frontend. A CI-only run
+  requests no production environment or host access. No `prod/release-*` branch
+  was created or pushed for this integration; no host preflight, backup,
+  migration, restart or deployment is claimed. Production DB remains last
+  documented at `20260618_0017`; migrations `20260822_0018` and
+  `20260822_0019` remain unapplied until a separately authorized release.
 - QA model: `docs/testing/ios-native-parity-qa-test-model.md`.
 - Sanitized evidence:
   `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md`.

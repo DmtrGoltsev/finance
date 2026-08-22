@@ -4,10 +4,14 @@
 
 - Repository: `DmtrGoltsev/finance`
 - Branch: `codex/ios-native-current-parity-20260822`
-- Verified commit: `a5a332093587fc2467383686cca089877d03f90e`
+- Required governance ancestor: `4e1ef36724f804d648f2ea385da5259688915325`
+- Required pipeline ancestor: `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c`
+- Required iOS security ancestor: `744a422c5d012149f6c0051dcaf291623fd9a19c`
 - Native target: `apps/ios`
 - Minimum deployment target: iOS 17.0
-- CI reference: `https://github.com/DmtrGoltsev/finance/actions/runs/32563222674`
+- Security worker CI references:
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32601960992` and
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32602392746`
 
 `apps/web-pwa/ios` is the legacy Capacitor wrapper. It is not the target native
 application and must not be used for the native iPhone handoff.
@@ -31,16 +35,23 @@ brew install xcodegen
 ```bash
 git clone git@github.com:DmtrGoltsev/finance.git
 cd finance
-git checkout codex/ios-native-current-parity-20260822
-git pull --ff-only
-git rev-parse HEAD
+git fetch --prune origin
+git checkout --track origin/codex/ios-native-current-parity-20260822
+EXPECTED_SHA="$(git rev-parse origin/codex/ios-native-current-parity-20260822)"
+test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+git merge-base --is-ancestor 4e1ef36724f804d648f2ea385da5259688915325 HEAD
+git merge-base --is-ancestor 6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c HEAD
+git merge-base --is-ancestor 744a422c5d012149f6c0051dcaf291623fd9a19c HEAD
 cd apps/ios
 xcodegen generate
 open FinanceApp.xcodeproj
 ```
 
-The expected `git rev-parse HEAD` for this handoff is
-`a5a332093587fc2467383686cca089877d03f90e`.
+The exact expected SHA is the fetched remote branch head stored in
+`EXPECTED_SHA`. This avoids a false immutable SHA in a self-referential
+documentation commit. Stop if HEAD changes after verification or any required
+ancestor check fails. Use the successful `iOS Build` run whose `headSha` equals
+that exact `EXPECTED_SHA`; worker runs alone are not final integration proof.
 
 ## Production API requirement
 
@@ -91,7 +102,8 @@ distribution channel or HTTPS availability changes.
 
 ## Signing and bundle identifier
 
-In Xcode, select the `FinanceApp` target, then `Signing & Capabilities`:
+For the normal HTTPS release, select the `FinanceApp` target, then
+`Signing & Capabilities`:
 
 1. Enable automatic signing.
 2. Choose the owner-approved Team.
@@ -102,6 +114,13 @@ In Xcode, select the `FinanceApp` target, then `Signing & Capabilities`:
 
 Do not commit Apple account data, signing certificates, provisioning profiles,
 team identifiers or local API secrets.
+
+For the owner-waived HTTP install, select `FinanceAppPersonalHTTP`. Preserve its
+separate bundle id `com.codex.FinanceApp.PersonalSideload`, product/display name,
+manual `Apple Development` signing and no-archive policy. Configure only the
+local development Team/profile required by Xcode. Do not change it back to the
+normal app identity and do not create an archive, IPA export, TestFlight or App
+Store distribution path.
 
 ## Build and test
 
@@ -125,20 +144,31 @@ xcodebuild build \
   FINANCE_RELEASE_API_BASE_URL='https://<trusted-host>/finance-api'
 ```
 
-Run the `FinanceApp` scheme tests on an available iPhone simulator. The verified
-final CI baseline is 77 XCTest plus 1 launch UI test with zero failures. The
-same run also passed the backend `ios_bearer`/migration gate with 63 tests,
-Ruff and one Alembic head `20260822_0019`. The full local backend suite passed
-with 313 tests and 6 skips. Final independent code review verdict is APPROVE.
+Run both the `FinanceApp` and `FinanceAppPersonalHTTP` scheme tests on an
+available iPhone simulator. The security worker CI passed the normal XCTest/UI
+suite and 10 dedicated personal transport tests, including a real `URLSession`
+3xx redirect rejection. It also passed backend `ios_bearer`/migration gates,
+Ruff, one Alembic head `20260822_0019`, built plist isolation, separate bundle
+identity, manual development signing settings and no-archive/no-export checks.
+The same gates must pass on the exact fetched integration head before signing.
 
 ## Install on a physical iPhone without App Store
 
 1. In Xcode, select the connected iPhone as the run destination.
-2. Select the owner-approved Team and unique bundle ID.
-3. Set the trusted HTTPS Release API URL.
-4. Use `Product -> Clean Build Folder`, then `Product -> Run`.
-5. If iOS asks, trust the developer identity under device management settings.
-6. Complete the physical-device QA checklist before treating the build as ready.
+2. For the approved temporary HTTP path, select scheme
+   `FinanceAppPersonalHTTP`; do not select the ordinary `FinanceApp` Release.
+3. Configure only the owner-approved local development Team/profile while
+   preserving the separate personal bundle id and manual Apple Development
+   signing.
+4. Confirm the waiver is still valid and the built plist contains only
+   `http://45.10.110.42/finance-api` plus the exact IP ATS exception.
+5. Use `Product -> Clean Build Folder`, then `Product -> Run`; do not Archive.
+6. If iOS asks, trust the developer identity under device management settings.
+7. Complete the physical-device QA checklist before treating the build as ready.
+
+When a trusted HTTPS endpoint becomes available, use the normal `FinanceApp`
+target and Release configuration instead, set `FINANCE_RELEASE_API_BASE_URL`,
+and retain the ordinary HTTPS-only ATS policy.
 
 A free Personal Team can impose short provisioning validity and device limits.
 Use the paid developer team when stable long-lived installation is required.
@@ -165,15 +195,15 @@ Use the paid developer team when stable long-lived installation is required.
 ## Known limitations
 
 - Windows cannot perform Apple signing or physical-device installation.
-- The successful integrated CI build used a non-production placeholder HTTPS URL only to
-  prove Release compilation. It does not prove production connectivity.
-- Actual production login remains blocked until the trusted HTTPS endpoint is
-  chosen and configured.
+- The ordinary Release build uses a non-production placeholder HTTPS URL in CI
+  only to prove compilation. It does not prove production connectivity.
+- The separate owner-waived personal target can use the exact production HTTP
+  IP/path, but no signed build, physical install or production login has been
+  proven by repository CI.
 - Backend migrations through `20260822_0019` are CI-tested but were not deployed
-  to production by this iOS QA/documentation wave. Production preflight found
-  `protection_rules=[]`; local branch
-  `prod/release-finance-ios-backend-20260822` is not pushed, production DB is
-  still `20260618_0017`, health is HTTP 200, and trusted HTTPS/FQDN is absent.
+  to production by this integration. No `prod/release-*` branch was created or
+  pushed; production DB is last documented at `20260618_0017`; no host
+  preflight, backup, migration, restart or deployment is claimed.
 - Backend/PWA compatibility types may still contain legacy household vocabulary;
   native product UI and reachable API behavior are personal-only.
 
