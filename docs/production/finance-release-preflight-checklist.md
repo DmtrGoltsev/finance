@@ -139,7 +139,7 @@ Minimum read-only evidence:
 
 ```bash
 ssh <pinned-prod-ssh> 'set -euo pipefail
-  find /var/backups/finance -maxdepth 1 -type f -name "finance_prod*.dump" \
+  find /opt/finance/backups/postgres -maxdepth 1 -type f -name "finance_prod*.dump" \
     -printf "%TY-%Tm-%TdT%TH:%TM:%TSZ %s %p\n" | sort | tail -n 5
 '
 ```
@@ -175,6 +175,16 @@ confirm_production_deploy: finance-production
 confirm_backend_restart: finance-backend.service, only when restart_backend=true
 environment: production
 ```
+
+A dispatch with `deploy_frontend=false`, `deploy_backend=false`,
+`run_migrations=false`, and `restart_backend=false` is CI-only. It must run both
+package jobs and `production-package-gate`, while `host-preflight` and both
+deploy jobs are skipped. It must not request the `production` environment,
+secrets, or host access.
+
+For any production action, the workflow performs its own blocking host
+preflight after both package jobs. Do not treat a manual observation as a
+substitute for that in-run gate.
 
 Retain the GitHub Actions deploy workflow run URL in the release record together
 with production health evidence and links to the sanitized production smoke/E2E

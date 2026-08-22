@@ -61,7 +61,7 @@ on:
         type: string
   push:
     branches:
-      - "**release**"
+      - "prod/release-*"
 
 permissions:
   contents: read
@@ -79,6 +79,7 @@ env:
   FINANCE_BACKEND_SERVICE: finance-backend.service
   FINANCE_BACKEND_ENV_FILE: /etc/finance/backend.env
   FINANCE_DB_BACKUP_DIR: /opt/finance/backups/postgres
+  FINANCE_DB_BACKUP_MIN_FREE_KB: "1048576"
   FINANCE_BACKEND_MIN_PYTHON: "3.12"
   FINANCE_BACKEND_PYTHON_CANDIDATES: "python3.12 /opt/finance/current/venv/bin/python python3.11 python3"
 
@@ -122,6 +123,7 @@ jobs:
       restart_backend: ${{ steps.validate.outputs.restart_backend }}
       auto_db_backup: ${{ steps.validate.outputs.auto_db_backup }}
       deploy_mode: ${{ steps.validate.outputs.deploy_mode }}
+      production_requested: ${{ steps.validate.outputs.production_requested }}
 
     steps:
       - name: Resolve production deploy plan and guardrails
@@ -144,8 +146,8 @@ jobs:
           auto_db_backup="false"
 
           if [ "${event_name}" = "push" ]; then
-            if [[ "${GITHUB_REF_NAME}" != *release* ]]; then
-              echo "::error::release push deploy requires a branch name containing release"
+            if [[ "${GITHUB_REF_NAME}" != prod/release-* ]]; then
+              echo "::error::release push deploy requires a prod/release-* branch"
               exit 1
             fi
 
@@ -258,6 +260,12 @@ jobs:
             fi
           fi
 
+          if [ "${deploy_frontend}" = "true" ] || [ "${deploy_backend}" = "true" ] || [ "${run_migrations}" = "true" ] || [ "${restart_backend}" = "true" ]; then
+            production_requested="true"
+          else
+            production_requested="false"
+          fi
+
           {
             echo "deploy_frontend=${deploy_frontend}"
             echo "deploy_backend=${deploy_backend}"
@@ -267,6 +275,7 @@ jobs:
             echo "restart_backend=${restart_backend}"
             echo "auto_db_backup=${auto_db_backup}"
             echo "deploy_mode=${deploy_mode}"
+            echo "production_requested=${production_requested}"
           } >> "${GITHUB_OUTPUT}"
 
   frontend-ci-package:
@@ -406,13 +415,310 @@ jobs:
             finance-backend-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
           retention-days: 14
 
-  deploy-frontend:
-    if: ${{ needs.validate-prod-inputs.outputs.deploy_frontend == 'true' }}
+  production-package-gate:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs:
+      - validate-prod-inputs
+      - frontend-ci-package
+      - backend-ci-package
+
+    steps:
+      - name: Require both production packages
+        env:
+          FINANCE_VALIDATE_RESULT: ${{ needs.validate-prod-inputs.result }}
+          FINANCE_FRONTEND_PACKAGE_RESULT: ${{ needs.frontend-ci-package.result }}
+          FINANCE_BACKEND_PACKAGE_RESULT: ${{ needs.backend-ci-package.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result_name in FINANCE_VALIDATE_RESULT FINANCE_FRONTEND_PACKAGE_RESULT FINANCE_BACKEND_PACKAGE_RESULT; do
+            result="${!result_name}"
+            if [ "${result}" != "success" ]; then
+              echo "::error::${result_name}=${result}; production package gate requires success"
+              exit 1
+            fi
+          done
+          echo "Both production package lanes and input validation succeeded."
+
+  host-preflight:
+    if: ${{ needs.validate-prod-inputs.outputs.production_requested == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - prepare-release
       - validate-prod-inputs
       - frontend-ci-package
+      - backend-ci-package
+      - production-package-gate
+    environment: production
+    outputs:
+      backend_current_release_id: ${{ steps.remote.outputs.backend_current_release_id }}
+      frontend_current_release_id: ${{ steps.remote.outputs.frontend_current_release_id }}
+      alembic_current: ${{ steps.remote.outputs.alembic_current }}
+      alembic_target: ${{ steps.lineage.outputs.alembic_target }}
+
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+
+      - name: Setup Python for migration graph validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Alembic graph tooling
+        run: python -m pip install "alembic>=1.13,<2.0"
+
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Run read-only production host preflight
+        id: remote
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          ssh_opts=(
+            -p "${HEXCORE_PROD_SSH_PORT}"
+            -i "${ssh_key}"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="${known_hosts}"
+            -o StrictHostKeyChecking=yes
+          )
+
+          ssh "${ssh_opts[@]}" "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_FRONTEND_BASE='${FINANCE_FRONTEND_BASE}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' FINANCE_BACKEND_SERVICE='${FINANCE_BACKEND_SERVICE}' FINANCE_DB_BACKUP_DIR='${FINANCE_DB_BACKUP_DIR}' FINANCE_DB_BACKUP_MIN_FREE_KB='${FINANCE_DB_BACKUP_MIN_FREE_KB}' bash -s" > host-preflight.env <<'REMOTE'
+          set -euo pipefail
+
+          frontend_current="${FINANCE_FRONTEND_BASE}/current"
+          backend_current="${FINANCE_BACKEND_BASE}/current"
+          test -L "${frontend_current}" || {
+            echo "Frontend current is not a symlink" >&2
+            exit 1
+          }
+          test -L "${backend_current}" || {
+            echo "Backend current is not a symlink" >&2
+            exit 1
+          }
+
+          frontend_release_dir="$(readlink -f "${frontend_current}")"
+          backend_release_dir="$(readlink -f "${backend_current}")"
+          case "${frontend_release_dir}" in
+            "${FINANCE_FRONTEND_BASE}"/releases/*) ;;
+            *) echo "Frontend current does not resolve under releases" >&2; exit 1 ;;
+          esac
+          case "${backend_release_dir}" in
+            "${FINANCE_BACKEND_BASE}"/releases/*) ;;
+            *) echo "Backend current does not resolve under releases" >&2; exit 1 ;;
+          esac
+
+          frontend_release_id="$(basename "${frontend_release_dir}")"
+          backend_release_id="$(basename "${backend_release_dir}")"
+          case "${frontend_release_id}${backend_release_id}" in
+            *[!A-Za-z0-9._-]*) echo "Current release id contains unsafe characters" >&2; exit 1 ;;
+          esac
+
+          systemctl is-active --quiet "${FINANCE_BACKEND_SERVICE}" || {
+            echo "Backend service is not active" >&2
+            exit 1
+          }
+          service_exec_start="$(systemctl show "${FINANCE_BACKEND_SERVICE}" -p ExecStart --value --no-pager)"
+          service_working_directory="$(systemctl show "${FINANCE_BACKEND_SERVICE}" -p WorkingDirectory --value --no-pager)"
+          service_main_pid="$(systemctl show "${FINANCE_BACKEND_SERVICE}" -p MainPID --value --no-pager)"
+          [[ "${service_main_pid}" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Backend service has no live MainPID" >&2
+            exit 1
+          }
+          test -r "/proc/${service_main_pid}/cmdline"
+          process_command="$(tr '\0' ' ' < "/proc/${service_main_pid}/cmdline")"
+          service_wiring="${service_exec_start} ${service_working_directory} ${process_command}"
+          if [[ "${service_wiring}" != *"${FINANCE_BACKEND_BASE}/current"* ]]; then
+            echo "Backend service wiring does not consume /opt/finance/current" >&2
+            exit 1
+          fi
+
+          command -v pg_dump >/dev/null || {
+            echo "pg_dump is unavailable" >&2
+            exit 1
+          }
+          test -d "${FINANCE_DB_BACKUP_DIR}" || {
+            echo "Backup directory does not exist" >&2
+            exit 1
+          }
+          test -w "${FINANCE_DB_BACKUP_DIR}" -a -x "${FINANCE_DB_BACKUP_DIR}" || {
+            echo "Backup directory is not writable" >&2
+            exit 1
+          }
+          backup_free_kb="$(df -Pk -- "${FINANCE_DB_BACKUP_DIR}" | awk 'END {print $4}')"
+          [[ "${backup_free_kb}" =~ ^[0-9]+$ ]]
+          [[ "${FINANCE_DB_BACKUP_MIN_FREE_KB}" =~ ^[0-9]+$ ]]
+          if [ "${backup_free_kb}" -lt "${FINANCE_DB_BACKUP_MIN_FREE_KB}" ]; then
+            echo "Backup filesystem has insufficient free space" >&2
+            exit 1
+          fi
+
+          test -d "${backend_release_dir}/package/apps/backend"
+          test -x "${backend_release_dir}/venv/bin/python"
+          test -f "${FINANCE_BACKEND_ENV_FILE}"
+          set -a
+          . "${FINANCE_BACKEND_ENV_FILE}"
+          set +a
+          cd "${backend_release_dir}/package/apps/backend"
+          alembic_output="$("${backend_release_dir}/venv/bin/python" -m alembic -c alembic.ini current)"
+          mapfile -t revisions < <(printf '%s\n' "${alembic_output}" | awk 'NF {print $1}')
+          if [ "${#revisions[@]}" -eq 0 ]; then
+            alembic_current="base"
+          elif [ "${#revisions[@]}" -eq 1 ] && [[ "${revisions[0]}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            alembic_current="${revisions[0]}"
+          else
+            echo "Alembic current did not return exactly one safe revision" >&2
+            exit 1
+          fi
+
+          printf 'frontend_current_release_id=%s\n' "${frontend_release_id}"
+          printf 'backend_current_release_id=%s\n' "${backend_release_id}"
+          printf 'service_active=true\n'
+          printf 'service_uses_current=true\n'
+          printf 'pg_dump_available=true\n'
+          printf 'backup_dir_writable=true\n'
+          printf 'backup_free_kb=%s\n' "${backup_free_kb}"
+          printf 'alembic_current=%s\n' "${alembic_current}"
+          REMOTE
+
+          declare -A observed=()
+          while IFS='=' read -r key value; do
+            case "${key}" in
+              frontend_current_release_id|backend_current_release_id|alembic_current)
+                [[ "${value}" =~ ^(base|[A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]
+                ;;
+              service_active|service_uses_current|pg_dump_available|backup_dir_writable)
+                [ "${value}" = "true" ]
+                ;;
+              backup_free_kb)
+                [[ "${value}" =~ ^[0-9]+$ ]]
+                ;;
+              *)
+                echo "::error::Unexpected host preflight evidence key"
+                exit 1
+                ;;
+            esac
+            observed["${key}"]="${value}"
+          done < host-preflight.env
+
+          for key in frontend_current_release_id backend_current_release_id service_active service_uses_current pg_dump_available backup_dir_writable backup_free_kb alembic_current; do
+            if [ -z "${observed[${key}]:-}" ]; then
+              echo "::error::Missing host preflight evidence: ${key}"
+              exit 1
+            fi
+          done
+
+          {
+            echo "frontend_current_release_id=${observed[frontend_current_release_id]}"
+            echo "backend_current_release_id=${observed[backend_current_release_id]}"
+            echo "alembic_current=${observed[alembic_current]}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Validate live Alembic revision against release graph
+        id: lineage
+        env:
+          FINANCE_LIVE_REVISION: ${{ steps.remote.outputs.alembic_current }}
+          FINANCE_EXPECTED_CURRENT_REVISION: ${{ needs.validate-prod-inputs.outputs.expected_current_revision }}
+          FINANCE_REQUESTED_TARGET_REVISION: ${{ needs.validate-prod-inputs.outputs.target_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+          live = os.environ["FINANCE_LIVE_REVISION"]
+          expected = os.environ.get("FINANCE_EXPECTED_CURRENT_REVISION", "")
+          requested_target = os.environ.get("FINANCE_REQUESTED_TARGET_REVISION", "")
+
+          config = Config("apps/backend/alembic.ini")
+          config.set_main_option("script_location", str(Path("db/migrations").resolve()))
+          script = ScriptDirectory.from_config(config)
+          heads = script.get_heads()
+          if len(heads) != 1:
+              raise SystemExit(f"Expected one Alembic head, got {len(heads)}")
+
+          target = heads[0] if requested_target in {"", "auto"} else requested_target
+          if expected not in {"", "auto"} and live != expected:
+              raise SystemExit("Live Alembic revision does not match expected_current_revision")
+
+          script.get_revision(target)
+          if live != "base":
+              script.get_revision(live)
+              list(script.iterate_revisions(target, live))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"alembic_target={target}\n")
+          PY
+
+      - name: Write sanitized host preflight evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "workflow_run_id=${GITHUB_RUN_ID}"
+            echo "workflow_run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "commit_sha=${GITHUB_SHA}"
+            echo "source_ref=${GITHUB_REF_NAME}"
+            echo "release_id=${{ needs.prepare-release.outputs.release_id }}"
+            cat host-preflight.env
+            echo "alembic_target=${{ steps.lineage.outputs.alembic_target }}"
+          } > host-preflight-sanitized.txt
+          cat host-preflight-sanitized.txt >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload sanitized host preflight evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-host-preflight-${{ needs.prepare-release.outputs.release_id }}
+          path: host-preflight-sanitized.txt
+          retention-days: 14
+
+  deploy-frontend:
+    if: >-
+      ${{ always() &&
+          needs.validate-prod-inputs.outputs.deploy_frontend == 'true' &&
+          needs.production-package-gate.result == 'success' &&
+          needs.host-preflight.result == 'success' &&
+          (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - validate-prod-inputs
+      - frontend-ci-package
+      - backend-ci-package
+      - production-package-gate
+      - host-preflight
+      - deploy-backend
     environment: production
 
     steps:
@@ -535,12 +841,18 @@ jobs:
           REMOTE
 
   deploy-backend:
-    if: ${{ needs.validate-prod-inputs.outputs.deploy_backend == 'true' }}
+    if: >-
+      ${{ needs.validate-prod-inputs.outputs.deploy_backend == 'true' &&
+          needs.production-package-gate.result == 'success' &&
+          needs.host-preflight.result == 'success' }}
     runs-on: ubuntu-latest
     needs:
       - prepare-release
       - validate-prod-inputs
+      - frontend-ci-package
       - backend-ci-package
+      - production-package-gate
+      - host-preflight
     environment: production
 
     steps:
