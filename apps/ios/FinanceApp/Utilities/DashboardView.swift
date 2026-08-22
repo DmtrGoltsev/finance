@@ -134,11 +134,13 @@ extension FinanceDashboard {
         let investmentAccountIds = Set(personalAccounts.compactMap { account in
             account.assetCategoryId.map(investmentCategoryIds.contains) == true ? account.id : nil
         })
-        let investmentCategoryByAccount = Dictionary(uniqueKeysWithValues: personalAccounts.compactMap { account in
+        let investmentCategoryByAccount: [String: String] = Dictionary(
+            uniqueKeysWithValues: personalAccounts.compactMap { account -> (String, String)? in
             guard let categoryId = account.assetCategoryId,
                   investmentCategoryIds.contains(categoryId) else { return nil }
             return (account.id, categoryId)
-        })
+            }
+        )
         var income = Decimal.zero
         var expenses = Decimal.zero
         var investments = Decimal.zero
