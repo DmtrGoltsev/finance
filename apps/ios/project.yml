@@ -73,7 +73,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp.PersonalSideload
-        PRODUCT_NAME: Finance Personal HTTP
+        # Keep the installable product distinct from the normal FinanceApp target.
+        # The user-facing name is defined by the dedicated personal Info.plist.
+        PRODUCT_NAME: FinanceAppPersonalHTTP
         PRODUCT_MODULE_NAME: FinanceApp
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -85,6 +87,7 @@ targets:
       configs:
         PersonalSideloadHTTP:
           FINANCE_API_BASE_URL: "http://45.10.110.42/finance-api"
+          ENABLE_TESTABILITY: YES
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
     info:
       path: FinanceApp/Info-PersonalSideloadHTTP.plist
@@ -93,14 +96,14 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: FinanceAppTests
+      - path: FinanceAppTests/PersonalSideloadHTTPTests.swift
     dependencies:
       - target: FinanceAppPersonalHTTP
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp.PersonalSideloadTests
         GENERATE_INFOPLIST_FILE: true
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Finance Personal HTTP.app/Finance Personal HTTP"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/FinanceAppPersonalHTTP.app/FinanceAppPersonalHTTP"
         BUNDLE_LOADER: "$(TEST_HOST)"
       configs:
         PersonalSideloadHTTP:
@@ -148,5 +151,3 @@ schemes:
       targets:
         - name: FinanceAppPersonalHTTPTests
           parallelizable: false
-    archive:
-      config: PersonalSideloadHTTP

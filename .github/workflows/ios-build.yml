@@ -217,7 +217,7 @@ jobs:
         env:
           DEBUG_APP_PLIST: ${{ runner.temp }}/FinanceApp-Debug/Build/Products/Debug-iphoneos/FinanceApp.app/Info.plist
           RELEASE_APP_PLIST: ${{ runner.temp }}/FinanceApp-Release/Build/Products/Release-iphoneos/FinanceApp.app/Info.plist
-          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/Finance Personal HTTP.app/Info.plist
+          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceAppPersonalHTTP.app/Info.plist
         run: |
           python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
           import os
@@ -261,6 +261,7 @@ jobs:
           assert personal.get("CFBundleIdentifier") == "com.codex.FinanceApp.PersonalSideload"
           assert personal.get("CFBundleIdentifier") != release.get("CFBundleIdentifier")
           assert personal.get("CFBundleDisplayName") == "Finance Personal HTTP"
+          assert personal.get("CFBundleName") == "FinanceAppPersonalHTTP"
           assert personal.get("FINANCE_API_BASE_URL") == personal_url, personal.get("FINANCE_API_BASE_URL")
           assert actual_ats == expected_ats, actual_ats
           settings = Path("ci-artifacts/personal-sideload-http-settings.txt").read_text()
@@ -268,16 +269,16 @@ jobs:
           assert "CODE_SIGN_STYLE = Manual" in settings
           assert "CODE_SIGN_IDENTITY = Apple Development" in settings
           scheme = Path("FinanceApp.xcodeproj/xcshareddata/xcschemes/FinanceAppPersonalHTTP.xcscheme").read_text()
-          assert '<ArchiveAction buildConfiguration = "PersonalSideloadHTTP"' in scheme
+          assert "<ArchiveAction" not in scheme
           project = Path("project.yml").read_text()
           personal_scheme = project[project.rfind("\n  FinanceAppPersonalHTTP:\n"):]
-          assert "archive:\n      config: PersonalSideloadHTTP" in personal_scheme
-          assert "exportArchive" not in personal_scheme
+          assert "archive:" not in personal_scheme
+          assert "exportArchive" not in project
           print("FINANCE_API_BASE_URL=http://45.10.110.42/finance-api")
           print("Debug and Release plists: no personal IP, personal HTTP URL, or personal ATS")
           print("Personal bundle=com.codex.FinanceApp.PersonalSideload")
           print("Personal signing=Manual Apple Development")
-          print("Personal archive=PersonalSideloadHTTP with Apple Development signing; App Store export path=absent")
+          print("Personal archive/export action=absent; signing=Manual Apple Development")
           print("NSAllowsArbitraryLoads=false")
           print("NSAllowsLocalNetworking=false")
           print("NSExceptionDomains=[45.10.110.42]")

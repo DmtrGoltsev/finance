@@ -65,6 +65,28 @@ Acceptable production options:
 Until one of these endpoints is configured and reachable, native iOS production
 login is blocked by design. The existing plain HTTP IP is not sufficient.
 
+## Owner-only personal HTTP sideload exception
+
+This is a separate, temporary development-install path, not a replacement for
+the HTTPS release requirement above. It is allowed only while the explicit
+[owner waiver](security/ios-personal-http-waiver-2026-08-22.md) remains valid:
+
+- select target and scheme `FinanceAppPersonalHTTP`, not `FinanceApp`;
+- use configuration `PersonalSideloadHTTP` and the exact built-in endpoint
+  `http://45.10.110.42/finance-api`;
+- keep bundle id `com.codex.FinanceApp.PersonalSideload`, display name
+  `Finance Personal HTTP`, and manual `Apple Development` signing;
+- install only onto the owner or family iPhone through a connected Xcode device
+  run. The scheme deliberately has no archive or export action;
+- never use this target for App Store, TestFlight, public distribution, or the
+  normal `FinanceApp` Release configuration.
+
+The accepted residual risk is substantial: plaintext traffic can expose or be
+modified by a network observer, including passwords, bearer tokens and
+financial data. The exception expires unless reviewed by 2026-11-22 and is
+invalid immediately if the host, path, authentication, identity, device scope,
+distribution channel or HTTPS availability changes.
+
 ## Signing and bundle identifier
 
 In Xcode, select the `FinanceApp` target, then `Signing & Capabilities`:

@@ -3,8 +3,14 @@ import XCTest
 @testable import FinanceApp
 
 final class PersonalSideloadHTTPTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        URLProtocol.registerClass(PersonalHTTPURLProtocol.self)
+    }
+
     override func tearDown() {
         PersonalHTTPURLProtocol.reset()
+        URLProtocol.unregisterClass(PersonalHTTPURLProtocol.self)
         super.tearDown()
     }
 
@@ -96,17 +102,20 @@ final class PersonalSideloadHTTPTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PersonalHTTPURLProtocol.self]
         configuration.timeoutIntervalForRequest = 2
-        let session = URLSession(configuration: configuration)
+        let redirectBlocked = expectation(description: "URLSession sent the 3xx to the personal redirect blocker")
+        let delegate = RedirectProbe(
+            blocker: try XCTUnwrap(
+                APITransportPolicy.personalSideloadHTTP.makeTaskDelegate() as? PersonalHTTPRedirectBlocker
+            ),
+            redirectBlocked: redirectBlocked
+        )
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        let task = session.dataTask(with: sourceURL)
+        task.resume()
 
-        do {
-            let (_, response) = try await session.data(
-                for: URLRequest(url: sourceURL),
-                delegate: try XCTUnwrap(APITransportPolicy.personalSideloadHTTP.makeTaskDelegate())
-            )
-            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 302)
-        } catch let error as URLError {
-            XCTAssertTrue([.cancelled, .timedOut].contains(error.code))
-        }
+        await fulfillment(of: [redirectBlocked], timeout: 2)
+        task.cancel()
+        session.invalidateAndCancel()
 
         XCTAssertEqual(PersonalHTTPURLProtocol.requestURLs, [sourceURL.absoluteString])
     }
@@ -204,6 +213,35 @@ final class PersonalSideloadHTTPTests: XCTestCase {
     }
 }
 
+private final class RedirectProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let blocker: PersonalHTTPRedirectBlocker
+    private let redirectBlocked: XCTestExpectation
+
+    init(blocker: PersonalHTTPRedirectBlocker, redirectBlocked: XCTestExpectation) {
+        self.blocker = blocker
+        self.redirectBlocked = redirectBlocked
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        blocker.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: request
+        ) { redirectedRequest in
+            XCTAssertNil(redirectedRequest)
+            self.redirectBlocked.fulfill()
+            completionHandler(redirectedRequest)
+        }
+    }
+}
+
 private final class PersonalHTTPURLProtocol: URLProtocol {
     static var requestCount = 0
     static var responseURL: URL?
@@ -235,7 +273,6 @@ private final class PersonalHTTPURLProtocol: URLProtocol {
                 wasRedirectedTo: URLRequest(url: redirectURL),
                 redirectResponse: response
             )
-            client?.urlProtocolDidFinishLoading(self)
             return
         }
         let url = Self.responseURL ?? request.url!

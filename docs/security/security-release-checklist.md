@@ -132,7 +132,7 @@
 - [ ] Wildcard CORS origin with credentials is disabled.
 - [ ] Production/staging with real data uses HTTPS only.
 - [ ] HSTS decision is recorded before public launch.
-- [ ] Для любого personal HTTP sideload проверен действующий owner waiver: scope только owner/family iPhone, target `FinanceAppPersonalHTTP`, bundle id `com.codex.FinanceApp.PersonalSideload`, exact URL `http://45.10.110.42/finance-api`, Apple Development signing и archive configuration `PersonalSideloadHTTP` (no App Store export), review date не просрочена. Waiver не применяется к public/App Store/normal Release.
+- [ ] Для любого personal HTTP sideload проверен действующий owner waiver: scope только owner/family iPhone, target `FinanceAppPersonalHTTP`, bundle id `com.codex.FinanceApp.PersonalSideload`, exact URL `http://45.10.110.42/finance-api`, Apple Development signing и отсутствие archive/export action, review date не просрочена. Waiver не применяется к public/App Store/normal Release.
 
 ### Контроль доступа и нейтральные ошибки
 
