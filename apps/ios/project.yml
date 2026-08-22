@@ -1,4 +1,8 @@
 name: FinanceApp
+configs:
+  Debug: debug
+  Release: release
+  PersonalSideloadHTTP: release
 options:
   bundleIdPrefix: com.codex
   deploymentTarget:
@@ -15,6 +19,9 @@ settings:
       FINANCE_API_BASE_URL: "http://127.0.0.1:8000/finance-api"
     Release:
       FINANCE_API_BASE_URL: "$(FINANCE_RELEASE_API_BASE_URL)"
+    PersonalSideloadHTTP:
+      FINANCE_API_BASE_URL: "http://45.10.110.42/finance-api"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
 
 targets:
   FinanceApp:
@@ -24,6 +31,7 @@ targets:
       - path: FinanceApp
         excludes:
           - "**/.DS_Store"
+          - "Info-PersonalSideloadHTTP.plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp
@@ -33,6 +41,9 @@ targets:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: false
         INFOPLIST_FILE: FinanceApp/Info.plist
+      configs:
+        PersonalSideloadHTTP:
+          INFOPLIST_FILE: FinanceApp/Info-PersonalSideloadHTTP.plist
     info:
       path: FinanceApp/Info.plist
 
@@ -78,3 +89,19 @@ schemes:
           parallelizable: false
     archive:
       config: Release
+  FinanceAppPersonalHTTP:
+    build:
+      targets:
+        FinanceApp: all
+    run:
+      config: PersonalSideloadHTTP
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: FinanceAppTests
+          parallelizable: false
+        - name: FinanceAppUITests
+          parallelizable: false
+    archive:
+      config: PersonalSideloadHTTP

@@ -5,6 +5,7 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
     private let session: URLSession
     private let tokenStore: CSRFTokenStore
     private let sessionCoordinator: SessionCoordinator
+    private let transportPolicy: APITransportPolicy
 
     convenience init(
         environment: AppEnvironment,
@@ -14,7 +15,8 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
         self.init(
             baseURL: environment.apiBaseURL.absoluteString,
             tokenStore: tokenStore,
-            sessionCoordinator: sessionCoordinator
+            sessionCoordinator: sessionCoordinator,
+            transportPolicy: environment.transportPolicy
         )
     }
 
@@ -22,11 +24,13 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
         baseURL: String = AppEnvironment.current.apiBaseURL.absoluteString,
         tokenStore: CSRFTokenStore = .shared,
         session: URLSession? = nil,
-        sessionCoordinator: SessionCoordinator? = nil
+        sessionCoordinator: SessionCoordinator? = nil,
+        transportPolicy: APITransportPolicy = .standard
     ) {
         self.builder = RequestBuilder(baseURL: baseURL)
         self.tokenStore = tokenStore
         self.sessionCoordinator = sessionCoordinator ?? SessionCoordinator()
+        self.transportPolicy = transportPolicy
         if let session {
             self.session = session
         } else {
@@ -961,11 +965,15 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
 
         let refreshedSession = try await sessionCoordinator.refresh(
             afterUnauthorized: originalSession.lease
-        ) { [builder, session] refreshToken in
+        ) { [builder, session, transportPolicy] refreshToken in
             let url = builder.makeURL(path: "/api/v1/sessions/refresh")
             let body = try ResponseParser.encode(["refreshToken": refreshToken])
             let request = builder.makeURLRequest(url: url, method: "POST", body: body)
-            let (data, http) = try await Self.send(request, using: session)
+            let (data, http) = try await Self.send(
+                request,
+                using: session,
+                transportPolicy: transportPolicy
+            )
             guard http.statusCode == 200 else {
                 throw ResponseParser.parseError(from: data, statusCode: http.statusCode)
             }
@@ -1017,19 +1025,27 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
     }
 
     private func send(_ request: URLRequest) async throws -> (data: Data, http: HTTPURLResponse) {
-        try await Self.send(request, using: session)
+        try await Self.send(request, using: session, transportPolicy: transportPolicy)
     }
 
     private static func send(
         _ request: URLRequest,
-        using session: URLSession
+        using session: URLSession,
+        transportPolicy: APITransportPolicy
     ) async throws -> (data: Data, http: HTTPURLResponse) {
         do {
-            let (data, response) = try await session.data(for: request)
+            try transportPolicy.validateRequest(request)
+            let (data, response) = try await session.data(
+                for: request,
+                delegate: transportPolicy.makeTaskDelegate()
+            )
             guard let http = response as? HTTPURLResponse else {
                 throw FinanceApiError.networkError(URLError(.badServerResponse))
             }
+            try transportPolicy.validateResponse(http)
             return (data, http)
+        } catch is APITransportPolicyError {
+            throw FinanceApiError.networkError(URLError(.unsupportedURL))
         } catch let error as FinanceApiError {
             throw error
         } catch let error as URLError {

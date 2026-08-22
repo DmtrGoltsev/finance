@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "codex/ios-native-*"
+      - "codex/ios-personal-http-*"
     paths:
       - "apps/ios/**"
       - "apps/backend/src/app/auth/**"
@@ -103,7 +104,7 @@ jobs:
             > ci-artifacts/project-list.json
           cat ci-artifacts/project-list.json
 
-      - name: Build Debug and Release, then run XCTest
+      - name: Build Debug, Release and PersonalSideloadHTTP, then run XCTest
         working-directory: apps/ios
         env:
           FINANCE_RELEASE_API_BASE_URL: https://finance.invalid/finance-api
@@ -139,6 +140,19 @@ jobs:
             2>&1 | tee ci-artifacts/release-build.log
           RELEASE_STATUS=${PIPESTATUS[0]}
 
+          xcodebuild build \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceAppPersonalHTTP \
+            -destination 'generic/platform=iOS' \
+            -configuration PersonalSideloadHTTP \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-PersonalSideloadHTTP" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee ci-artifacts/personal-sideload-http-build.log
+          PERSONAL_SIDELOAD_STATUS=${PIPESTATUS[0]}
+
           xcrun simctl list devices available -j > ci-artifacts/simulators.json
           SIMULATOR_UDID=$(ruby -rjson -e '
             data = JSON.parse(File.read(ARGV[0]))
@@ -169,13 +183,47 @@ jobs:
             echo "No available iPhone simulator" | tee ci-artifacts/xctest.log
           fi
 
-          printf 'debug=%s\nrelease=%s\ntest=%s\n' \
-            "$DEBUG_STATUS" "$RELEASE_STATUS" "$TEST_STATUS" \
+          printf 'debug=%s\nrelease=%s\npersonal_sideload_http=%s\ntest=%s\n' \
+            "$DEBUG_STATUS" "$RELEASE_STATUS" "$PERSONAL_SIDELOAD_STATUS" "$TEST_STATUS" \
             | tee ci-artifacts/status.txt
 
-          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
+          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$PERSONAL_SIDELOAD_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Verify PersonalSideloadHTTP built app policy
+        working-directory: apps/ios
+        env:
+          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceApp.app/Info.plist
+        run: |
+          python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
+          import os
+          import plistlib
+
+          path = os.environ["PERSONAL_APP_PLIST"]
+          with open(path, "rb") as stream:
+              plist = plistlib.load(stream)
+
+          expected_ats = {
+              "NSAllowsArbitraryLoads": False,
+              "NSAllowsLocalNetworking": False,
+              "NSExceptionDomains": {
+                  "45.10.110.42": {
+                      "NSExceptionAllowsInsecureHTTPLoads": True,
+                      "NSIncludesSubdomains": False,
+                  }
+              },
+          }
+          actual_ats = plist.get("NSAppTransportSecurity")
+          assert plist.get("FINANCE_API_BASE_URL") == "http://45.10.110.42/finance-api", plist.get("FINANCE_API_BASE_URL")
+          assert actual_ats == expected_ats, actual_ats
+          print("FINANCE_API_BASE_URL=http://45.10.110.42/finance-api")
+          print("NSAllowsArbitraryLoads=false")
+          print("NSAllowsLocalNetworking=false")
+          print("NSExceptionDomains=[45.10.110.42]")
+          print("45.10.110.42.NSExceptionAllowsInsecureHTTPLoads=true")
+          print("45.10.110.42.NSIncludesSubdomains=false")
+          PY
 
       - name: Package CI evidence
         if: always()
