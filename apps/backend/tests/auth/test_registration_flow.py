@@ -105,6 +105,47 @@ def test_android_bearer_registration_creates_active_user_and_token_current_sessi
     assert categories == []
 
 
+def test_ios_bearer_registration_creates_ios_session_and_supports_refresh(
+    registration_client: TestClient,
+) -> None:
+    response = registration_client.post(
+        "/api/v1/users",
+        json={
+            "email": "ios.owner@example.test",
+            "password": PASSWORD,
+            "displayName": "iOS Owner",
+            "transport": "ios_bearer",
+            "deviceName": "iPhone",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["tokenType"] == "Bearer"
+    assert body["accessToken"]
+    assert body["refreshToken"]
+
+    current = registration_client.get(
+        "/api/v1/sessions/current",
+        headers={"Authorization": f"Bearer {body['accessToken']}"},
+    )
+    refreshed = registration_client.post(
+        "/api/v1/sessions/refresh",
+        json={"refreshToken": body["refreshToken"]},
+    )
+
+    assert current.status_code == 200
+    assert refreshed.status_code == 200
+    assert refreshed.json()["actor"]["sessionId"] == body["actor"]["sessionId"]
+
+    factory = sync_session_factory_for_settings(get_settings())
+    with factory() as session:
+        stored_sessions = session.execute(select(Session)).scalars().all()
+
+    assert len(stored_sessions) == 1
+    assert stored_sessions[0].transport == "ios_bearer"
+
+
 def test_registration_duplicate_email_returns_neutral_accepted_without_token(
     registration_client: TestClient,
 ) -> None:

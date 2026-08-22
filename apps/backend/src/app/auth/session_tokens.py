@@ -16,7 +16,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from .models import AuthClientKind, SessionStorageRecord, TokenRecordStatus
-from .schemas import AndroidBearerRefreshContract, PwaCookieCsrfContract
+from .schemas import AndroidBearerRefreshContract, IosBearerRefreshContract, PwaCookieCsrfContract
 from .security import RandomTokenFactory, TokenHashingBackend
 from .service import AuthReleaseBlocker
 
@@ -41,16 +41,17 @@ class SessionTokenStore(Protocol):
     ) -> SessionStorageRecord | None:
         """Fetch a stored Android session by a precomputed refresh token hash."""
 
-    def rotate_android_session_tokens(
+    def rotate_bearer_session_tokens(
         self,
         *,
         session_id: str,
+        client_kind: AuthClientKind,
         old_refresh_token_hash: str,
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
     ) -> SessionStorageRecord | None:
-        """Replace Android access/refresh hashes when the old refresh hash still matches."""
+        """Replace mobile bearer hashes when the old refresh hash still matches."""
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
         """Revoke one stored session."""
@@ -99,10 +100,11 @@ class InMemorySessionTokenStore:
                 return record
         return None
 
-    def rotate_android_session_tokens(
+    def rotate_bearer_session_tokens(
         self,
         *,
         session_id: str,
+        client_kind: AuthClientKind,
         old_refresh_token_hash: str,
         new_session_token_hash: str,
         new_refresh_token_hash: str,
@@ -112,7 +114,8 @@ class InMemorySessionTokenStore:
         record = self._records.get(session_id)
         if (
             record is None
-            or record.client_kind != AuthClientKind.ANDROID
+            or client_kind not in (AuthClientKind.ANDROID, AuthClientKind.IOS)
+            or record.client_kind != client_kind
             or record.refresh_token_hash != old_refresh_token_hash
         ):
             return None
@@ -162,6 +165,9 @@ class SessionTokenService:
     def android_contract(self) -> AndroidBearerRefreshContract:
         return AndroidBearerRefreshContract()
 
+    def ios_contract(self) -> IosBearerRefreshContract:
+        return IosBearerRefreshContract()
+
     def issue_pwa_cookie_session(self, *, user_id: str, session_version: int = 1) -> IssuedSession:
         """Issue a PWA HttpOnly cookie session and CSRF token hashes."""
 
@@ -189,6 +195,33 @@ class SessionTokenService:
     def issue_android_tokens(self, *, user_id: str, session_version: int = 1) -> IssuedSession:
         """Issue Android opaque bearer access and rotating refresh token hashes."""
 
+        return self.issue_bearer_tokens(
+            user_id=user_id,
+            client_kind=AuthClientKind.ANDROID,
+            session_version=session_version,
+        )
+
+    def issue_ios_tokens(self, *, user_id: str, session_version: int = 1) -> IssuedSession:
+        """Issue iOS opaque bearer access and rotating refresh token hashes."""
+
+        return self.issue_bearer_tokens(
+            user_id=user_id,
+            client_kind=AuthClientKind.IOS,
+            session_version=session_version,
+        )
+
+    def issue_bearer_tokens(
+        self,
+        *,
+        user_id: str,
+        client_kind: AuthClientKind,
+        session_version: int = 1,
+    ) -> IssuedSession:
+        """Issue opaque access and rotating refresh tokens for an approved mobile client."""
+
+        if client_kind not in (AuthClientKind.ANDROID, AuthClientKind.IOS):
+            raise ValueError(f"unsupported bearer client kind: {client_kind!r}")
+
         store, token_factory, hashing_backend = self._required_primitives()
         now = datetime.now(UTC)
         access_token = token_factory.create_token()
@@ -196,7 +229,7 @@ class SessionTokenService:
         record = SessionStorageRecord(
             id=str(uuid4()),
             user_id=user_id,
-            client_kind=AuthClientKind.ANDROID,
+            client_kind=client_kind,
             session_version=session_version,
             issued_at=now,
             expires_at=now + self.android_refresh_ttl,
@@ -217,14 +250,35 @@ class SessionTokenService:
         old_refresh_token_hash: str,
         rotated_at: datetime | None = None,
     ) -> IssuedSession | None:
-        """Rotate Android access and refresh tokens for an existing active session."""
+        """Backward-compatible wrapper for Android token rotation."""
+
+        if record.client_kind != AuthClientKind.ANDROID:
+            return None
+        return self.rotate_bearer_tokens(
+            record=record,
+            old_refresh_token_hash=old_refresh_token_hash,
+            rotated_at=rotated_at,
+        )
+
+    def rotate_bearer_tokens(
+        self,
+        *,
+        record: SessionStorageRecord,
+        old_refresh_token_hash: str,
+        rotated_at: datetime | None = None,
+    ) -> IssuedSession | None:
+        """Rotate access and refresh tokens for an approved mobile bearer session."""
+
+        if record.client_kind not in (AuthClientKind.ANDROID, AuthClientKind.IOS):
+            return None
 
         store, token_factory, hashing_backend = self._required_primitives()
         current_time = rotated_at or datetime.now(UTC)
         access_token = token_factory.create_token()
         refresh_token = token_factory.create_token()
-        updated = store.rotate_android_session_tokens(
+        updated = store.rotate_bearer_session_tokens(
             session_id=record.id,
+            client_kind=record.client_kind,
             old_refresh_token_hash=old_refresh_token_hash,
             new_session_token_hash=hashing_backend.hash_token(access_token),
             new_refresh_token_hash=hashing_backend.hash_token(refresh_token),

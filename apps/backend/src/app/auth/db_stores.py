@@ -28,6 +28,7 @@ from .security import TOKEN_HASH_PREFIX
 SESSION_TRANSPORT_BY_CLIENT_KIND = {
     AuthClientKind.PWA: "cookie",
     AuthClientKind.ANDROID: "android_bearer",
+    AuthClientKind.IOS: "ios_bearer",
 }
 CLIENT_KIND_BY_SESSION_TRANSPORT = {
     value: key for key, value in SESSION_TRANSPORT_BY_CLIENT_KIND.items()
@@ -175,10 +176,11 @@ class SqlAlchemySessionTokenStore:
                 return None
             return _session_record_from_model(model)
 
-    def rotate_android_session_tokens(
+    def rotate_bearer_session_tokens(
         self,
         *,
         session_id: str,
+        client_kind: AuthClientKind,
         old_refresh_token_hash: str,
         new_session_token_hash: str,
         new_refresh_token_hash: str,
@@ -187,6 +189,7 @@ class SqlAlchemySessionTokenStore:
         parsed_session_id = _optional_uuid(session_id)
         if (
             parsed_session_id is None
+            or client_kind not in (AuthClientKind.ANDROID, AuthClientKind.IOS)
             or not _is_approved_token_hash(old_refresh_token_hash)
             or not _is_approved_token_hash(new_session_token_hash)
             or not _is_approved_token_hash(new_refresh_token_hash)
@@ -200,8 +203,7 @@ class SqlAlchemySessionTokenStore:
                 .where(
                     SessionModel.id == parsed_session_id,
                     SessionModel.refresh_token_hash == old_refresh_token_hash,
-                    SessionModel.transport
-                    == SESSION_TRANSPORT_BY_CLIENT_KIND[AuthClientKind.ANDROID],
+                    SessionModel.transport == SESSION_TRANSPORT_BY_CLIENT_KIND[client_kind],
                     SessionModel.status == TokenRecordStatus.ACTIVE.value,
                     SessionModel.revoked_at.is_(None),
                 )
@@ -219,6 +221,26 @@ class SqlAlchemySessionTokenStore:
                 select(SessionModel).where(SessionModel.id == parsed_session_id)
             ).scalar_one()
             return _session_record_from_model(model)
+
+    def rotate_android_session_tokens(
+        self,
+        *,
+        session_id: str,
+        old_refresh_token_hash: str,
+        new_session_token_hash: str,
+        new_refresh_token_hash: str,
+        rotated_at: datetime,
+    ) -> SessionStorageRecord | None:
+        """Backward-compatible wrapper retained for existing Android callers."""
+
+        return self.rotate_bearer_session_tokens(
+            session_id=session_id,
+            client_kind=AuthClientKind.ANDROID,
+            old_refresh_token_hash=old_refresh_token_hash,
+            new_session_token_hash=new_session_token_hash,
+            new_refresh_token_hash=new_refresh_token_hash,
+            rotated_at=rotated_at,
+        )
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
         parsed_session_id = _optional_uuid(session_id)

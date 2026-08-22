@@ -34,6 +34,11 @@ from .session_tokens import IssuedSession, SessionTokenService, SessionTokenStor
 
 ACTIVE_AUTH_STATUS = "active"
 ACTIVE_RECORD_STATUS = "active"
+BEARER_CLIENT_KIND_BY_TRANSPORT = {
+    AuthTransport.ANDROID_BEARER: AuthClientKind.ANDROID,
+    AuthTransport.IOS_BEARER: AuthClientKind.IOS,
+}
+BEARER_CLIENT_KINDS = frozenset(BEARER_CLIENT_KIND_BY_TRANSPORT.values())
 
 
 class CredentialStore(Protocol):
@@ -204,9 +209,10 @@ class AuthSessionService:
 
         token_service = self._token_service()
         match request.transport:
-            case AuthTransport.ANDROID_BEARER:
-                issued = token_service.issue_android_tokens(
+            case AuthTransport.ANDROID_BEARER | AuthTransport.IOS_BEARER:
+                issued = token_service.issue_bearer_tokens(
                     user_id=user.id,
+                    client_kind=BEARER_CLIENT_KIND_BY_TRANSPORT[request.transport],
                     session_version=user.session_version,
                 )
             case AuthTransport.PWA_COOKIE:
@@ -247,9 +253,10 @@ class AuthSessionService:
 
         token_service = self._token_service()
         match request.transport:
-            case AuthTransport.ANDROID_BEARER:
-                issued = token_service.issue_android_tokens(
+            case AuthTransport.ANDROID_BEARER | AuthTransport.IOS_BEARER:
+                issued = token_service.issue_bearer_tokens(
                     user_id=user.id,
+                    client_kind=BEARER_CLIENT_KIND_BY_TRANSPORT[request.transport],
                     session_version=user.session_version,
                 )
             case AuthTransport.PWA_COOKIE:
@@ -275,9 +282,11 @@ class AuthSessionService:
         now: datetime | None = None,
     ) -> Actor | None:
         record = self._session_record_for_token(token_plaintext)
+        if record is None or record.client_kind not in BEARER_CLIENT_KINDS:
+            return None
         return self._actor_for_session_record(
             record,
-            client_kind=AuthClientKind.ANDROID,
+            client_kind=record.client_kind,
             request_id=request_id,
             now=now,
         )
@@ -330,10 +339,48 @@ class AuthSessionService:
         request_id: str | None = None,
         now: datetime | None = None,
     ) -> AuthRefreshResult:
+        """Refresh only an Android session for backward-compatible internal callers."""
+
+        return self._refresh_bearer_session(
+            refresh_token_plaintext,
+            required_client_kind=AuthClientKind.ANDROID,
+            request_id=request_id,
+            now=now,
+        )
+
+    def refresh_bearer_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
+        """Refresh an Android or iOS bearer session, inferred from the stored token hash."""
+
+        return self._refresh_bearer_session(
+            refresh_token_plaintext,
+            request_id=request_id,
+            now=now,
+        )
+
+    def _refresh_bearer_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        required_client_kind: AuthClientKind | None = None,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
         record = self._session_record_for_refresh_token(refresh_token_plaintext)
+        if (
+            record is None
+            or record.client_kind not in BEARER_CLIENT_KINDS
+            or (required_client_kind is not None and record.client_kind != required_client_kind)
+        ):
+            return AuthRefreshResult()
         actor = self._actor_for_session_record(
             record,
-            client_kind=AuthClientKind.ANDROID,
+            client_kind=record.client_kind,
             request_id=request_id,
             now=now,
         )
@@ -345,7 +392,7 @@ class AuthSessionService:
         ):
             return AuthRefreshResult()
 
-        issued = self._token_service().rotate_android_tokens(
+        issued = self._token_service().rotate_bearer_tokens(
             record=record,
             old_refresh_token_hash=record.refresh_token_hash,
             rotated_at=now,
@@ -380,10 +427,12 @@ class AuthSessionService:
         return actor_from_user_record(user, session_id=record.id, request_id=request_id)
 
     def revoke_bearer_token(self, token_plaintext: str | None) -> bool:
-        return self._revoke_token_for_client_kind(
-            token_plaintext,
-            client_kind=AuthClientKind.ANDROID,
-        )
+        record = self._session_record_for_token(token_plaintext)
+        if record is None or record.client_kind not in BEARER_CLIENT_KINDS or self.sessions is None:
+            return False
+
+        self.sessions.revoke_session(session_id=record.id, revoked_at=datetime.now(UTC))
+        return True
 
     def revoke_cookie_session(self, token_plaintext: str | None) -> bool:
         return self._revoke_token_for_client_kind(

@@ -50,6 +50,7 @@ security:
   - pwaCookieAuth: []
     csrfHeader: []
   - androidBearerAuth: []
+  - iosBearerAuth: []
 paths:
   /users:
     post:
@@ -90,7 +91,7 @@ paths:
       tags: [Auth]
       operationId: createSession
       summary: Login and create current session.
-      description: Account-neutral login. PWA receives HttpOnly cookie transport; Android receives bearer-capable token material by implementation policy.
+      description: Account-neutral login. PWA receives HttpOnly cookie transport; Android and iOS receive bearer-capable token material by implementation policy.
       security: []
       requestBody:
         required: true
@@ -117,8 +118,8 @@ paths:
     post:
       tags: [Auth]
       operationId: refreshSession
-      summary: Rotate Android bearer session tokens.
-      description: Public Android refresh-token contract. Accepts only refresh token material and returns rotated bearer access and refresh tokens for an active, non-revoked, non-expired Android session.
+      summary: Rotate mobile bearer session tokens.
+      description: Public Android/iOS refresh-token contract. Accepts only refresh token material and returns rotated bearer access and refresh tokens for an active, non-revoked, non-expired mobile session.
       security: []
       requestBody:
         required: true
@@ -128,7 +129,7 @@ paths:
               $ref: '#/components/schemas/SessionRefreshRequest'
       responses:
         '200':
-          description: Rotated Android bearer session.
+          description: Rotated Android or iOS bearer session.
           content:
             application/json:
               schema:
@@ -1442,6 +1443,11 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: Opaque bearer access token for Android; refresh token storage and rotation are platform secure-storage concerns.
+    iosBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Opaque bearer access token for native iOS; refresh tokens must be stored in the iOS Keychain and rotated by the client.
   responses:
     Error:
       description: Canonical error envelope.
@@ -1895,7 +1901,7 @@ components:
             - type: 'null'
     AuthTransport:
       type: string
-      enum: [pwa_cookie, android_bearer]
+      enum: [pwa_cookie, android_bearer, ios_bearer]
     UserRegistrationRequest:
       type: object
       additionalProperties: false
