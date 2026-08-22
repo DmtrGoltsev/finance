@@ -386,3 +386,72 @@ enum SyncSafeMessage {
         return String(trimmed.prefix(180))
     }
 }
+
+struct SyncSessionLease: Codable, Hashable, Sendable {
+    let viewerUserId: String
+    let sessionId: String?
+    let generation: UInt64
+    let identityNonce: String
+
+    init(
+        viewerUserId: String,
+        sessionId: String? = nil,
+        generation: UInt64,
+        identityNonce: String = UUID().uuidString
+    ) {
+        self.viewerUserId = viewerUserId
+        self.sessionId = sessionId
+        self.generation = generation
+        self.identityNonce = identityNonce
+    }
+}
+
+protocol SyncSessionLeaseProvider: Sendable {
+    func currentLease(for viewerUserId: String) async -> SyncSessionLease?
+    func isCurrent(_ lease: SyncSessionLease) async -> Bool
+}
+
+actor SyncSessionLeaseCoordinator: SyncSessionLeaseProvider {
+    private var generation: UInt64 = 0
+    private var lease: SyncSessionLease?
+
+    @discardableResult
+    func activate(viewerUserId: String, sessionId: String? = nil) -> SyncSessionLease {
+        generation &+= 1
+        let next = SyncSessionLease(
+            viewerUserId: viewerUserId,
+            sessionId: sessionId,
+            generation: generation
+        )
+        lease = next
+        return next
+    }
+
+    func invalidate() {
+        generation &+= 1
+        lease = nil
+    }
+
+    func currentLease(for viewerUserId: String) -> SyncSessionLease? {
+        guard lease?.viewerUserId == viewerUserId else { return nil }
+        return lease
+    }
+
+    func isCurrent(_ candidate: SyncSessionLease) -> Bool {
+        lease == candidate && candidate.generation == generation
+    }
+}
+
+enum SyncSessionLeaseError: Error, LocalizedError, Equatable {
+    case missing(viewerUserId: String)
+    case stale
+
+    var errorDescription: String? {
+        switch self {
+        case .missing:
+            return "Активная сессия синхронизации отсутствует."
+        case .stale:
+            return "Результат синхронизации относится к завершённой сессии и был отброшен."
+        }
+    }
+}
