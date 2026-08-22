@@ -3,7 +3,10 @@
 ## Source of truth
 
 - Repository: `DmtrGoltsev/finance`
-- Branch: `codex/ios-native-current-parity-20260822`
+- Immutable release branch:
+  `prod/release-finance-ios-current-parity-20260823-db7ebdd`
+- Expected deployed code SHA:
+  `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`
 - Required governance ancestor: `4e1ef36724f804d648f2ea385da5259688915325`
 - Required pipeline ancestor: `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c`
 - Required iOS security ancestor: `744a422c5d012149f6c0051dcaf291623fd9a19c`
@@ -12,6 +15,10 @@
 - Security worker CI references:
   `https://github.com/DmtrGoltsev/finance/actions/runs/32601960992` and
   `https://github.com/DmtrGoltsev/finance/actions/runs/32602392746`
+- Final iOS CI:
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32603535573`
+- Self-contained copy-paste prompt for Codex on a new Mac:
+  [ios-native-mac-codex-install-prompt.md](ios-native-mac-codex-install-prompt.md)
 
 `apps/web-pwa/ios` is the legacy Capacitor wrapper. It is not the target native
 application and must not be used for the native iPhone handoff.
@@ -36,8 +43,8 @@ brew install xcodegen
 git clone git@github.com:DmtrGoltsev/finance.git
 cd finance
 git fetch --prune origin
-git checkout --track origin/codex/ios-native-current-parity-20260822
-EXPECTED_SHA="$(git rev-parse origin/codex/ios-native-current-parity-20260822)"
+git checkout --detach origin/prod/release-finance-ios-current-parity-20260823-db7ebdd
+EXPECTED_SHA="db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6"
 test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 git merge-base --is-ancestor 4e1ef36724f804d648f2ea385da5259688915325 HEAD
 git merge-base --is-ancestor 6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c HEAD
@@ -47,11 +54,9 @@ xcodegen generate
 open FinanceApp.xcodeproj
 ```
 
-The exact expected SHA is the fetched remote branch head stored in
-`EXPECTED_SHA`. This avoids a false immutable SHA in a self-referential
-documentation commit. Stop if HEAD changes after verification or any required
-ancestor check fails. Use the successful `iOS Build` run whose `headSha` equals
-that exact `EXPECTED_SHA`; worker runs alone are not final integration proof.
+Stop if HEAD differs from the immutable `EXPECTED_SHA`, if the remote release
+branch no longer resolves to it, or if any required ancestor check fails. Final
+integration proof is iOS run `32603535573` on this exact SHA.
 
 ## Production API requirement
 
@@ -200,10 +205,10 @@ Use the paid developer team when stable long-lived installation is required.
 - The separate owner-waived personal target can use the exact production HTTP
   IP/path, but no signed build, physical install or production login has been
   proven by repository CI.
-- Backend migrations through `20260822_0019` are CI-tested but were not deployed
-  to production by this integration. No `prod/release-*` branch was created or
-  pushed; production DB is last documented at `20260618_0017`; no host
-  preflight, backup, migration, restart or deployment is claimed.
+- Backend/PWA source `db7ebdd...` was deployed by GitHub Actions run
+  `32604838031`. Production DB is `20260822_0019`; backup, service health,
+  frontend assets and sanitized auth/read-only smoke passed. This server proof
+  does not prove iPhone signing, installation or device behavior.
 - Backend/PWA compatibility types may still contain legacy household vocabulary;
   native product UI and reachable API behavior are personal-only.
 

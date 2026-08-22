@@ -25,6 +25,10 @@ feature work must preserve the privacy invariants below.
 - `docs/product/ux-quorum-design-decision-ru.md`
 - `docs/user-guide-ru.md`
 - `MVP_EVIDENCE/reports/2026-05-18_ux-screenshot-checklist.md`
+- `docs/current-status.md` - current deployed release, migrations and residual gates.
+- `docs/ios-native-mac-handoff.md` - native iOS architecture and signing handoff.
+- `docs/ios-native-mac-codex-install-prompt.md` - copy-paste task for Codex on a new Mac.
+- `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md` - final iOS/production evidence.
 - Wave 1 architecture, security, compliance, and testing docs under `docs/**`
 
 ## Privacy Invariants

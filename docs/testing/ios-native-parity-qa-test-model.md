@@ -4,9 +4,13 @@
 
 Целевая ветка: `codex/ios-native-current-parity-20260822`
 
-Финальный одобренный commit: `a5a332093587fc2467383686cca089877d03f90e`
+Финальный одобренный и задеплоенный code commit:
+`db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`
 
-Статус: автоматические gates PASS; physical iPhone/signing и production HTTPS/ATS NOT RUN/BLOCKED.
+Статус: автоматические gates и production backend/PWA deploy PASS; physical
+iPhone signing/install/smoke NOT RUN. Обычный Release остаётся HTTPS-only;
+отдельный owner-waived PersonalSideloadHTTP разрешён только для owner/family
+device scope до review 2026-11-22.
 
 Этот документ является одновременно тестовой моделью и traceability-матрицей. Он не подменяет ручной прогон на физическом iPhone. Целевой клиент - native SwiftUI target `apps/ios`; legacy Capacitor/PWA target `apps/web-pwa/ios` не входит в native iOS release.
 
@@ -26,15 +30,18 @@
 
 | Gate | Требование | Статус | Доказательство |
 | --- | --- | --- | --- |
-| IOS-GIT-001 | Branch и remote указывают на один commit | PASS | `codex/ios-native-current-parity-20260822`, `a5a3320...`. |
-| IOS-BE-001 | Backend auth/migration contract | PASS CI | Run `32563222674`: 63 tests, Ruff PASS, одна Alembic head `20260822_0019`; full local backend 313 passed/6 skipped. |
-| IOS-BLD-001 | XcodeGen | PASS CI | Run `32563222674`. |
-| IOS-BLD-002 | Debug build | PASS CI | Run `32563222674`. |
+| IOS-GIT-001 | Immutable release branch resolves to deployed code | PASS | `prod/release-finance-ios-current-parity-20260823-db7ebdd`, `db7ebdd...`. |
+| IOS-BE-001 | Backend auth/migration contract | PASS CI | Run `32603535573`; final local backend `317 passed, 6 skipped`; one Alembic head `20260822_0019`. |
+| IOS-BLD-001 | XcodeGen | PASS CI | Run `32603535573`. |
+| IOS-BLD-002 | Debug build | PASS CI | Run `32603535573`. |
 | IOS-BLD-003 | Release build с безопасным placeholder HTTPS | PASS CI | Доказывает компиляцию, не production connectivity. |
-| IOS-TST-001 | XCTest | PASS CI | `77/77`. |
+| IOS-BLD-004 | PersonalSideloadHTTP build и fail-closed plist/signing/archive policy | PASS CI | Run `32603535573`; отдельный bundle id, exact ATS allowlist, manual Apple Development, no archive/export. |
+| IOS-TST-001 | XCTest | PASS CI | Normal model `87/0`; personal transport `10/0`. |
 | IOS-UI-001 | Launch UI smoke | PASS CI | `1/1`. |
 | IOS-DEV-001 | Apple signing/provisioning и установка на физический iPhone | NOT RUN/BLOCKED | Требуются Mac, Xcode, Team/provisioning и устройство. |
-| IOS-NET-001 | Trusted production HTTPS и ATS smoke | NOT RUN/BLOCKED | Production endpoint остаётся plain HTTP; ATS нельзя ослаблять. |
+| IOS-NET-001 | Ordinary Release trusted HTTPS | NOT RUN/BLOCKED | Ordinary Release не получил HTTP exception. |
+| IOS-NET-002 | Personal owner/family HTTP sideload policy | PASS CI / DEVICE NOT RUN | Exact `http://45.10.110.42/finance-api`; waiver до 2026-11-22; plaintext residual risk accepted. |
+| IOS-PROD-001 | Production deploy, backup, migrations and smoke | PASS | Run `32604838031`; DB `0017 -> 0018 -> 0019`; health/auth/read-only smoke PASS. |
 
 ## Traceability новой функциональности
 
@@ -127,15 +134,17 @@ or contract is covered by XCTest.
 
 | Stream | Commit/run | Result |
 | --- | --- | --- |
-| Backend `ios_bearer` contract | Final `a5a3320`; full backend 313 passed/6 skipped; CI auth/migration 63 | PASS; migrations through `20260822_0019` not deployed to production |
+| Backend `ios_bearer` contract | Final `db7ebdd`; full backend 317 passed/6 skipped | PASS; production migrated through `20260822_0019` |
 | Secure iOS session | `13bff57b`; run `32554005096` | Debug/Release PASS, XCTest 57/57, UI 1/1 |
 | SwiftData/account sync | `640f93e2`; run `32554343934` | Debug/Release PASS, XCTest 52/52, UI 1/1 |
 | UX parity | `ba195e2`; run `32552813248` | PASS |
-| Final approved branch | `a5a3320`; run `32563222674` | Backend CI 63, iOS 77/77, UI 1/1, Debug/Release PASS; reviewer APPROVE |
+| Final approved branch | `db7ebdd`; run `32603535573` | Debug/Release/Personal PASS; normal 87/0, personal 10/0; reviewer APPROVE, no P0-P3 |
+| CI-only package proof | `db7ebdd`; run `32604090062` | Both packages/common gate PASS; host/deploy skipped |
+| Production release | `db7ebdd`; run `32604838031` | Deploy/backup/migrations/smoke PASS; no rollback |
 
-Worker runs prove their isolated branches. Final code/CI status is based only on
-run `32563222674` at exact SHA
-`a5a332093587fc2467383686cca089877d03f90e`.
+Worker runs prove their isolated branches. Final code/CI status is based on run
+`32603535573` at exact SHA
+`db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`.
 
 ## Closed reviewer findings
 
@@ -155,17 +164,20 @@ finding remains open in the reviewed scope.
 ## External blockers and non-results
 
 - **Physical iPhone/signing: NOT RUN/BLOCKED.** There is no signed IPA or device evidence. Mac, Xcode, Apple Team/provisioning and a connected iPhone are required.
-- **Production HTTPS/ATS: NOT RUN/BLOCKED.** Current production API is plain HTTP. Release must use an owned trusted HTTPS endpoint. `NSAllowsArbitraryLoads` or broad production ATS exceptions are prohibited.
-- **Production backend deploy: PREFLIGHT BLOCKED / NOT PERFORMED.** GitHub
-  environment `production` reports `protection_rules=[]`; local branch
-  `prod/release-finance-ios-backend-20260822` is not pushed; production DB is
-  still `20260618_0017`; health is HTTP 200; HTTPS/FQDN is absent. Migration
-  head `20260822_0019` is CI-tested but not proven on live production DB.
+- **Ordinary production HTTPS/ATS: NOT RUN/BLOCKED.** The normal Release still
+  requires trusted HTTPS and has no broad ATS exception. This does not block the
+  separately isolated PersonalSideloadHTTP path covered by the owner waiver.
+- **Production backend/PWA deploy: PASS.** Release branch
+  `prod/release-finance-ios-current-parity-20260823-db7ebdd`, run `32604838031`.
+  DB is `20260822_0019`; backup and authenticated sanitized smoke are recorded
+  in the release evidence. This supersedes the historical 2026-08-22 preflight
+  blocker and old `0017` current-state statement.
 - **Physical OCR and end-to-end offline convergence: NOT RUN.** Automated boundaries pass; device behavior must still be evidenced.
 
 ## Definition of Done for final device release
 
-1. Trusted production HTTPS health, login, refresh and API smoke PASS without ATS exceptions.
+1. Confirm the PersonalSideloadHTTP owner waiver is still valid, or use a trusted
+   HTTPS endpoint with the ordinary Release.
 2. App signed and installed through Xcode on the target iPhone.
 3. Force-quit session restore, offline logout and A -> B isolation PASS on device.
 4. Full manual operation/category/payment/investment/month flows PASS.
