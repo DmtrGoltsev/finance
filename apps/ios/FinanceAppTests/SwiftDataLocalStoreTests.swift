@@ -4,6 +4,18 @@ import XCTest
 @testable import FinanceApp
 
 final class SwiftDataLocalStoreTests: XCTestCase {
+    func testSyncJSONValueKeepsIntegerAndBooleanTypesDistinct() throws {
+        struct Probe: Encodable {
+            let version: Int
+            let enabled: Bool
+        }
+
+        let payload = try SyncJSONValue.object(from: Probe(version: 1, enabled: true))
+
+        XCTAssertEqual(payload["version"], .int(1))
+        XCTAssertEqual(payload["enabled"], .bool(true))
+    }
+
     func testAccountIsolationSurvivesLogoutAThenOpenB() async throws {
         let context = try makeContext("account-isolation")
         defer { context.cleanup() }

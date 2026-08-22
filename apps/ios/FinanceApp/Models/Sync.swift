@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 let financeSyncSchemaVersion = 1
 
@@ -89,14 +90,17 @@ enum SyncJSONValue: Codable, Equatable, Sendable {
             return .null
         case let value as String:
             return .string(value)
-        case let value as Bool:
-            return .bool(value)
-        case let value as Int:
-            return .int(value)
-        case let value as Double:
-            return .double(value)
         case let value as NSNumber:
-            return .double(value.doubleValue)
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                return .bool(value.boolValue)
+            }
+            let number = value.doubleValue
+            if number.rounded(.towardZero) == number,
+               number >= Double(Int.min),
+               number <= Double(Int.max) {
+                return .int(value.intValue)
+            }
+            return .double(number)
         case let value as [String: Any]:
             return .object(value.mapValues(Self.fromAny))
         case let value as [Any]:
