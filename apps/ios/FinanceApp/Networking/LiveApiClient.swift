@@ -1,31 +1,46 @@
 import Foundation
 
-final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
+final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unchecked Sendable {
     private let builder: RequestBuilder
     private let session: URLSession
     private let tokenStore: CSRFTokenStore
+    private let sessionCoordinator: SessionCoordinator
 
-    convenience init(environment: AppEnvironment, tokenStore: CSRFTokenStore = .shared) {
-        self.init(baseURL: environment.apiBaseURL.absoluteString, tokenStore: tokenStore)
+    convenience init(
+        environment: AppEnvironment,
+        tokenStore: CSRFTokenStore = .shared,
+        sessionCoordinator: SessionCoordinator? = nil
+    ) {
+        self.init(
+            baseURL: environment.apiBaseURL.absoluteString,
+            tokenStore: tokenStore,
+            sessionCoordinator: sessionCoordinator
+        )
     }
 
     init(
         baseURL: String = AppEnvironment.current.apiBaseURL.absoluteString,
         tokenStore: CSRFTokenStore = .shared,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        sessionCoordinator: SessionCoordinator? = nil
     ) {
         self.builder = RequestBuilder(baseURL: baseURL)
         self.tokenStore = tokenStore
+        self.sessionCoordinator = sessionCoordinator ?? SessionCoordinator()
         if let session {
             self.session = session
-            return
+        } else {
+            let config = URLSessionConfiguration.default
+            config.httpCookieStorage = nil
+            config.httpShouldSetCookies = false
+            config.timeoutIntervalForRequest = 15
+            config.timeoutIntervalForResource = 30
+            self.session = URLSession(configuration: config)
         }
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.httpShouldSetCookies = true
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 30
-        self.session = URLSession(configuration: config)
+
+        // Native iOS never falls back to the legacy PWA cookie session.
+        tokenStore.clear()
+        clearSessionCookies()
     }
 
     // MARK: - Auth
@@ -34,54 +49,32 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         let body = try ResponseParser.encode([
             "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
             "password": password,
-            "transport": "pwa_cookie"
+            "transport": "ios_bearer",
+            "deviceName": "iPhone"
         ] as [String: String])
         let url = builder.makeURL(path: "/api/v1/sessions")
-        var request = builder.makeURLRequest(url: url, method: "POST", body: body)
-        request.setValue(nil, forHTTPHeaderField: "X-CSRF-Token")
-        let data = try await performRequest(request, expectedCodes: [200, 201])
-        let loginResp: LoginResponse = try ResponseParser.unwrapDataEnvelope(LoginResponse.self, from: data)
-        if let token = loginResp.csrfToken {
-            tokenStore.saveCsrfToken(token)
-        }
-        if let expiry = loginResp.expiresAt {
-            tokenStore.saveSessionExpiry(expiry)
-        }
-        let actor = loginResp.actor
-        return SessionStatus(
-            isAuthenticated: actor != nil,
-            displayName: actor.map { "Пользователь \($0.userId.prefix(8))" },
-            householdId: nil,
-            userId: actor?.userId,
-            sessionId: actor?.sessionId
-        )
+        let request = builder.makeURLRequest(url: url, method: "POST", body: body)
+        let data = try await performPublicRequest(request, expectedCodes: [200, 201])
+        let response = try ResponseParser.decode(BearerSessionResponse.self, from: data)
+        return try await sessionCoordinator.install(response)
     }
 
     func register(email: String, password: String, displayName: String?) async throws -> RegistrationResult {
         var body: [String: String] = [
             "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
             "password": password,
-            "transport": "pwa_cookie"
+            "transport": "ios_bearer",
+            "deviceName": "iPhone"
         ]
         if let dn = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !dn.isEmpty {
             body["displayName"] = dn
         }
         let bodyData = try ResponseParser.encode(body)
         let url = builder.makeURL(path: "/api/v1/users")
-        var request = builder.makeURLRequest(url: url, method: "POST", body: bodyData)
-        request.setValue(nil, forHTTPHeaderField: "X-CSRF-Token")
-        let data = try await performRequest(request, expectedCodes: [200, 201, 202])
-        if let loginResp = try? ResponseParser.unwrapDataEnvelope(LoginResponse.self, from: data),
-           loginResp.csrfToken != nil, loginResp.actor != nil {
-            tokenStore.saveCsrfToken(loginResp.csrfToken!)
-            if let expiry = loginResp.expiresAt { tokenStore.saveSessionExpiry(expiry) }
-            return .authenticated(SessionStatus(
-                isAuthenticated: true,
-                displayName: nil,
-                householdId: nil,
-                userId: loginResp.actor?.userId,
-                sessionId: loginResp.actor?.sessionId
-            ))
+        let request = builder.makeURLRequest(url: url, method: "POST", body: bodyData)
+        let data = try await performPublicRequest(request, expectedCodes: [200, 201, 202])
+        if let response = try? ResponseParser.decode(BearerSessionResponse.self, from: data) {
+            return .authenticated(try await sessionCoordinator.install(response))
         }
         return .accepted(message: "Заявка на регистрацию принята")
     }
@@ -94,11 +87,23 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     func logout() async -> LogoutResult {
+        let logoutAuthorization = await sessionCoordinator.invalidateForLogout()
+        tokenStore.clear()
+        clearSessionCookies()
+
+        guard let accessToken = logoutAuthorization.accessToken else {
+            return LogoutResult(
+                remoteSessionRevoked: true,
+                localCredentialsCleared: logoutAuthorization.localCredentialsCleared
+            )
+        }
+
         let url = builder.makeURL(path: "/api/v1/sessions/current")
-        let request = builder.makeURLRequest(url: url, method: "DELETE", csrfToken: csrfToken)
+        var request = builder.makeURLRequest(url: url, method: "DELETE")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         let remoteSessionRevoked: Bool
         do {
-            _ = try await performRequestRaw(request, expectedCodes: [200, 204])
+            _ = try await performPublicRequest(request, expectedCodes: [200, 204])
             remoteSessionRevoked = true
         } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
             // A 401 on logout proves the server session is already gone.
@@ -106,12 +111,22 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
         } catch {
             remoteSessionRevoked = false
         }
-        tokenStore.clear()
-        clearSessionCookies()
         return LogoutResult(
             remoteSessionRevoked: remoteSessionRevoked,
-            localCredentialsCleared: true
+            localCredentialsCleared: logoutAuthorization.localCredentialsCleared
         )
+    }
+
+    func currentSessionLease() async throws -> SessionLease {
+        try await sessionCoordinator.currentLease()
+    }
+
+    func validateSessionLease(_ lease: SessionLease) async throws {
+        try await sessionCoordinator.validate(lease)
+    }
+
+    func persistedSessionStatus() async -> SessionStatus? {
+        await sessionCoordinator.restoredSessionStatus()
     }
 
     // MARK: - Accounts
@@ -905,36 +920,107 @@ final class LiveApiClient: FinanceApiClient, @unchecked Sendable {
     }
 
     private func performRequest(_ request: URLRequest, expectedCodes: [Int] = [200]) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw FinanceApiError.networkError(URLError(.badServerResponse))
-        }
-        if let authService = http.allHeaderFields["X-CSRF-Token"] as? String {
-            tokenStore.saveCsrfToken(authService)
-        }
-        if expectedCodes.contains(http.statusCode) {
-            return data
-        }
-        if SessionHTTPStatusPolicy.invalidatesIdentity(statusCode: http.statusCode) {
-            tokenStore.clear()
-            throw FinanceApiError.unauthorized
-        }
-        throw ResponseParser.parseError(from: data, statusCode: http.statusCode)
+        try await performAuthorizedRequest(request, expectedCodes: expectedCodes)
     }
 
     private func performRequestRaw(_ request: URLRequest, expectedCodes: [Int] = [200]) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw FinanceApiError.networkError(URLError(.badServerResponse))
+        try await performAuthorizedRequest(request, expectedCodes: expectedCodes)
+    }
+
+    private func performAuthorizedRequest(
+        _ request: URLRequest,
+        expectedCodes: [Int]
+    ) async throws -> Data {
+        let originalSession = try await sessionCoordinator.authorizedSession()
+        let firstRequest = applyingBearer(originalSession.accessToken, to: request)
+        let firstResponse = try await send(firstRequest)
+
+        if firstResponse.http.statusCode != 401 {
+            try await sessionCoordinator.validate(originalSession.lease)
+            return try parse(
+                firstResponse,
+                expectedCodes: expectedCodes
+            )
         }
-        if expectedCodes.contains(http.statusCode) {
-            return data
+
+        let refreshedSession = try await sessionCoordinator.refresh(
+            afterUnauthorized: originalSession.lease
+        ) { [builder, session] refreshToken in
+            let url = builder.makeURL(path: "/api/v1/sessions/refresh")
+            let body = try ResponseParser.encode(["refreshToken": refreshToken])
+            let request = builder.makeURLRequest(url: url, method: "POST", body: body)
+            let (data, http) = try await Self.send(request, using: session)
+            guard http.statusCode == 200 else {
+                throw ResponseParser.parseError(from: data, statusCode: http.statusCode)
+            }
+            return try ResponseParser.decode(BearerSessionResponse.self, from: data)
         }
-        if SessionHTTPStatusPolicy.invalidatesIdentity(statusCode: http.statusCode) {
-            tokenStore.clear()
+
+        let retryRequest = applyingBearer(refreshedSession.accessToken, to: request)
+        let retryResponse = try await send(retryRequest)
+        try await sessionCoordinator.validate(refreshedSession.lease)
+        if retryResponse.http.statusCode == 401 {
+            await sessionCoordinator.invalidateIfCurrent(refreshedSession.lease)
             throw FinanceApiError.unauthorized
         }
-        throw ResponseParser.parseError(from: data, statusCode: http.statusCode)
+        return try parse(retryResponse, expectedCodes: expectedCodes)
+    }
+
+    private func performPublicRequest(
+        _ request: URLRequest,
+        expectedCodes: [Int]
+    ) async throws -> Data {
+        let response = try await send(request)
+        if response.http.statusCode == 401 {
+            throw FinanceApiError.unauthorized
+        }
+        return try parse(response, expectedCodes: expectedCodes)
+    }
+
+    private func parse(
+        _ response: (data: Data, http: HTTPURLResponse),
+        expectedCodes: [Int]
+    ) throws -> Data {
+        if expectedCodes.contains(response.http.statusCode) {
+            return response.data
+        }
+        if response.http.statusCode == 401 {
+            throw FinanceApiError.unauthorized
+        }
+        throw ResponseParser.parseError(
+            from: response.data,
+            statusCode: response.http.statusCode
+        )
+    }
+
+    private func applyingBearer(_ accessToken: String, to request: URLRequest) -> URLRequest {
+        var request = request
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(nil, forHTTPHeaderField: FinanceConstants.csrfHeaderName)
+        return request
+    }
+
+    private func send(_ request: URLRequest) async throws -> (data: Data, http: HTTPURLResponse) {
+        try await Self.send(request, using: session)
+    }
+
+    private static func send(
+        _ request: URLRequest,
+        using session: URLSession
+    ) async throws -> (data: Data, http: HTTPURLResponse) {
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw FinanceApiError.networkError(URLError(.badServerResponse))
+            }
+            return (data, http)
+        } catch let error as FinanceApiError {
+            throw error
+        } catch let error as URLError {
+            throw FinanceApiError.networkError(error)
+        } catch {
+            throw FinanceApiError.unknown(error)
+        }
     }
 
     private func parseSessionStatus(from data: Data) throws -> SessionStatus {

@@ -165,7 +165,7 @@ final class SyncReliabilityTests: XCTestCase {
         XCTAssertEqual(snapshot.syncState.cursor, 2)
     }
 
-    func testLive403MapsToForbiddenWithoutClearingIdentityOrCredentials() async throws {
+    func testLegacyCookieStateCannotAuthorizeNativeClientAndIsCleared() async throws {
         let context = try makeContext("live-403")
         defer { context.cleanup() }
         let pendingMutation = try await enqueuePersonalCategory(in: context)
@@ -192,16 +192,12 @@ final class SyncReliabilityTests: XCTestCase {
                 baseURL: "https://finance-tests.invalid",
                 session: makeStubbedSession()
             ).sessionStatus()
-            XCTFail("Expected HTTP 403")
-        } catch let error as FinanceApiError {
-            guard case .httpError(let statusCode, _) = error else {
-                return XCTFail("Expected httpError, got \(error)")
-            }
-            XCTAssertEqual(statusCode, 403)
-            XCTAssertFalse(error.isAuthError)
+            XCTFail("Expected unauthorized without iOS bearer credentials")
+        } catch {
+            XCTAssertTrue(SessionRestorePolicy.isConfirmedInvalidIdentity(error))
         }
-        XCTAssertEqual(tokenStore.csrfToken, "csrf-kept")
-        XCTAssertEqual(tokenStore.sessionExpiry, "2026-08-22T10:00:00.000Z")
+        XCTAssertNil(tokenStore.csrfToken)
+        XCTAssertNil(tokenStore.sessionExpiry)
         XCTAssertEqual(identityStore.load()?.userId, "user-a")
         let snapshot = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
         XCTAssertEqual(snapshot.pendingMutations.map(\.clientMutationId), [pendingMutation.clientMutationId])
