@@ -501,7 +501,7 @@ final class SyncReliabilityTests: XCTestCase {
         let account = TestFixtures.account(id: "card", payment: true)
         let category = TestFixtures.category(id: "food")
         let original = TestFixtures.transaction(
-            id: "transaction-a",
+            id: "00000000-0000-4000-8000-000000000041",
             accountId: account.id,
             categoryId: category.id,
             amount: "100",
