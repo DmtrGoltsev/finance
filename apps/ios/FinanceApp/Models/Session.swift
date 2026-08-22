@@ -83,13 +83,60 @@ struct LogoutResult: Equatable, Sendable {
     let localCredentialsCleared: Bool
 }
 
-struct ActorContext: Codable, Sendable {
+struct SessionLease: Equatable, Sendable {
+    let userId: String
+    let sessionId: String
+    let generation: UInt64
+}
+
+struct BearerSessionCredentials: Codable, Equatable, Sendable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresAt: String
+    let userId: String
+    let sessionId: String
+}
+
+struct AuthorizedSession: Equatable, Sendable {
+    let accessToken: String
+    let lease: SessionLease
+}
+
+struct LogoutAuthorization: Equatable, Sendable {
+    let accessToken: String?
+    let localCredentialsCleared: Bool
+}
+
+enum SessionCoordinatorError: Error, Equatable, LocalizedError, Sendable {
+    case unavailable
+    case superseded
+    case identityMismatch
+    case invalidBearerResponse
+    case credentialPersistenceFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Сессия отсутствует. Войдите снова."
+        case .superseded:
+            return "Сессия была изменена во время запроса."
+        case .identityMismatch:
+            return "Сервер вернул данные другой сессии."
+        case .invalidBearerResponse:
+            return "Сервер вернул некорректные данные мобильной сессии."
+        case .credentialPersistenceFailed:
+            return "Не удалось безопасно сохранить мобильную сессию."
+        }
+    }
+}
+
+struct ActorContext: Codable, Equatable, Sendable {
     let userId: String
     let sessionId: String?
     let memberships: [ActorMembership]
 }
 
-struct ActorMembership: Codable, Sendable {
+struct ActorMembership: Codable, Equatable, Sendable {
     let householdId: String
     let status: String
 }
@@ -104,6 +151,46 @@ struct LoginResponse: Codable, Sendable {
     let csrfToken: String?
     let expiresAt: String?
     let actor: ActorContext?
+}
+
+struct BearerSessionResponse: Codable, Equatable, Sendable {
+    let tokenType: String
+    let accessToken: String
+    let refreshToken: String
+    let expiresAt: String
+    let actor: ActorContext
+
+    var credentials: BearerSessionCredentials? {
+        let accessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let refreshToken = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userId = actor.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionId = actor.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
+              !accessToken.isEmpty,
+              !refreshToken.isEmpty,
+              !expiresAt.isEmpty,
+              !userId.isEmpty,
+              !sessionId.isEmpty else {
+            return nil
+        }
+        return BearerSessionCredentials(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            userId: userId,
+            sessionId: sessionId
+        )
+    }
+
+    var sessionStatus: SessionStatus {
+        SessionStatus(
+            isAuthenticated: true,
+            displayName: "Пользователь \(actor.userId.prefix(8))",
+            householdId: nil,
+            userId: actor.userId,
+            sessionId: actor.sessionId
+        )
+    }
 }
 
 struct CategoryMappingResult: Codable, Sendable {

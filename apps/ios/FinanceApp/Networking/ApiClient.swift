@@ -1,5 +1,11 @@
 import Foundation
 
+protocol FinanceSessionLeaseProvider: Sendable {
+    func currentSessionLease() async throws -> SessionLease
+    func validateSessionLease(_ lease: SessionLease) async throws
+    func persistedSessionStatus() async -> SessionStatus?
+}
+
 protocol FinanceSyncApiClient: Sendable {
     func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse
     func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse
