@@ -219,6 +219,11 @@ jobs:
           RELEASE_APP_PLIST: ${{ runner.temp }}/FinanceApp-Release/Build/Products/Release-iphoneos/FinanceApp.app/Info.plist
           PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceAppPersonalHTTP.app/Info.plist
         run: |
+          set -o pipefail
+          cp "$DEBUG_APP_PLIST" ci-artifacts/FinanceApp-Debug.plist
+          cp "$RELEASE_APP_PLIST" ci-artifacts/FinanceApp-Release.plist
+          cp "$PERSONAL_APP_PLIST" ci-artifacts/FinanceAppPersonalHTTP.plist
+
           python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
           import os
           import plistlib
@@ -237,8 +242,8 @@ jobs:
           for name, plist in (("Debug", debug), ("Release", release)):
               assert personal_ip not in repr(plist), f"{name} contains the personal IP"
               assert personal_url not in repr(plist), f"{name} contains the personal HTTP URL"
-              assert plist.get("CFBundleIdentifier") == "com.codex.FinanceApp"
-              assert plist.get("CFBundleDisplayName") == "Finance"
+              assert plist.get("CFBundleIdentifier") == "com.codex.FinanceApp", (name, plist.get("CFBundleIdentifier"))
+              assert plist.get("CFBundleDisplayName") == "Finance", (name, plist.get("CFBundleDisplayName"))
 
           assert debug.get("FINANCE_API_BASE_URL") == "http://127.0.0.1:8000/finance-api"
           assert release.get("FINANCE_API_BASE_URL") == "https://finance.invalid/finance-api"
