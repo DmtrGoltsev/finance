@@ -150,7 +150,7 @@ final class SwiftDataLocalStoreTests: XCTestCase {
         scope: LocalStoreScope,
         store: SwiftDataFinanceLocalStore
     ) async throws -> PendingMutation {
-        let category = TestFixtures.category(id: "category-pending")
+        let category = TestFixtures.category(id: UUID().uuidString)
         let optimisticPayload = try SyncJSONValue.object(from: category)
         let evidence = try PersonalSyncOwnershipValidator.evidence(
             scope: scope,
@@ -160,7 +160,6 @@ final class SwiftDataLocalStoreTests: XCTestCase {
             snapshot: .empty(scope: scope, deviceId: "device")
         )
         let mutation = PendingMutation(
-            clientMutationId: "mutation-pending",
             deviceId: "device",
             scope: scope,
             entityType: .categories,
