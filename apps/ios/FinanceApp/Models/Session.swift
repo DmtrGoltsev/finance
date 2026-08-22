@@ -94,6 +94,8 @@ struct BearerSessionCredentials: Codable, Equatable, Sendable {
     let accessToken: String
     let refreshToken: String
     let expiresAt: String
+    let accessExpiresAt: String?
+    let refreshExpiresAt: String?
     let userId: String
     let sessionId: String
     let revokeToken: String?
@@ -103,6 +105,8 @@ struct BearerSessionCredentials: Codable, Equatable, Sendable {
         accessToken: String,
         refreshToken: String,
         expiresAt: String,
+        accessExpiresAt: String? = nil,
+        refreshExpiresAt: String? = nil,
         userId: String,
         sessionId: String,
         revokeToken: String? = nil,
@@ -111,6 +115,8 @@ struct BearerSessionCredentials: Codable, Equatable, Sendable {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresAt = expiresAt
+        self.accessExpiresAt = accessExpiresAt
+        self.refreshExpiresAt = refreshExpiresAt
         self.userId = userId
         self.sessionId = sessionId
         self.revokeToken = revokeToken
@@ -122,6 +128,8 @@ struct BearerSessionCredentials: Codable, Equatable, Sendable {
             accessToken: accessToken,
             refreshToken: refreshToken,
             expiresAt: expiresAt,
+            accessExpiresAt: accessExpiresAt,
+            refreshExpiresAt: refreshExpiresAt,
             userId: userId,
             sessionId: sessionId,
             revokeToken: revokeToken,
@@ -194,6 +202,8 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
     let refreshToken: String
     let revokeToken: String?
     let expiresAt: String
+    let accessExpiresAt: String?
+    let refreshExpiresAt: String?
     let actor: ActorContext
 
     init(
@@ -202,6 +212,8 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
         refreshToken: String,
         revokeToken: String? = nil,
         expiresAt: String,
+        accessExpiresAt: String? = nil,
+        refreshExpiresAt: String? = nil,
         actor: ActorContext
     ) {
         self.tokenType = tokenType
@@ -209,6 +221,8 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
         self.refreshToken = refreshToken
         self.revokeToken = revokeToken
         self.expiresAt = expiresAt
+        self.accessExpiresAt = accessExpiresAt
+        self.refreshExpiresAt = refreshExpiresAt
         self.actor = actor
     }
 
@@ -229,6 +243,8 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
             accessToken: accessToken,
             refreshToken: refreshToken,
             expiresAt: expiresAt,
+            accessExpiresAt: accessExpiresAt ?? expiresAt,
+            refreshExpiresAt: refreshExpiresAt ?? expiresAt,
             userId: userId,
             sessionId: sessionId,
             revokeToken: revokeToken,

@@ -358,7 +358,8 @@ def test_sqlalchemy_refresh_rotation_atomically_extends_expiry(
         old_refresh_token_hash=old_refresh_hash,
         new_session_token_hash=new_access_hash,
         new_refresh_token_hash=new_refresh_hash,
-        rotated_at=BASE_TIME + timedelta(hours=1),
+        rotated_at=BASE_TIME + timedelta(minutes=59),
+        new_access_expires_at=BASE_TIME + timedelta(hours=2),
         new_expires_at=renewed_expiry,
     )
     stale = store.rotate_bearer_session_tokens(
@@ -372,10 +373,64 @@ def test_sqlalchemy_refresh_rotation_atomically_extends_expiry(
     )
 
     assert rotated is not None
+    assert rotated.access_expires_at == BASE_TIME + timedelta(hours=2)
     assert rotated.expires_at == renewed_expiry
     assert stale is None
     with session_factory() as session:
         row = session.get(Session, UUID(record.id))
     assert row is not None
     assert row.expires_at.replace(tzinfo=UTC) == renewed_expiry
+    assert row.access_expires_at is not None
+    assert row.access_expires_at.replace(tzinfo=UTC) == BASE_TIME + timedelta(hours=2)
     assert row.refresh_token_hash == new_refresh_hash
+
+
+def test_db_expired_access_refreshes_and_retries_with_same_session(
+    db_auth_runtime: DbAuthRuntime,
+) -> None:
+    with _recreated_client() as client:
+        login = client.post(
+            "/api/v1/sessions",
+            json={
+                "email": "owner@example.test",
+                "password": db_auth_runtime.password,
+                "transport": "ios_bearer",
+            },
+        )
+    assert login.status_code == 201
+    login_body = login.json()
+
+    settings = get_settings()
+    factory = sync_session_factory_for_settings(settings)
+    with factory.begin() as session:
+        row = session.get(Session, UUID(login_body["actor"]["sessionId"]))
+        assert row is not None
+        row.access_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        row.expires_at = datetime.now(UTC) + timedelta(hours=1)
+        row.updated_at = datetime.now(UTC)
+
+    with _recreated_client() as client:
+        expired = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {login_body['accessToken']}"},
+        )
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": login_body["refreshToken"]},
+        )
+        refreshed_body = refreshed.json()
+        retry = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {refreshed_body['accessToken']}"},
+        )
+        replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": login_body["refreshToken"]},
+        )
+
+    assert expired.status_code == 401
+    assert refreshed.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json()["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert refreshed_body["accessExpiresAt"] < refreshed_body["refreshExpiresAt"]
+    assert replay.status_code == 401

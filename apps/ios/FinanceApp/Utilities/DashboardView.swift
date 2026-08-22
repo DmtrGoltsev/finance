@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+private let canonicalUncategorizedCategoryId = "uncategorized"
+
 extension FinanceDashboard {
     struct DashboardViewData {
         let visibleAccounts: [Account]
@@ -227,7 +229,8 @@ extension FinanceDashboard {
         case .income:
             return MonthlyPendingOverlay(income: amount, expenses: .zero, investments: .zero, expensesByCategory: [:], investmentsByAssetCategory: [:])
         case .expense:
-            let byCategory = transaction.categoryId.map { [$0: amount] } ?? [:]
+            let categoryId = transaction.categoryId ?? canonicalUncategorizedCategoryId
+            let byCategory = [categoryId: amount]
             return MonthlyPendingOverlay(income: .zero, expenses: amount, investments: .zero, expensesByCategory: byCategory, investmentsByAssetCategory: [:])
         case .transfer:
             let investment = transaction.transferStatus != .voided &&
@@ -278,7 +281,7 @@ private extension FinanceDashboard {
         let expenseTxs = transactions.filter { $0.transactionType == .expense && $0.currency == currency }
         var map: [String: Decimal] = [:]
         for tx in expenseTxs {
-            guard let catId = tx.categoryId else { continue }
+            let catId = tx.categoryId ?? canonicalUncategorizedCategoryId
             let amount = Decimal(string: tx.amount) ?? .zero
             map[catId, default: .zero] += amount
         }

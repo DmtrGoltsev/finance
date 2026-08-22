@@ -445,6 +445,9 @@ actor FileBackedFinanceLocalStore: FinanceLocalStore {
                 if let serverVersion = result.serverVersion {
                     snapshot.pendingMutations[successorIndex].baseVersion = serverVersion
                 }
+                if result.entityType == .transactions, let appliedPayload = result.data {
+                    snapshot.pendingMutations[successorIndex].analyticsBasePayload = appliedPayload
+                }
                 snapshot.pendingMutations[successorIndex].updatedAt = Date().ISO8601Format()
             }
         }

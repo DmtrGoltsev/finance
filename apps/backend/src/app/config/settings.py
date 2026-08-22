@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,16 +50,30 @@ class Settings(BaseSettings):
         default=None,
         description="Deployment secret for HMAC hashing opaque auth tokens.",
     )
-    auth_bearer_session_ttl_seconds: int = Field(
-        default=43_200,
+    auth_bearer_access_ttl_seconds: int = Field(
+        default=900,
         ge=300,
-        description="Opaque bearer access/session token lifetime in seconds.",
+        description="Short-lived opaque mobile bearer access-token lifetime in seconds.",
+    )
+    auth_bearer_refresh_ttl_seconds: int = Field(
+        default=2_592_000,
+        ge=3_600,
+        description="Sliding mobile refresh/session lifetime in seconds.",
+    )
+    auth_bearer_session_ttl_seconds: int | None = Field(
+        default=None,
+        ge=3_600,
+        description=(
+            "Deprecated deployment alias for mobile refresh/session lifetime. "
+            "When set, it overrides auth_bearer_refresh_ttl_seconds."
+        ),
     )
     auth_pwa_session_ttl_seconds: int = Field(
         default=43_200,
         ge=300,
         description="Opaque PWA cookie session token lifetime in seconds.",
     )
+
     auth_session_cookie_name: str = Field(
         default="__Host-finance_session",
         min_length=1,
@@ -121,6 +135,16 @@ class Settings(BaseSettings):
         ge=1,
         description="Per-image Tesseract OCR timeout in seconds.",
     )
+
+    @property
+    def effective_auth_bearer_refresh_ttl_seconds(self) -> int:
+        return self.auth_bearer_session_ttl_seconds or self.auth_bearer_refresh_ttl_seconds
+
+    @model_validator(mode="after")
+    def validate_bearer_token_lifetimes(self) -> "Settings":
+        if self.auth_bearer_access_ttl_seconds >= self.effective_auth_bearer_refresh_ttl_seconds:
+            raise ValueError("mobile bearer access lifetime must be shorter than refresh lifetime")
+        return self
 
 
 @lru_cache

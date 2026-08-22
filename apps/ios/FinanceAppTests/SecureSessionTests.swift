@@ -163,6 +163,8 @@ final class SecureSessionTests: XCTestCase {
         XCTAssertEqual(state.authorizations.filter { $0 == "Bearer access-a" }.count, 2)
         XCTAssertEqual(state.authorizations.filter { $0 == "Bearer access-b" }.count, 2)
         XCTAssertEqual(store.credentials?.refreshToken, "refresh-b")
+        XCTAssertEqual(store.credentials?.accessExpiresAt, "2026-08-22T10:15:00.000Z")
+        XCTAssertEqual(store.credentials?.refreshExpiresAt, "2026-09-21T10:00:00.000Z")
         XCTAssertEqual(store.saveCalls, 4)
     }
 
@@ -399,7 +401,9 @@ final class SecureSessionTests: XCTestCase {
             accessToken: access,
             refreshToken: refresh,
             revokeToken: revoke,
-            expiresAt: "2026-08-22T11:00:00.000Z",
+            expiresAt: "2026-09-21T10:00:00.000Z",
+            accessExpiresAt: "2026-08-22T10:15:00.000Z",
+            refreshExpiresAt: "2026-09-21T10:00:00.000Z",
             actor: ActorContext(userId: userId, sessionId: sessionId, memberships: [])
         )
     }
@@ -411,7 +415,7 @@ final class SecureSessionTests: XCTestCase {
         userId: String = "user-a",
         sessionId: String = "session-a"
     ) -> String {
-        #"{"tokenType":"Bearer","accessToken":"\#(access)","refreshToken":"\#(refresh)","revokeToken":"\#(revoke)","expiresAt":"2026-08-22T11:00:00.000Z","actor":{"userId":"\#(userId)","sessionId":"\#(sessionId)","memberships":[]}}"#
+        #"{"tokenType":"Bearer","accessToken":"\#(access)","refreshToken":"\#(refresh)","revokeToken":"\#(revoke)","expiresAt":"2026-09-21T10:00:00.000Z","accessExpiresAt":"2026-08-22T10:15:00.000Z","refreshExpiresAt":"2026-09-21T10:00:00.000Z","actor":{"userId":"\#(userId)","sessionId":"\#(sessionId)","memberships":[]}}"#
     }
 
     private func currentSessionJSON() -> String {

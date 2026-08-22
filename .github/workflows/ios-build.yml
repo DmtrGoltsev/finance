@@ -10,6 +10,7 @@ on:
       - "apps/backend/src/app/db/model_enums.py"
       - "apps/backend/tests/auth/**"
       - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "apps/backend/tests/db/test_bearer_access_expiry_migration.py"
       - "api/openapi/openapi.yaml"
       - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
@@ -20,6 +21,7 @@ on:
       - "apps/backend/src/app/db/model_enums.py"
       - "apps/backend/tests/auth/**"
       - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "apps/backend/tests/db/test_bearer_access_expiry_migration.py"
       - "api/openapi/openapi.yaml"
       - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
@@ -52,7 +54,9 @@ jobs:
           tests/api/test_accounts_categories_route_contract.py
           tests/api/test_openapi_mvp_manual_first_contract.py
           tests/db/test_ios_bearer_sessions_migration.py
+          tests/db/test_bearer_access_expiry_migration.py
           ../../db/migrations/versions/20260822_0018_ios_bearer_sessions.py
+          ../../db/migrations/versions/20260822_0019_bearer_access_expiry.py
 
       - name: Test iOS bearer auth and migration contract
         working-directory: apps/backend
@@ -65,6 +69,7 @@ jobs:
           tests/api/test_accounts_categories_route_contract.py
           tests/api/test_openapi_mvp_manual_first_contract.py
           tests/db/test_ios_bearer_sessions_migration.py
+          tests/db/test_bearer_access_expiry_migration.py
 
       - name: Verify single Alembic head
         working-directory: apps/backend
@@ -72,7 +77,7 @@ jobs:
           set -o pipefail
           python -m alembic -c alembic.ini heads | tee /tmp/alembic-heads.txt
           test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
-          grep -q '^20260822_0018 ' /tmp/alembic-heads.txt
+          grep -q '^20260822_0019 ' /tmp/alembic-heads.txt
 
   build-and-test:
     runs-on: macos-15

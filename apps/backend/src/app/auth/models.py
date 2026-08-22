@@ -60,6 +60,7 @@ class SessionStorageRecord:
     session_version: int
     issued_at: datetime
     expires_at: datetime
+    access_expires_at: datetime | None = None
     status: TokenRecordStatus = TokenRecordStatus.ACTIVE
     session_token_hash: str | None = None
     refresh_token_hash: str | None = None

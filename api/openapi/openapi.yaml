@@ -2019,7 +2019,7 @@ components:
     BearerSessionResponse:
       type: object
       additionalProperties: false
-      required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, actor]
+      required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, accessExpiresAt, refreshExpiresAt, actor]
       properties:
         tokenType:
           type: string
@@ -2035,6 +2035,13 @@ components:
           minLength: 1
         expiresAt:
           $ref: '#/components/schemas/DateTime'
+          description: Backward-compatible alias for refreshExpiresAt.
+        accessExpiresAt:
+          $ref: '#/components/schemas/DateTime'
+          description: Expiry of the current short-lived bearer access token.
+        refreshExpiresAt:
+          $ref: '#/components/schemas/DateTime'
+          description: Sliding expiry of the rotating refresh token and mobile session.
         actor:
           $ref: '#/components/schemas/ActorContextDto'
     SessionRevokeRequest:

@@ -131,6 +131,7 @@ class SqlAlchemySessionTokenStore:
                 csrf_token_hash=record.csrf_token_hash,
                 status=record.status.value,
                 last_seen_at=None,
+                access_expires_at=_optional_aware_utc(record.access_expires_at),
                 expires_at=_aware_utc(record.expires_at),
                 revoked_at=_optional_aware_utc(record.revoked_at),
                 revoked_reason=None,
@@ -185,6 +186,7 @@ class SqlAlchemySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_access_expires_at: datetime | None = None,
         new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         parsed_session_id = _optional_uuid(session_id)
@@ -198,6 +200,9 @@ class SqlAlchemySessionTokenStore:
             return None
 
         rotated_at_utc = _aware_utc(rotated_at)
+        new_access_expires_at_utc = (
+            _aware_utc(new_access_expires_at) if new_access_expires_at is not None else None
+        )
         new_expires_at_utc = _aware_utc(new_expires_at) if new_expires_at is not None else None
         updated_values = {
             "session_token_hash": new_session_token_hash,
@@ -207,6 +212,8 @@ class SqlAlchemySessionTokenStore:
         }
         if new_expires_at_utc is not None:
             updated_values["expires_at"] = new_expires_at_utc
+        if new_access_expires_at_utc is not None:
+            updated_values["access_expires_at"] = new_access_expires_at_utc
         with self.session_factory.begin() as session:
             result = session.execute(
                 update(SessionModel)
@@ -216,6 +223,7 @@ class SqlAlchemySessionTokenStore:
                     SessionModel.transport == SESSION_TRANSPORT_BY_CLIENT_KIND[client_kind],
                     SessionModel.status == TokenRecordStatus.ACTIVE.value,
                     SessionModel.revoked_at.is_(None),
+                    SessionModel.expires_at > rotated_at_utc,
                 )
                 .values(**updated_values)
             )
@@ -235,6 +243,7 @@ class SqlAlchemySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_access_expires_at: datetime | None = None,
         new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         """Backward-compatible wrapper retained for existing Android callers."""
@@ -246,6 +255,7 @@ class SqlAlchemySessionTokenStore:
             new_session_token_hash=new_session_token_hash,
             new_refresh_token_hash=new_refresh_token_hash,
             rotated_at=rotated_at,
+            new_access_expires_at=new_access_expires_at,
             new_expires_at=new_expires_at,
         )
 
@@ -316,6 +326,7 @@ def _session_record_from_model(model: SessionModel) -> SessionStorageRecord:
         session_version=int(model.session_version),
         issued_at=_aware_utc(model.created_at),
         expires_at=_aware_utc(model.expires_at),
+        access_expires_at=_optional_aware_utc(model.access_expires_at),
         status=TokenRecordStatus(model.status),
         session_token_hash=model.session_token_hash,
         refresh_token_hash=model.refresh_token_hash,

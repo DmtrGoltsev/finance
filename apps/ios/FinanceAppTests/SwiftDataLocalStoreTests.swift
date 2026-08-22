@@ -136,6 +136,76 @@ final class SwiftDataLocalStoreTests: XCTestCase {
         XCTAssertTrue(restored.pendingMutations.isEmpty)
     }
 
+    func testAppliedTransactionRebasesDependentDeleteAnalyticsBaseline() async throws {
+        let context = try makeContext("transaction-rebase")
+        defer { context.cleanup() }
+        let scope = LocalStoreScope(viewerUserId: "user-a")
+        let original = TestFixtures.transaction(
+            id: "00000000-0000-4000-8000-000000000051",
+            accountId: "card",
+            categoryId: "food",
+            amount: "100",
+            transactionDate: "2026-08-10",
+            version: 7
+        )
+        let applied = TestFixtures.transaction(
+            id: original.id,
+            accountId: "card",
+            categoryId: "food",
+            amount: "175",
+            transactionDate: "2026-09-10",
+            version: 8
+        )
+        let originalPayload = try SyncJSONValue.object(from: original)
+        let appliedPayload = try SyncJSONValue.object(from: applied)
+        let update = PendingMutation(
+            clientMutationId: "edit-transaction",
+            deviceId: "device",
+            scope: scope,
+            entityType: .transactions,
+            entityId: original.id,
+            operation: .update,
+            baseVersion: 7,
+            analyticsBasePayload: originalPayload
+        )
+        let delete = PendingMutation(
+            clientMutationId: "delete-transaction",
+            deviceId: "device",
+            scope: scope,
+            entityType: .transactions,
+            entityId: original.id,
+            operation: .delete,
+            baseVersion: 7,
+            analyticsBasePayload: originalPayload
+        )
+        var snapshot = FinanceLocalSnapshot.empty(scope: scope, deviceId: "device")
+        snapshot.pendingMutations = [update, delete]
+        try await context.store.saveSnapshot(snapshot)
+
+        try await context.store.markApplied(
+            scope: scope,
+            deviceId: "device",
+            result: SyncMutationResult(
+                clientMutationId: update.clientMutationId,
+                entityType: .transactions,
+                entityId: original.id,
+                operation: .update,
+                status: .applied,
+                serverVersion: 8,
+                changeSeq: 20,
+                errorCode: nil,
+                message: nil,
+                data: appliedPayload
+            )
+        )
+
+        let restored = try await context.store.loadSnapshot(scope: scope, deviceId: "device")
+        let successor = try XCTUnwrap(restored.pendingMutations.first)
+        XCTAssertEqual(successor.clientMutationId, delete.clientMutationId)
+        XCTAssertEqual(successor.baseVersion, 8)
+        XCTAssertEqual(successor.analyticsBasePayload, appliedPayload)
+    }
+
     private func makeContext(_ name: String) throws -> SwiftDataTestContext {
         let schema = Schema([SwiftDataFinanceSnapshotRecord.self])
         let configuration = ModelConfiguration(

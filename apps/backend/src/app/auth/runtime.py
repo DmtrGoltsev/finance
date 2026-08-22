@@ -175,7 +175,8 @@ class AuthSessionService:
     password_hasher: PasswordHashingBackend | None = None
     token_hashing: TokenHashingBackend | None = None
     token_factory: RandomTokenFactory = field(default_factory=RandomTokenFactory)
-    bearer_session_ttl: timedelta = timedelta(hours=12)
+    bearer_access_ttl: timedelta = timedelta(minutes=15)
+    bearer_session_ttl: timedelta = timedelta(days=30)
     pwa_session_ttl: timedelta = timedelta(hours=12)
 
     @property
@@ -290,6 +291,7 @@ class AuthSessionService:
             client_kind=record.client_kind,
             request_id=request_id,
             now=now,
+            require_active_access=True,
         )
 
     def actor_for_cookie_session(
@@ -410,11 +412,13 @@ class AuthSessionService:
         client_kind: AuthClientKind,
         request_id: str | None,
         now: datetime | None = None,
+        require_active_access: bool = False,
     ) -> Actor | None:
         if (
             record is None
             or record.client_kind != client_kind
             or not session_record_is_active(record, now=now)
+            or (require_active_access and not bearer_access_record_is_active(record, now=now))
         ):
             return None
 
@@ -510,6 +514,7 @@ class AuthSessionService:
             token_factory=self.token_factory,
             hashing_backend=self.token_hashing,
             pwa_session_ttl=self.pwa_session_ttl,
+            bearer_access_ttl=self.bearer_access_ttl,
             android_refresh_ttl=self.bearer_session_ttl,
         )
 
@@ -535,6 +540,17 @@ def session_record_is_active(
         and record.revoked_at is None
         and record.expires_at > current_time
     )
+
+
+def bearer_access_record_is_active(
+    record: SessionStorageRecord,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if record.client_kind not in BEARER_CLIENT_KINDS or record.access_expires_at is None:
+        return False
+    current_time = now or datetime.now(UTC)
+    return record.access_expires_at > current_time
 
 
 def actor_from_user_record(
@@ -583,6 +599,7 @@ def get_auth_session_service() -> AuthSessionService:
         sessions=SqlAlchemySessionTokenStore(session_factory),
         password_hasher=password_hasher,
         token_hashing=token_hashing,
-        bearer_session_ttl=timedelta(seconds=settings.auth_bearer_session_ttl_seconds),
+        bearer_access_ttl=timedelta(seconds=settings.auth_bearer_access_ttl_seconds),
+        bearer_session_ttl=timedelta(seconds=settings.effective_auth_bearer_refresh_ttl_seconds),
         pwa_session_ttl=timedelta(seconds=settings.auth_pwa_session_ttl_seconds),
     )

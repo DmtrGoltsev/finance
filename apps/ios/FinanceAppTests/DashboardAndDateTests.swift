@@ -192,6 +192,46 @@ final class DashboardAndDateTests: XCTestCase {
         XCTAssertEqual(synchronized.pendingMonthlyOverlay(yearMonth: "2026-09", currency: .RUB).investments, .zero)
     }
 
+    func testUncategorizedExpenseEditAndDeleteUseCanonicalBreakdownKey() throws {
+        let editedOriginal = TestFixtures.transaction(
+            id: "uncategorized-edit", accountId: "card", categoryId: nil, amount: "100",
+            transactionDate: "2026-08-03", version: 3
+        )
+        let editedCurrent = TestFixtures.transaction(
+            id: "uncategorized-edit", accountId: "card", categoryId: nil, amount: "150",
+            transactionDate: "2026-09-04", version: 3
+        )
+        let deleted = TestFixtures.transaction(
+            id: "uncategorized-delete", accountId: "card", categoryId: nil, amount: "40",
+            transactionDate: "2026-08-05", version: 2
+        )
+        let dashboard = FinanceDashboard(
+            accounts: [TestFixtures.account(id: "card", payment: true)],
+            categories: [],
+            transactions: [editedCurrent],
+            pendingMutations: [
+                pendingMutation(
+                    entityId: editedCurrent.id,
+                    operation: .update,
+                    base: try SyncJSONValue.object(from: editedOriginal)
+                ),
+                pendingMutation(
+                    entityId: deleted.id,
+                    operation: .delete,
+                    base: try SyncJSONValue.object(from: deleted)
+                ),
+            ]
+        )
+
+        let august = dashboard.pendingMonthlyOverlay(yearMonth: "2026-08", currency: .RUB)
+        let september = dashboard.pendingMonthlyOverlay(yearMonth: "2026-09", currency: .RUB)
+
+        XCTAssertEqual(august.expenses, Decimal(-140))
+        XCTAssertEqual(august.expensesByCategory["uncategorized"], Decimal(-140))
+        XCTAssertEqual(september.expenses, Decimal(150))
+        XCTAssertEqual(september.expensesByCategory["uncategorized"], Decimal(150))
+    }
+
     func testTopExpenseCategoriesAreAggregatedAndSortedDescending() {
         let dashboard = FinanceDashboard(
             accounts: [TestFixtures.account(id: "personal", payment: true)],

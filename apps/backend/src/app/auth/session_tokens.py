@@ -50,6 +50,7 @@ class SessionTokenStore(Protocol):
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_access_expires_at: datetime | None = None,
         new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         """Replace mobile bearer hashes when the old refresh hash still matches."""
@@ -111,15 +112,18 @@ class InMemorySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_access_expires_at: datetime | None = None,
         new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
-        del rotated_at
         record = self._records.get(session_id)
         if (
             record is None
             or client_kind not in (AuthClientKind.ANDROID, AuthClientKind.IOS)
             or record.client_kind != client_kind
             or record.refresh_token_hash != old_refresh_token_hash
+            or record.status != TokenRecordStatus.ACTIVE
+            or record.revoked_at is not None
+            or record.expires_at <= rotated_at
         ):
             return None
 
@@ -127,6 +131,7 @@ class InMemorySessionTokenStore:
             record,
             session_token_hash=new_session_token_hash,
             refresh_token_hash=new_refresh_token_hash,
+            access_expires_at=new_access_expires_at or record.access_expires_at,
             expires_at=new_expires_at or record.expires_at,
         )
         self._records[session_id] = updated
@@ -161,6 +166,7 @@ class SessionTokenService:
     token_factory: RandomTokenFactory | None = None
     hashing_backend: TokenHashingBackend | None = None
     pwa_session_ttl: timedelta = timedelta(hours=12)
+    bearer_access_ttl: timedelta = timedelta(minutes=15)
     android_refresh_ttl: timedelta = timedelta(days=30)
 
     def pwa_contract(self) -> PwaCookieCsrfContract:
@@ -237,6 +243,7 @@ class SessionTokenService:
             session_version=session_version,
             issued_at=now,
             expires_at=now + self.android_refresh_ttl,
+            access_expires_at=now + self.bearer_access_ttl,
             session_token_hash=hashing_backend.hash_token(access_token),
             refresh_token_hash=hashing_backend.hash_token(refresh_token),
         )
@@ -288,6 +295,7 @@ class SessionTokenService:
             new_session_token_hash=hashing_backend.hash_token(access_token),
             new_refresh_token_hash=hashing_backend.hash_token(refresh_token),
             rotated_at=current_time,
+            new_access_expires_at=current_time + self.bearer_access_ttl,
             new_expires_at=current_time + self.android_refresh_ttl,
         )
         if updated is None:

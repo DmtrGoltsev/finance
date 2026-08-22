@@ -351,7 +351,8 @@ def test_openapi_mobile_session_revoke_proof_is_explicit_and_backward_compatible
     contract = _contract_text()
 
     required_fields = (
-        "required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, actor]"
+        "required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, "
+        "accessExpiresAt, refreshExpiresAt, actor]"
     )
     assert required_fields in bearer_response
     assert "revokeToken" in bearer_response

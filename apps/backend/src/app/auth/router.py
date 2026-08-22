@@ -126,6 +126,8 @@ class BearerSessionResponse(BaseModel):
     refreshToken: str
     revokeToken: str
     expiresAt: str
+    accessExpiresAt: str
+    refreshExpiresAt: str
     actor: ActorContextResponse
 
 
@@ -367,11 +369,16 @@ def bearer_session_response(
     actor: Actor,
     status_code: int,
 ) -> JSONResponse:
+    access_expires_at = issued.storage_record.access_expires_at
+    if access_expires_at is None:
+        raise RuntimeError("mobile bearer session is missing access expiry")
     response_body = BearerSessionResponse(
         accessToken=issued.session_token or "",
         refreshToken=issued.refresh_token or "",
         revokeToken=issued.revoke_token or "",
         expiresAt=issued.storage_record.expires_at.isoformat(),
+        accessExpiresAt=access_expires_at.isoformat(),
+        refreshExpiresAt=issued.storage_record.expires_at.isoformat(),
         actor=actor_context_response(actor),
     )
     return JSONResponse(

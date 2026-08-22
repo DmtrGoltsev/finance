@@ -576,6 +576,80 @@ final class SyncReliabilityTests: XCTestCase {
             XCTAssertEqual(baseline.amount, original.amount)
             XCTAssertEqual(baseline.transactionDate, original.transactionDate)
         }
+
+        let applied = TestFixtures.transaction(
+            id: original.id,
+            accountId: account.id,
+            categoryId: category.id,
+            amount: edited.amount,
+            transactionDate: edited.transactionDate,
+            version: 8
+        )
+        try await context.store.markApplied(
+            scope: context.scope,
+            deviceId: context.deviceId,
+            result: SyncMutationResult(
+                clientMutationId: queued[0].clientMutationId,
+                entityType: .transactions,
+                entityId: original.id,
+                operation: .update,
+                status: .applied,
+                serverVersion: 8,
+                changeSeq: 20,
+                errorCode: nil,
+                message: nil,
+                data: try SyncJSONValue.object(from: applied)
+            )
+        )
+        let partial = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+        let pendingDelete = try XCTUnwrap(partial.pendingMutations.first)
+        XCTAssertEqual(pendingDelete.operation, .delete)
+        XCTAssertEqual(pendingDelete.baseVersion, 8)
+        let rebasedData = try SyncJSONValue.data(from: try XCTUnwrap(pendingDelete.analyticsBasePayload))
+        let rebased = try JSONDecoder().decode(Transaction.self, from: rebasedData)
+        XCTAssertEqual(rebased.amount, applied.amount)
+        XCTAssertEqual(rebased.transactionDate, applied.transactionDate)
+
+        let partiallySyncedDashboard = FinanceDashboard(
+            accounts: [account],
+            categories: [category],
+            transactions: [],
+            pendingMutations: partial.pendingMutations
+        )
+        XCTAssertEqual(
+            partiallySyncedDashboard.pendingMonthlyOverlay(yearMonth: "2026-08", currency: .RUB).expenses,
+            .zero
+        )
+        XCTAssertEqual(
+            partiallySyncedDashboard.pendingMonthlyOverlay(yearMonth: "2026-09", currency: .RUB).expenses,
+            Decimal(-175)
+        )
+
+        try await context.store.markApplied(
+            scope: context.scope,
+            deviceId: context.deviceId,
+            result: SyncMutationResult(
+                clientMutationId: pendingDelete.clientMutationId,
+                entityType: .transactions,
+                entityId: original.id,
+                operation: .delete,
+                status: .applied,
+                serverVersion: 9,
+                changeSeq: 21,
+                errorCode: nil,
+                message: nil,
+                data: nil
+            )
+        )
+        let completed = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+        XCTAssertTrue(completed.pendingMutations.isEmpty)
+        let completedDashboard = FinanceDashboard(
+            accounts: [account], categories: [category], transactions: [], pendingMutations: completed.pendingMutations
+        )
+        XCTAssertEqual(
+            completedDashboard.pendingMonthlyOverlay(yearMonth: "2026-09", currency: .RUB).expenses,
+            .zero
+        )
     }
 
     private func makeContext(_ name: String) throws -> TestContext {
