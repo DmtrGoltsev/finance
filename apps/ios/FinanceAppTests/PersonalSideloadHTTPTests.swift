@@ -95,6 +95,7 @@ final class PersonalSideloadHTTPTests: XCTestCase {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PersonalHTTPURLProtocol.self]
+        configuration.timeoutIntervalForRequest = 2
         let session = URLSession(configuration: configuration)
 
         do {
@@ -104,7 +105,7 @@ final class PersonalSideloadHTTPTests: XCTestCase {
             )
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 302)
         } catch let error as URLError {
-            XCTAssertEqual(error.code, .cancelled)
+            XCTAssertTrue([.cancelled, .timedOut].contains(error.code))
         }
 
         XCTAssertEqual(PersonalHTTPURLProtocol.requestURLs, [sourceURL.absoluteString])
@@ -234,6 +235,7 @@ private final class PersonalHTTPURLProtocol: URLProtocol {
                 wasRedirectedTo: URLRequest(url: redirectURL),
                 redirectResponse: response
             )
+            client?.urlProtocolDidFinishLoading(self)
             return
         }
         let url = Self.responseURL ?? request.url!

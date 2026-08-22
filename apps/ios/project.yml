@@ -100,6 +100,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codex.FinanceApp.PersonalSideloadTests
         GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Finance Personal HTTP.app/Finance Personal HTTP"
+        BUNDLE_LOADER: "$(TEST_HOST)"
       configs:
         PersonalSideloadHTTP:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PERSONAL_SIDELOAD_HTTP"
