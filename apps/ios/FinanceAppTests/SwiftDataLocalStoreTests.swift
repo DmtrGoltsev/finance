@@ -134,6 +134,7 @@ final class SwiftDataLocalStoreTests: XCTestCase {
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("FinanceApp-SwiftData-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let suiteName = "FinanceApp.SwiftData.\(name).\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.set("device", forKey: "device-id")
