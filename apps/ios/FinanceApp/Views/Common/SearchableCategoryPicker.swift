@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum CategoryPickerSearch {
+    static let openAccessibilityIdentifier = "categoryPicker.open"
+    static let verticalListAccessibilityIdentifier = "categoryPicker.verticalList"
+    static let usesModalVerticalList = true
+
+    static func filtered(_ categories: [Category], query: String) -> [Category] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sorted = categories.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        guard !trimmed.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+    }
+}
+
 struct SearchableCategoryPickerButton: View {
     let title: String
     let emptyMessage: String
@@ -60,6 +75,7 @@ struct SearchableCategoryPickerControl: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isDisabled)
+                .accessibilityIdentifier(CategoryPickerSearch.openAccessibilityIdentifier)
                 .sheet(isPresented: $isPresented) {
                     SearchableCategoryPickerSheet(
                         categories: categories,
@@ -84,12 +100,7 @@ private struct SearchableCategoryPickerSheet: View {
     @State private var query = ""
 
     private var filteredCategories: [Category] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sorted = categories.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-        guard !trimmed.isEmpty else { return sorted }
-        return sorted.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        CategoryPickerSearch.filtered(categories, query: query)
     }
 
     var body: some View {
@@ -110,6 +121,7 @@ private struct SearchableCategoryPickerSheet: View {
                 }
                 .buttonStyle(.plain)
             }
+            .accessibilityIdentifier(CategoryPickerSearch.verticalListAccessibilityIdentifier)
             .searchable(text: $query, prompt: "Поиск категории")
             .navigationTitle("Категория")
             .navigationBarTitleDisplayMode(.inline)

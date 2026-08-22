@@ -13,9 +13,13 @@ struct AssetsTab: View {
     @State private var addAccountCategoryId: String?
     @State private var message: String?
     @State private var isLoading = false
+    @State private var paymentAccountOverrides: [String: Bool] = [:]
 
     private var visibleAccounts: [Account] {
-        dashboard?.personalAccounts ?? []
+        (dashboard?.personalAccounts ?? []).map { account in
+            guard let override = paymentAccountOverrides[account.id] else { return account }
+            return accountWithPaymentOverride(account, isPaymentAccount: override)
+        }
     }
 
     private var visibleGroups: [AssetCategoryGroup] {
@@ -275,6 +279,10 @@ struct AssetsTab: View {
     }
 
     private func updateAccount(_ id: String, _ request: AccountUpdateRequest) async {
+        let previousPaymentValue = visibleAccounts.first(where: { $0.id == id })?.isPaymentAccount
+        if let isPaymentAccount = request.isPaymentAccount {
+            paymentAccountOverrides[id] = isPaymentAccount
+        }
         do {
             _ = try await apiClient.updateAccount(accountId: id, request)
             await onRefresh()
@@ -299,9 +307,15 @@ struct AssetsTab: View {
                 await onLocalSnapshotChanged()
                 message = "Счёт обновлён локально, ожидает синхронизации"
             } catch {
+                if let previousPaymentValue {
+                    paymentAccountOverrides[id] = previousPaymentValue
+                }
                 message = error.localizedDescription
             }
         } catch {
+            if let previousPaymentValue {
+                paymentAccountOverrides[id] = previousPaymentValue
+            }
             message = error.localizedDescription
         }
     }
@@ -478,6 +492,24 @@ struct AssetsTab: View {
             isPaymentAccount: request.isPaymentAccount ?? current.isPaymentAccount,
             status: current.status,
             version: current.version
+        )
+    }
+
+    private func accountWithPaymentOverride(_ account: Account, isPaymentAccount: Bool) -> Account {
+        Account(
+            id: account.id,
+            name: account.name,
+            accountType: account.accountType,
+            ownershipType: .personal,
+            ownerUserId: account.ownerUserId,
+            householdId: nil,
+            assetCategoryId: account.assetCategoryId,
+            currency: account.currency,
+            initialBalance: account.initialBalance,
+            currentBalance: account.currentBalance,
+            isPaymentAccount: isPaymentAccount,
+            status: account.status,
+            version: account.version
         )
     }
 }

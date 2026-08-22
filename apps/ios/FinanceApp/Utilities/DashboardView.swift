@@ -36,6 +36,20 @@ extension FinanceDashboard {
         let title: String
     }
 
+    struct MonthlyPendingOverlay {
+        let income: Decimal
+        let expenses: Decimal
+        let investments: Decimal
+        let expensesByCategory: [String: Decimal]
+
+        static let empty = MonthlyPendingOverlay(
+            income: .zero,
+            expenses: .zero,
+            investments: .zero,
+            expensesByCategory: [:]
+        )
+    }
+
     func personalView() -> DashboardViewData {
         let visibleAccounts = personalAccounts
         let visibleTransactions = personalTransactions
@@ -103,17 +117,60 @@ extension FinanceDashboard {
     }
 
     func sortDateKey(_ transaction: Transaction) -> String {
-        transaction.transactionDate ?? String(transaction.occurredAt.prefix(10))
+        transaction.effectiveTransactionDate
     }
 
     func transactionComesBefore(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
-        let lhsDate = sortDateKey(lhs)
-        let rhsDate = sortDateKey(rhs)
-        if lhsDate != rhsDate { return lhsDate > rhsDate }
-        let lhsVersion = lhs.version ?? 0
-        let rhsVersion = rhs.version ?? 0
-        if lhsVersion != rhsVersion { return lhsVersion > rhsVersion }
-        return lhs.id > rhs.id
+        Transaction.newestFirst(lhs, rhs)
+    }
+
+    func pendingMonthlyOverlay(yearMonth: String, currency: CurrencyCode) -> MonthlyPendingOverlay {
+        let accountIds = Set(personalAccounts.map(\.id))
+        let investmentCategoryIds = Set(assetCategories.filter {
+            $0.scopeType == .personal && $0.recordStatus == .active && $0.isInvestment
+        }.map(\.id))
+        let investmentAccountIds = Set(personalAccounts.compactMap { account in
+            account.assetCategoryId.map(investmentCategoryIds.contains) == true ? account.id : nil
+        })
+        let pending = personalTransactions.filter {
+            $0.isPendingLocalMutation &&
+            $0.currency == currency &&
+            $0.belongs(toYearMonth: yearMonth)
+        }
+
+        var income = Decimal.zero
+        var expenses = Decimal.zero
+        var investments = Decimal.zero
+        var expensesByCategory: [String: Decimal] = [:]
+
+        for transaction in pending {
+            let amount = Decimal(string: transaction.amount) ?? .zero
+            switch transaction.transactionType {
+            case .income:
+                income += amount
+            case .expense:
+                expenses += amount
+                if let categoryId = transaction.categoryId {
+                    expensesByCategory[categoryId, default: .zero] += amount
+                }
+            case .transfer:
+                if transaction.transferStatus != .voided,
+                   let destinationId = transaction.counterpartyAccountId,
+                   accountIds.contains(transaction.accountId),
+                   investmentAccountIds.contains(destinationId) {
+                    investments += amount
+                }
+            default:
+                break
+            }
+        }
+
+        return MonthlyPendingOverlay(
+            income: income,
+            expenses: expenses,
+            investments: investments,
+            expensesByCategory: expensesByCategory
+        )
     }
 }
 

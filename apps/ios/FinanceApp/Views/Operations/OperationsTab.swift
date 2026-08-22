@@ -6,6 +6,8 @@ struct OperationsTab: View {
     let onDeleteTransaction: (String) -> Void
     let apiClient: FinanceApiClient
     let onRefreshDashboard: @Sendable () async -> Void
+    // Integration hook for a root-owned online-or-queue update path.
+    let onUpdateTransaction: ((String, TransactionUpdateRequest) async throws -> Void)?
 
     @State private var captureDrafts: [CaptureDraft] = []
     @State private var screenshotAggregateDrafts: [ScreenshotAggregateDraftUi] = []
@@ -14,10 +16,25 @@ struct OperationsTab: View {
     @State private var screenshotOcrStatus: String?
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
+    @State private var editingTransaction: Transaction?
+
+    init(
+        dashboard: FinanceDashboard?,
+        onDeleteTransaction: @escaping (String) -> Void,
+        apiClient: FinanceApiClient,
+        onRefreshDashboard: @escaping @Sendable () async -> Void,
+        onUpdateTransaction: ((String, TransactionUpdateRequest) async throws -> Void)? = nil
+    ) {
+        self.dashboard = dashboard
+        self.onDeleteTransaction = onDeleteTransaction
+        self.apiClient = apiClient
+        self.onRefreshDashboard = onRefreshDashboard
+        self.onUpdateTransaction = onUpdateTransaction
+    }
 
     var body: some View {
         let items = (dashboard?.personalTransactions ?? [])
-            .sorted { lhs, rhs in dashboard?.transactionComesBefore(lhs, rhs) ?? (lhs.id > rhs.id) }
+            .sorted(by: Transaction.newestFirst)
 
         ScrollView {
             VStack(spacing: 12) {
@@ -52,7 +69,8 @@ struct OperationsTab: View {
                         TransactionRow(
                             transaction: transaction,
                             categories: dashboard?.categories ?? [],
-                            onDelete: { onDeleteTransaction(transaction.id) }
+                            onDelete: { onDeleteTransaction(transaction.id) },
+                            onEdit: { editingTransaction = transaction }
                         )
                     }
                 }
@@ -73,6 +91,21 @@ struct OperationsTab: View {
         }
         .refreshable {
             await loadCaptureDrafts()
+        }
+        .sheet(item: $editingTransaction) { transaction in
+            TransactionEditSheet(
+                transaction: transaction,
+                dashboard: dashboard,
+                onSave: { request in
+                    if let onUpdateTransaction {
+                        try await onUpdateTransaction(transaction.id, request)
+                    } else {
+                        _ = try await apiClient.updateTransaction(transactionId: transaction.id, request)
+                    }
+                    await onRefreshDashboard()
+                },
+                onDismiss: { editingTransaction = nil }
+            )
         }
     }
 

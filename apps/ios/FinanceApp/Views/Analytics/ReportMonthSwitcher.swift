@@ -4,7 +4,7 @@ struct ReportMonthSwitcher: View {
     @Binding var yearMonth: String
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Button {
                 yearMonth = shiftMonth(yearMonth, by: -1)
             } label: {
@@ -16,6 +16,7 @@ struct ReportMonthSwitcher: View {
             Text(DateHelpers.displayMonth(yearMonth))
                 .font(.headline)
                 .foregroundColor(.primary)
+                .frame(minWidth: 132)
 
             Button {
                 yearMonth = shiftMonth(yearMonth, by: 1)
@@ -25,10 +26,26 @@ struct ReportMonthSwitcher: View {
                     .foregroundColor(FinanceColors.primary)
             }
             .disabled(yearMonth >= DateHelpers.currentYearMonth())
+
+            if Self.showsCurrentMonthButton(yearMonth) {
+                Button {
+                    yearMonth = DateHelpers.currentYearMonth()
+                } label: {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.body)
+                        .foregroundColor(FinanceColors.primary)
+                }
+                .accessibilityLabel("Текущий месяц")
+                .accessibilityIdentifier("analytics.currentMonth")
+            }
         }
     }
 
-    private func shiftMonth(_ ym: String, by delta: Int) -> String {
+    static func showsCurrentMonthButton(_ yearMonth: String) -> Bool {
+        yearMonth != DateHelpers.currentYearMonth()
+    }
+
+    func shiftMonth(_ ym: String, by delta: Int) -> String {
         let parts = ym.split(separator: "-")
         guard parts.count == 2,
               let year = Int(parts[0]),
