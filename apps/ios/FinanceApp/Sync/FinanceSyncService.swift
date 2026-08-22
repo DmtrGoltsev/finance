@@ -24,19 +24,28 @@ struct LocalSyncOverview: Codable, Sendable {
     static let empty = LocalSyncOverview(pendingCount: 0, issues: [], lastError: nil)
 }
 
+private struct SyncExecutionContext: Sendable {
+    let cancellationGeneration: UInt64
+    let lease: SyncSessionLease?
+}
+
 actor FinanceSyncService {
     private let apiClient: any FinanceSyncApiClient
     private let localStore: FinanceLocalStore
     private let deviceIdentityStore: DeviceIdentityStore
+    private let leaseProvider: (any SyncSessionLeaseProvider)?
+    private var cancellationGeneration: UInt64 = 0
 
     init(
         apiClient: any FinanceSyncApiClient,
         localStore: FinanceLocalStore = FileBackedFinanceLocalStore(),
-        deviceIdentityStore: DeviceIdentityStore = .shared
+        deviceIdentityStore: DeviceIdentityStore = .shared,
+        leaseProvider: (any SyncSessionLeaseProvider)? = nil
     ) {
         self.apiClient = apiClient
         self.localStore = localStore
         self.deviceIdentityStore = deviceIdentityStore
+        self.leaseProvider = leaseProvider
     }
 
     func syncNow(scope: LocalStoreScope, limit: Int = 100, entityTypes: [SyncEntityType]? = nil) async -> ManualSyncResult {
@@ -45,15 +54,40 @@ actor FinanceSyncService {
         var pulledChanges = 0
         var hasMore = false
         var requiresReauthentication = false
+        let execution: SyncExecutionContext
 
         do {
-            pushSummary = try await pushPending(scope: scope, deviceId: deviceId, limit: limit)
-            let pull = try await pullAndApply(scope: scope, deviceId: deviceId, limit: limit, entityTypes: entityTypes)
+            execution = try await beginExecution(scope: scope)
+        } catch {
+            return ManualSyncResult(
+                push: pushSummary,
+                pulledChanges: 0,
+                hasMorePullChanges: false,
+                issues: (try? await localStore.issues(scope: scope, deviceId: deviceId)) ?? [],
+                requiresReauthentication: isMissingLease(error)
+            )
+        }
+
+        do {
+            pushSummary = try await pushPending(
+                scope: scope,
+                deviceId: deviceId,
+                limit: limit,
+                execution: execution
+            )
+            let pull = try await pullAndApply(
+                scope: scope,
+                deviceId: deviceId,
+                limit: limit,
+                entityTypes: entityTypes,
+                execution: execution
+            )
             pulledChanges = pull.changes.count
             hasMore = pull.hasMore
         } catch {
-            requiresReauthentication = SessionRestorePolicy.isConfirmedInvalidIdentity(error)
-            if !requiresReauthentication {
+            let staleExecution = isStaleExecution(error)
+            requiresReauthentication = !staleExecution && SessionRestorePolicy.isConfirmedInvalidIdentity(error)
+            if !requiresReauthentication && !staleExecution {
                 let pending = (try? await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)) ?? []
                 for mutation in pending {
                     try? await localStore.markFailed(
@@ -76,6 +110,10 @@ actor FinanceSyncService {
             issues: issues,
             requiresReauthentication: requiresReauthentication
         )
+    }
+
+    func cancelActiveSync() {
+        cancellationGeneration &+= 1
     }
 
     func retryIssue(scope: LocalStoreScope, issueId: String) async throws {
@@ -314,11 +352,18 @@ actor FinanceSyncService {
         )
     }
 
-    private func pushPending(scope: LocalStoreScope, deviceId: String, limit: Int) async throws -> SyncPushSummary {
+    private func pushPending(
+        scope: LocalStoreScope,
+        deviceId: String,
+        limit: Int,
+        execution: SyncExecutionContext
+    ) async throws -> SyncPushSummary {
+        try await assertCurrent(execution, scope: scope)
         let snapshot = try await localStore.loadSnapshot(scope: scope, deviceId: deviceId)
         let loadedPending = try await localStore.pendingMutations(scope: scope, deviceId: deviceId, limit: limit)
         let blocked = loadedPending.filter { !Self.isPersonalOnlyMutation($0, snapshot: snapshot) }
         for mutation in blocked {
+            try await assertCurrent(execution, scope: scope)
             try await localStore.markRejected(
                 scope: scope,
                 deviceId: deviceId,
@@ -330,12 +375,14 @@ actor FinanceSyncService {
         guard !pending.isEmpty else { return SyncPushSummary(rejected: blocked.count) }
 
         for mutation in pending {
+            try await assertCurrent(execution, scope: scope)
             try await localStore.recordAttempt(scope: scope, deviceId: deviceId, mutationId: mutation.clientMutationId)
         }
 
         let response = try await apiClient.syncPush(
             SyncPushRequest(deviceId: deviceId, mutations: pending.map { $0.toSyncMutationRequest() })
         )
+        try await assertCurrent(execution, scope: scope)
 
         var summary = SyncPushSummary(pushed: pending.count, rejected: blocked.count)
         guard response.deviceId == deviceId else {
@@ -354,6 +401,7 @@ actor FinanceSyncService {
         let mutationsById = Dictionary(uniqueKeysWithValues: pending.map { ($0.clientMutationId, $0) })
         var handledMutationIds = Set<String>()
         for result in response.results {
+            try await assertCurrent(execution, scope: scope)
             guard let mutation = mutationsById[result.clientMutationId] else { continue }
             guard handledMutationIds.insert(result.clientMutationId).inserted,
                   SyncPushResultCorrelation.matches(result, mutation: mutation) else {
@@ -379,6 +427,7 @@ actor FinanceSyncService {
         }
 
         for missing in pending where !handledMutationIds.contains(missing.clientMutationId) {
+            try await assertCurrent(execution, scope: scope)
             try await localStore.markFailed(
                 scope: scope,
                 deviceId: deviceId,
@@ -395,8 +444,10 @@ actor FinanceSyncService {
         scope: LocalStoreScope,
         deviceId: String,
         limit: Int,
-        entityTypes: [SyncEntityType]?
+        entityTypes: [SyncEntityType]?,
+        execution: SyncExecutionContext
     ) async throws -> SyncPullResponse {
+        try await assertCurrent(execution, scope: scope)
         let snapshot = try await localStore.loadSnapshot(scope: scope, deviceId: deviceId)
         let response = try await apiClient.syncPull(
             SyncPullRequest(
@@ -406,6 +457,7 @@ actor FinanceSyncService {
                 entityTypes: entityTypes
             )
         )
+        try await assertCurrent(execution, scope: scope)
         var ownershipIndex = PersonalOwnershipIndex(snapshot: snapshot)
         var personalChanges: [SyncChange] = []
         var quarantined: [SyncPullQuarantine] = []
@@ -427,6 +479,7 @@ actor FinanceSyncService {
             hasMore: response.hasMore,
             serverTime: response.serverTime
         )
+        try await assertCurrent(execution, scope: scope)
         try await localStore.applyPullPage(
             scope: scope,
             deviceId: deviceId,
@@ -434,6 +487,50 @@ actor FinanceSyncService {
             quarantined: quarantined
         )
         return personalResponse
+    }
+
+    private func beginExecution(scope: LocalStoreScope) async throws -> SyncExecutionContext {
+        let lease: SyncSessionLease?
+        if let leaseProvider {
+            guard let current = await leaseProvider.currentLease(for: scope.viewerUserId) else {
+                throw SyncSessionLeaseError.missing(viewerUserId: scope.viewerUserId)
+            }
+            lease = current
+        } else {
+            lease = nil
+        }
+        let execution = SyncExecutionContext(
+            cancellationGeneration: cancellationGeneration,
+            lease: lease
+        )
+        try await assertCurrent(execution, scope: scope)
+        return execution
+    }
+
+    private func assertCurrent(
+        _ execution: SyncExecutionContext,
+        scope: LocalStoreScope
+    ) async throws {
+        try Task.checkCancellation()
+        guard execution.cancellationGeneration == cancellationGeneration else {
+            throw SyncSessionLeaseError.stale
+        }
+        guard let lease = execution.lease else { return }
+        guard lease.viewerUserId == scope.viewerUserId,
+              let leaseProvider,
+              await leaseProvider.isCurrent(lease) else {
+            throw SyncSessionLeaseError.stale
+        }
+    }
+
+    private func isStaleExecution(_ error: Error) -> Bool {
+        error is CancellationError || (error as? SyncSessionLeaseError) == .stale
+    }
+
+    private func isMissingLease(_ error: Error) -> Bool {
+        guard let leaseError = error as? SyncSessionLeaseError else { return false }
+        if case .missing = leaseError { return true }
+        return false
     }
 
     static func isPersonalOnlyMutation(
