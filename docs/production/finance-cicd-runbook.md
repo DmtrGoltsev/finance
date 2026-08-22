@@ -18,7 +18,8 @@ Live production facts used by the workflow design:
 Primary workflow:
 
 - `.github/workflows/finance-hexcore-prod-deploy.yml`
-- `push` to branch names containing `release`: CI, tests, builds, packaging,
+- `push` by the repository owner to `prod/release-*` is the explicit production
+  authorization under the Finance solo-owner waiver. It runs CI, tests, builds, packaging,
   artifact upload, production frontend/backend deploy, automatic pre-migration
   DB backup evidence, Alembic upgrade to the single repository head, backend
   restart, and health checks.
@@ -26,6 +27,29 @@ Primary workflow:
   deploy actions controlled by explicit inputs, exact migration revisions,
   operator backup proof, restart confirmation, and the GitHub `production`
   environment.
+
+## Production authorization
+
+Finance is operated as a solo-owner repository. A Required reviewer is optional
+for this repository. The owner-approved waiver replaces the extra GitHub
+approval click, but does not waive any technical deployment control.
+
+- The `production` environment has no Required reviewer.
+- Its deployment branch policy uses selected branches and permits only
+  `prod/release-*`.
+- An explicit push by repository owner `DmtrGoltsev` to a matching branch is the
+  production authorization for the automatic release path.
+- A manual `workflow_dispatch` is authorized only when started by the owner with
+  all exact confirmation inputs required by the workflow.
+- Environment secrets remain scoped to `production` and are never copied into
+  repository files or workflow inputs.
+- CI gates, pinned SSH host verification, pre-migration backup, migration
+  checks, health checks, evidence, and rollback readiness remain mandatory.
+
+Direct host deployment is prohibited. Do not use direct SSH or SCP to upload,
+install, migrate, restart, or switch a Finance production release. SSH/SCP may
+only be used inside the approved GitHub Actions workflows with the pinned host
+key and environment-scoped credentials.
 
 Rollback workflow:
 
@@ -159,7 +183,8 @@ For `workflow_dispatch`, the workflow runs Alembic only when all are true:
 - `target_revision` is set to the exact target revision, not `head`
 - `backup_proof` identifies a real backup artifact or ticket
 - `confirm_production_deploy=finance-production`
-- the GitHub `production` environment is approved
+- the run is started by the repository owner and is admitted by the GitHub
+  `production` environment branch policy
 
 The workflow sources `/etc/finance/backend.env` on the host for DB configuration.
 No database password or DSN is stored in GitHub workflow inputs or repository
@@ -196,9 +221,11 @@ same local health checks. Database rollback is intentionally not automated.
 - CI lanes pass.
 - Frontend and backend artifacts exist with checksums and manifests.
 - Pinned SSH known hosts are configured through `HEXCORE_PROD_SSH_KNOWN_HOSTS`.
-- Production deploy jobs require explicit manual inputs and `production`
-  environment approval for `workflow_dispatch`; release branch pushes require
-  the `production` environment and run the deploy path automatically.
+- Production deploy jobs use the `production` environment, which has no
+  Required reviewer under the solo-owner waiver and admits only
+  `prod/release-*`; an owner push to that pattern authorizes the automatic path.
+- `workflow_dispatch` requires the exact confirmation inputs and an owner-run
+  authorization.
 - Manual migrations require exact revision inputs and backup evidence; release
   push migrations create backup evidence automatically before upgrade.
 - Backend restart is gated by an explicit restart input and service-name
@@ -216,7 +243,8 @@ For a production deploy record, retain:
 - release id
 - frontend artifact checksum
 - backend artifact checksum
-- production environment approval
+- production authorization evidence: owner push to `prod/release-*` or an
+  owner-started `workflow_dispatch` with exact confirmation inputs
 - migration input values, if migrations were run
 - manual backup proof or automatic backup evidence, if migrations were run
 - post-deploy health check result
@@ -238,3 +266,5 @@ Escalate before continuing when:
 - `/finance/` serves stale or missing assets after a frontend deploy
 - the backend service does not actually consume `/opt/finance/current`
 - an operator requests database rollback
+- a deployment is requested from a branch outside `prod/release-*`
+- a direct SSH/SCP deployment is requested

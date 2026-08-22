@@ -3,7 +3,8 @@
 Scope: read-only production readiness checks before running the Finance
 production CI/CD workflow. Do not deploy, migrate, restart services, create
 backups, or run authenticated production smoke until the blockers below are
-closed and the operator has approval.
+closed and production authorization is established by an owner push to
+`prod/release-*` or an owner-started manual run with exact confirmations.
 
 ## Release set
 
@@ -40,7 +41,10 @@ Expected result:
 
 - deploy and rollback workflows are visible in `gh workflow list`;
 - the `production` environment exists;
-- reviewer approval is configured on the environment;
+- no Required reviewer is necessary under the Finance solo-owner waiver;
+- `deployment_branch_policy.protected_branches=false`;
+- `deployment_branch_policy.custom_branch_policies=true`;
+- the only deployment branch policy is `prod/release-*` with type `branch`;
 - environment secrets are present by name only:
   - `HEXCORE_PROD_SSH_HOST`
   - `HEXCORE_PROD_SSH_USER`
@@ -49,6 +53,12 @@ Expected result:
   - `HEXCORE_PROD_SSH_PORT`, optional when SSH uses port `22`
 
 Do not print or copy secret values.
+
+The owner waiver removes only the extra approval click. It does not waive CI,
+environment secrets, pinned host verification, backup, migrations, health
+checks, evidence, or rollback readiness. Direct SSH/SCP deployment is
+prohibited; host access in this checklist is read-only and must use the approved
+pinned path.
 
 ## Public health gate
 
@@ -146,10 +156,11 @@ Required operator evidence:
 Do not run `pg_dump`, `pg_restore`, backup jobs, restore jobs, or cleanup from
 this preflight unless a separate approved runbook and operator approval exist.
 
-## Deploy inputs after approval
+## Deploy inputs after authorization
 
-When all preflight gates are closed, use the GitHub Actions workflow instead of
-manual host commands:
+When all preflight gates are closed, push the reviewed commit as repository
+owner to `prod/release-*`, or use the GitHub Actions workflow dispatch instead
+of manual host commands:
 
 ```text
 workflow: .github/workflows/finance-hexcore-prod-deploy.yml

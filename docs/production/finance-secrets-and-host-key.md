@@ -76,8 +76,14 @@ security policy explicitly classifies them as public configuration.
 
 Before a production deployment is allowed:
 
-- GitHub `production` environment requires reviewer approval.
+- GitHub `production` environment has no Required reviewer under the approved
+  Finance solo-owner waiver.
+- Selected deployment branches are enabled and the only allowed pattern is
+  `prod/release-*`; an explicit owner push to that pattern is production
+  authorization.
 - `HEXCORE_PROD_SSH_KNOWN_HOSTS` is present and parses with `ssh-keygen -l`.
 - SSH and SCP commands use `StrictHostKeyChecking=yes`.
 - No workflow step contains `StrictHostKeyChecking=no`.
 - DB settings remain host-side in `/etc/finance/backend.env`.
+- Direct SSH/SCP production deployment is prohibited. These transports may run
+  only inside approved GitHub Actions jobs using environment-scoped secrets.
