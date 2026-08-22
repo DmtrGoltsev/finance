@@ -8,6 +8,47 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 `newDis` copy alignment находится в плановом состоянии и не означает, что редизайн уже выпущен, задеплоен или прошел релизные проверки. Любые утверждения о новом UX, Planning parity, OCR smoke, release-signed APK или public/security GO должны появляться только после отдельного release-agent evidence.
 
+## Android production release (2026-08-22)
+
+- Release branch: `prod/finance-personal-android-backend-20260822`.
+- Final Android source: `43f4b1780e3bdcf6891b877fe03ee53971f74500`.
+- Change commits: `af22cce6417012e2adedb2fe0689c0670e322cf1`,
+  `12a1b91f20c2ce3f48bcae6919b76eb976b12c3f`,
+  `43f4b1780e3bdcf6891b877fe03ee53971f74500`.
+- Authentication/session: encrypted access+refresh persistence, process-wide
+  refresh coordination, session identity/generation/user binding, sync lease
+  account isolation, offline logout cleanup and one refresh retry for OCR.
+- Android behavior: investment transfers are calculated for the selected month,
+  operations and transfers are newest-first, expense categories use a vertical
+  searchable picker, payment-account selection refreshes immediately, transfer
+  date is preserved, and the analytics month switcher is compact.
+- Final manual-install APK:
+  `C:\Users\style\Documents\Codex\Финансы\artifacts\apk\finance-android-prod-20260822-035412-personal-FINAL-manual-install.apk`.
+  SHA-256 `b7244a339eb71bcb91dc8a02066e93bc219707691a350488315255a57f5cb1c4`,
+  size `8119142` bytes, certificate SHA-256
+  `b5675864b9cb8a046d889f54e58f5b0256d6937ecd448e69d7faa955e587aca0`.
+- APK gates: package `com.finance.mvp`, version `0.1.0`/code `1`,
+  `debuggable=false`, production API only, ZIP integrity/alignment PASS, no
+  trailing bytes or abnormal gaps, v2/v3 signatures PASS.
+- Android verification: unit `167/167`, lint `0` errors, installation and
+  production login on `emulator-5554` PASS. Targeted E2E confirmed persisted
+  session, investment transfer, newest-first operations, payment-account refresh,
+  category dialog/search and manual expense creation.
+- Backend-only production deployment used GitHub Actions run
+  `32540824773` at source `12a1b91f20c2ce3f48bcae6919b76eb976b12c3f`.
+  Release path: `/opt/finance/releases/finance-personal-backend-20260822-12a1b91f`.
+  Health, OpenAPI, login and refresh PASS; frontend deploy skipped.
+- Backend and schema were unchanged from the deployed baseline. Migrations and
+  backup were intentionally skipped, DB stayed unchanged, last confirmed
+  revision is `20260618_0017`. Rollback candidate:
+  `/opt/finance/releases/20260726T220603Z-55f4ac53`.
+- Residual coverage: full UI offline create/reconnect/sync was not rerun on the
+  final APK; OCR was not exercised with a real image; Android 17 Espresso has a
+  framework compatibility failure before assertions. Production plain HTTP is
+  an accepted but unresolved TLS risk.
+- Sanitized evidence:
+  `MVP_EVIDENCE/android-production-release-20260822/SUMMARY_SANITIZED.md`.
+
 ## Production
 
 - Backend commit: `26b487d61b7d2d6de704f0a632bcb08ff7f240f7` / short `26b487d` (deployed 2026-06-12).
