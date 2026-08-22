@@ -77,7 +77,9 @@ the HTTPS release requirement above. It is allowed only while the explicit
 - keep bundle id `com.codex.FinanceApp.PersonalSideload`, display name
   `Finance Personal HTTP`, and manual `Apple Development` signing;
 - install only onto the owner or family iPhone through a connected Xcode device
-  run. The scheme deliberately has no archive or export action;
+  run. XcodeGen emits a structural archive action for every scheme, but this
+  target is deliberately excluded from `buildForArchiving` and has no export
+  path;
 - never use this target for App Store, TestFlight, public distribution, or the
   normal `FinanceApp` Release configuration.
 

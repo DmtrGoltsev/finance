@@ -227,6 +227,7 @@ jobs:
           python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
           import os
           import plistlib
+          import xml.etree.ElementTree as ET
           from pathlib import Path
 
           def load(name):
@@ -273,17 +274,23 @@ jobs:
           assert "PRODUCT_BUNDLE_IDENTIFIER = com.codex.FinanceApp.PersonalSideload" in settings
           assert "CODE_SIGN_STYLE = Manual" in settings
           assert "CODE_SIGN_IDENTITY = Apple Development" in settings
-          scheme = Path("FinanceApp.xcodeproj/xcshareddata/xcschemes/FinanceAppPersonalHTTP.xcscheme").read_text()
-          assert "<ArchiveAction" not in scheme
+          scheme = ET.parse("FinanceApp.xcodeproj/xcshareddata/xcschemes/FinanceAppPersonalHTTP.xcscheme")
+          archive_entries = [
+              entry for entry in scheme.findall(".//BuildActionEntry")
+              if entry.find("BuildableReference").attrib.get("BlueprintName") == "FinanceAppPersonalHTTP"
+          ]
+          assert len(archive_entries) == 1, archive_entries
+          assert archive_entries[0].attrib.get("buildForArchiving") == "NO", archive_entries[0].attrib
           project = Path("project.yml").read_text()
           personal_scheme = project[project.rfind("\n  FinanceAppPersonalHTTP:\n"):]
           assert "archive:" not in personal_scheme
+          assert "FinanceAppPersonalHTTP: [run, test, profile, analyze]" in personal_scheme
           assert "exportArchive" not in project
           print("FINANCE_API_BASE_URL=http://45.10.110.42/finance-api")
           print("Debug and Release plists: no personal IP, personal HTTP URL, or personal ATS")
           print("Personal bundle=com.codex.FinanceApp.PersonalSideload")
           print("Personal signing=Manual Apple Development")
-          print("Personal archive/export action=absent; signing=Manual Apple Development")
+          print("Personal app buildForArchiving=NO; no exportArchive; signing=Manual Apple Development")
           print("NSAllowsArbitraryLoads=false")
           print("NSAllowsLocalNetworking=false")
           print("NSExceptionDomains=[45.10.110.42]")

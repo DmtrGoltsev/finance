@@ -136,7 +136,9 @@ schemes:
   FinanceAppPersonalHTTP:
     build:
       targets:
-        FinanceAppPersonalHTTP: all
+        # XcodeGen always emits a structural ArchiveAction. Do not make the
+        # personal app buildable for that action.
+        FinanceAppPersonalHTTP: [run, test, profile, analyze]
     run:
       config: PersonalSideloadHTTP
     test:

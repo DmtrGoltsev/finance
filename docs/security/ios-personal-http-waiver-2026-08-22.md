@@ -21,6 +21,6 @@ This waiver is invalid immediately if the host, path, authentication scheme, tar
 ## Enforced boundaries
 
 - `FinanceAppPersonalHTTP` has bundle id `com.codex.FinanceApp.PersonalSideload`, a distinct display/product name, an exact URL allowlist, and an ATS exception for only `45.10.110.42` without subdomains.
-- The personal target uses manual `Apple Development` signing only. Its scheme has no archive or export action, so it cannot produce an App Store-signed/exportable artifact through the supported project path.
+- The personal target uses manual `Apple Development` signing only. XcodeGen emits a structural archive action for every scheme, but the personal app is explicitly excluded from `buildForArchiving` and the project has no `exportArchive` path. It cannot produce an App Store-signed/exportable artifact through the supported project path.
 - CI builds and inspects Debug, Release, and PersonalSideloadHTTP plist outputs; it fails on identity/signing/archive drift or any personal HTTP value in the ordinary app outputs.
 - The special XCTest configuration executes allowlist, denylist, final-response, and URLSession 3xx redirect checks.
