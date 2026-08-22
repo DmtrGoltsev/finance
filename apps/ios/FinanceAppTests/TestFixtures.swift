@@ -9,7 +9,8 @@ enum TestFixtures {
         householdId: String? = nil,
         payment: Bool = false,
         status: RecordStatus = .active,
-        balance: String = "0"
+        balance: String = "0",
+        assetCategoryId: String? = nil
     ) -> Account {
         Account(
             id: id,
@@ -18,7 +19,7 @@ enum TestFixtures {
             ownershipType: ownership,
             ownerUserId: ownership == .personal ? "user-a" : nil,
             householdId: householdId,
-            assetCategoryId: nil,
+            assetCategoryId: assetCategoryId,
             currency: .RUB,
             initialBalance: balance,
             currentBalance: balance,
@@ -57,13 +58,16 @@ enum TestFixtures {
         amount: String = "1",
         occurredAt: String = "2026-08-20T10:00:00.000Z",
         transactionDate: String? = "2026-08-20",
+        counterpartyAccountId: String? = nil,
+        createdAt: String? = nil,
+        transferStatus: TransferStatus? = nil,
         version: Int? = 1
     ) -> Transaction {
         Transaction(
             id: id,
             transactionType: type,
             accountId: accountId,
-            counterpartyAccountId: nil,
+            counterpartyAccountId: counterpartyAccountId,
             categoryId: categoryId,
             amount: amount,
             currency: .RUB,
@@ -72,7 +76,8 @@ enum TestFixtures {
             description: nil,
             sourceType: "manual",
             transferScope: nil,
-            transferStatus: nil,
+            transferStatus: transferStatus,
+            createdAt: createdAt,
             version: version
         )
     }

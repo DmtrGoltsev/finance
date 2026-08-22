@@ -2,11 +2,15 @@ import SwiftUI
 
 struct AnalyticsSummaryCard: View {
     let totals: [MoneyTotal]
-    let investmentAmount: String
+    let pendingOverlay: FinanceDashboard.MonthlyPendingOverlay
     let currency: CurrencyCode
 
     var body: some View {
         let total = totals.first { $0.currency == currency }
+        let income = (Decimal(string: total?.incomeTotal ?? "0") ?? .zero) + pendingOverlay.income
+        let expenses = (Decimal(string: total?.expenseTotal ?? "0") ?? .zero) + pendingOverlay.expenses
+        let net = (Decimal(string: total?.netTotal ?? "0") ?? .zero) + pendingOverlay.income - pendingOverlay.expenses
+        let investments = (Decimal(string: total?.investmentsTotal ?? "0") ?? .zero) + pendingOverlay.investments
 
         VStack(spacing: 12) {
             Text("Сводка")
@@ -16,13 +20,13 @@ struct AnalyticsSummaryCard: View {
             HStack(spacing: 8) {
                 SummaryMetricTile(
                     title: "Доходы",
-                    value: MoneyHelpers.format(total?.incomeTotal ?? "0", currency: currency),
+                    value: MoneyHelpers.format(MoneyHelpers.decimalToString(income), currency: currency),
                     color: FinanceColors.income,
                     icon: "arrow.up.circle"
                 )
                 SummaryMetricTile(
                     title: "Расходы",
-                    value: MoneyHelpers.format(total?.expenseTotal ?? "0", currency: currency),
+                    value: MoneyHelpers.format(MoneyHelpers.decimalToString(expenses), currency: currency),
                     color: FinanceColors.expense,
                     icon: "arrow.down.circle"
                 )
@@ -31,13 +35,13 @@ struct AnalyticsSummaryCard: View {
             HStack(spacing: 8) {
                 SummaryMetricTile(
                     title: "Итог",
-                    value: MoneyHelpers.format(total?.netTotal ?? "0", currency: currency),
+                    value: MoneyHelpers.format(MoneyHelpers.decimalToString(net), currency: currency),
                     color: FinanceColors.primary,
                     icon: "equal.circle"
                 )
                 SummaryMetricTile(
                     title: "Инвестиции",
-                    value: MoneyHelpers.format(investmentAmount, currency: currency),
+                    value: MoneyHelpers.format(MoneyHelpers.decimalToString(investments), currency: currency),
                     color: FinanceColors.transfer,
                     icon: "chart.line.uptrend.xyaxis.circle"
                 )

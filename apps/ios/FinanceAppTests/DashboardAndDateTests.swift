@@ -29,6 +29,72 @@ final class DashboardAndDateTests: XCTestCase {
         XCTAssertEqual(view.capital, "100")
     }
 
+    func testNewestFirstUsesOccurredAtThenCreatedAtThenId() {
+        let transactions = [
+            TestFixtures.transaction(id: "id-z", accountId: "a", occurredAt: "2026-08-20T10:00:00Z", createdAt: "2026-08-20T10:01:00Z"),
+            TestFixtures.transaction(id: "id-a", accountId: "a", occurredAt: "2026-08-20T11:00:00Z", createdAt: "2026-08-20T10:00:00Z"),
+            TestFixtures.transaction(id: "id-b", accountId: "a", occurredAt: "2026-08-20T11:00:00Z", createdAt: "2026-08-20T10:00:00Z"),
+        ]
+
+        XCTAssertEqual(transactions.sorted(by: Transaction.newestFirst).map(\.id), ["id-b", "id-a", "id-z"])
+    }
+
+    func testTransactionDecodesCreatedAtForStableSorting() throws {
+        let payload = """
+        {
+          "id":"tx","transactionType":"expense","accountId":"a","counterpartyAccountId":null,
+          "categoryId":"food","amount":"10","currency":"RUB","occurredAt":"2026-08-20T10:00:00Z",
+          "transactionDate":"2026-08-20","description":null,"sourceType":"manual","transferScope":null,
+          "transferStatus":null,"createdAt":"2026-08-20T10:00:01Z","version":1
+        }
+        """
+
+        let transaction = try JSONDecoder().decode(Transaction.self, from: Data(payload.utf8))
+
+        XCTAssertEqual(transaction.createdAt, "2026-08-20T10:00:01Z")
+    }
+
+    func testPendingOverlayIncludesOnlySelectedMonthAndInvestmentDestinations() {
+        let investmentCategory = AssetCategory(
+            id: "broker-category",
+            name: "Broker",
+            scopeType: .personal,
+            ownerUserId: "user-a",
+            householdId: nil,
+            currency: .RUB,
+            assetType: .brokerage,
+            iconKey: nil,
+            manualAmount: "0",
+            isInvestment: true,
+            recordStatus: .active,
+            version: 1
+        )
+        let dashboard = FinanceDashboard(
+            accounts: [
+                TestFixtures.account(id: "card", payment: true),
+                TestFixtures.account(id: "broker", assetCategoryId: "broker-category"),
+            ],
+            categories: [TestFixtures.category(id: "food")],
+            transactions: [
+                TestFixtures.transaction(id: "expense-aug", accountId: "card", categoryId: "food", amount: "250", transactionDate: "2026-08-03", version: nil),
+                TestFixtures.transaction(id: "expense-jul", accountId: "card", categoryId: "food", amount: "900", transactionDate: "2026-07-31", version: nil),
+                TestFixtures.transaction(id: "investment-aug", accountId: "card", type: .transfer, amount: "1000", transactionDate: "2026-08-10", counterpartyAccountId: "broker", transferStatus: .posted, version: nil),
+                TestFixtures.transaction(id: "ordinary-transfer", accountId: "card", type: .transfer, amount: "500", transactionDate: "2026-08-10", counterpartyAccountId: "card", transferStatus: .posted, version: nil),
+                TestFixtures.transaction(id: "synced-expense", accountId: "card", categoryId: "food", amount: "700", transactionDate: "2026-08-03", version: 2),
+            ],
+            assetCategories: [investmentCategory]
+        )
+
+        let august = dashboard.pendingMonthlyOverlay(yearMonth: "2026-08", currency: .RUB)
+        let july = dashboard.pendingMonthlyOverlay(yearMonth: "2026-07", currency: .RUB)
+
+        XCTAssertEqual(august.expenses, Decimal(250))
+        XCTAssertEqual(august.expensesByCategory["food"], Decimal(250))
+        XCTAssertEqual(august.investments, Decimal(1000))
+        XCTAssertEqual(july.expenses, Decimal(900))
+        XCTAssertEqual(july.investments, .zero)
+    }
+
     func testTopExpenseCategoriesAreAggregatedAndSortedDescending() {
         let dashboard = FinanceDashboard(
             accounts: [TestFixtures.account(id: "personal", payment: true)],

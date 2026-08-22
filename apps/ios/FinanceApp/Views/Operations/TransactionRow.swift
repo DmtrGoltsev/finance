@@ -39,10 +39,10 @@ struct TransactionRow: View {
             )
 
             Menu {
-                Button {
-                    onEdit?()
-                } label: {
-                    Label("Редактировать", systemImage: "pencil")
+                if let onEdit {
+                    Button(action: onEdit) {
+                        Label("Редактировать", systemImage: "pencil")
+                    }
                 }
                 Button(role: .destructive) {
                     onDelete()
@@ -61,10 +61,10 @@ struct TransactionRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.03), radius: 3, y: 1)
         .contextMenu {
-            Button {
-                onEdit?()
-            } label: {
-                Label("Редактировать", systemImage: "pencil")
+            if let onEdit {
+                Button(action: onEdit) {
+                    Label("Редактировать", systemImage: "pencil")
+                }
             }
             Button(role: .destructive) {
                 onDelete()

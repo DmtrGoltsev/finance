@@ -75,19 +75,26 @@ struct CategoryBreakdownCard: View {
         let filtered = report.items.filter { item in
             item.currency == currency && (item.categoryType == nil || item.categoryType == .expense)
         }
-        let amounts = filtered.map { Decimal(string: $0.amount) ?? .zero }
-        let total = amounts.reduce(Decimal.zero, +)
+        var amountsByCategory: [String: Decimal] = [:]
+        var namesByCategory: [String: String] = [:]
+        for item in filtered {
+            let key = item.categoryId ?? "uncategorized"
+            amountsByCategory[key, default: .zero] += Decimal(string: item.amount) ?? .zero
+            namesByCategory[key] = item.categoryName
+        }
+        for transaction in transactions where transaction.isPendingLocalMutation && transaction.transactionType == .expense && transaction.currency == currency {
+            let key = transaction.categoryId ?? "uncategorized"
+            amountsByCategory[key, default: .zero] += Decimal(string: transaction.amount) ?? .zero
+        }
+        let total = amountsByCategory.values.reduce(Decimal.zero, +)
 
-        return filtered
-            .map { item -> BreakdownItem in
-                let amount = Decimal(string: item.amount) ?? .zero
+        return amountsByCategory
+            .map { categoryId, amount -> BreakdownItem in
                 let pct = total > .zero ? (amount / total * 100) : .zero
-                let fallbackName = item.categoryId.flatMap { id in
-                    categories.first { $0.id == id }?.name
-                }
+                let fallbackName = categories.first { $0.id == categoryId }?.name
                 return BreakdownItem(
-                    categoryId: item.categoryId ?? "\(item.categoryName ?? "uncategorized")-\(item.currency.rawValue)",
-                    name: item.categoryName ?? fallbackName ?? "Uncategorized",
+                    categoryId: categoryId,
+                    name: namesByCategory[categoryId] ?? fallbackName ?? "Без категории",
                     amount: amount,
                     percent: String(format: "%.1f%%", NSDecimalNumber(decimal: pct).doubleValue)
                 )

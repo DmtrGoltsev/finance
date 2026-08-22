@@ -52,16 +52,22 @@ struct AnalyticsTab: View {
                 ProgressView("Загружаем отчёт...")
             } else {
                 let currency = dashboard?.personalView().primaryCurrency ?? .RUB
+                let overlay = dashboard?.pendingMonthlyOverlay(yearMonth: reportMonth, currency: currency) ?? .empty
+                let selectedMonthTransactions = (dashboard?.personalTransactions ?? []).filter {
+                    $0.belongs(toYearMonth: reportMonth)
+                }
+                let totals = reportSummary?.totalsByCurrency
+                    ?? (reportMonth == DateHelpers.currentYearMonth() ? dashboard?.totals ?? [] : [])
 
                 AnalyticsSummaryCard(
-                    totals: reportSummary?.totalsByCurrency ?? dashboard?.totals ?? [],
-                    investmentAmount: investmentAmount(for: currency),
+                    totals: totals,
+                    pendingOverlay: overlay,
                     currency: currency
                 )
 
                 CategoryBreakdownCard(
                     breakdown: categoryBreakdown,
-                    transactions: dashboard?.personalTransactions ?? [],
+                    transactions: selectedMonthTransactions,
                     categories: dashboard?.categories.filter { $0.scope == .personal } ?? [],
                     currency: currency
                 )
@@ -110,12 +116,6 @@ struct AnalyticsTab: View {
         }
     }
 
-    private func investmentAmount(for currency: CurrencyCode) -> String {
-        if let amount = reportSummary?.totalsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
-            return amount
-        }
-        return "0"
-    }
 }
 
 enum AnalyticsSubsection: String, CaseIterable {
