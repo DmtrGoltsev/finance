@@ -13,7 +13,7 @@ final class SecureSessionTests: XCTestCase {
         let coordinator = SessionCoordinator(store: store)
         SecureSessionURLProtocol.configure { request in
             XCTAssertEqual(request.url?.path, "/finance-api/api/v1/sessions")
-            let body = try XCTUnwrap(request.httpBody)
+            let body = try self.requestBody(from: request)
             let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
             XCTAssertEqual(json["transport"], "ios_bearer")
             XCTAssertEqual(json["deviceName"], "iPhone")
@@ -42,7 +42,7 @@ final class SecureSessionTests: XCTestCase {
         let store = MemorySessionCredentialStore()
         let coordinator = SessionCoordinator(store: store)
         SecureSessionURLProtocol.configure { request in
-            let body = try XCTUnwrap(request.httpBody)
+            let body = try self.requestBody(from: request)
             let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
             XCTAssertEqual(json["transport"], "ios_bearer")
             XCTAssertEqual(json["displayName"], "Owner")
@@ -336,6 +336,27 @@ final class SecureSessionTests: XCTestCase {
 
     private func errorJSON(code: String) -> String {
         #"{"error":{"code":"\#(code)","message":"\#(code)","requestId":"request-test"}}"#
+    }
+
+    private func requestBody(from request: URLRequest) throws -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 {
+                throw stream.streamError ?? URLError(.cannotDecodeRawData)
+            }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 }
 
