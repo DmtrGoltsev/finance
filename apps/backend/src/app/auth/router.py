@@ -145,7 +145,7 @@ async def create_session(
     request: Request,
     auth_service: AuthSessionDependency,
 ) -> JSONResponse:
-    """Verify credentials and issue an opaque Android bearer or PWA cookie session."""
+    """Verify credentials and issue a mobile bearer or PWA cookie session."""
 
     rate_limit_response = auth_rate_limit_response(
         request=request,
@@ -248,10 +248,10 @@ async def refresh_session(
     request: Request,
     auth_service: AuthSessionDependency,
 ) -> JSONResponse:
-    """Rotate Android bearer/refresh token material for an active session."""
+    """Rotate mobile bearer/refresh token material for an active session."""
 
     request_id = request_id_for(request)
-    result = auth_service.refresh_android_session(
+    result = auth_service.refresh_bearer_session(
         payload.refresh_token,
         request_id=request_id,
     )
