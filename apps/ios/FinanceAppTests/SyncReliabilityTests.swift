@@ -488,11 +488,94 @@ final class SyncReliabilityTests: XCTestCase {
         let boundary = now.addingTimeInterval(-OfflineSessionRestorePolicy.maximumGrace).ISO8601Format()
         let outside = now.addingTimeInterval(-OfflineSessionRestorePolicy.maximumGrace - 1).ISO8601Format()
 
-        XCTAssertTrue(OfflineSessionRestorePolicy.canRestore(storedExpiry: inside, now: now))
-        XCTAssertTrue(OfflineSessionRestorePolicy.canRestore(storedExpiry: boundary, now: now))
-        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(storedExpiry: outside, now: now))
-        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(storedExpiry: nil, now: now))
-        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(storedExpiry: "not-a-date", now: now))
+        XCTAssertTrue(OfflineSessionRestorePolicy.canRestore(lastServerValidatedAt: inside, now: now))
+        XCTAssertTrue(OfflineSessionRestorePolicy.canRestore(lastServerValidatedAt: boundary, now: now))
+        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(lastServerValidatedAt: outside, now: now))
+        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(lastServerValidatedAt: nil, now: now))
+        XCTAssertFalse(OfflineSessionRestorePolicy.canRestore(lastServerValidatedAt: "not-a-date", now: now))
+    }
+
+    func testTransactionQueuePreservesOriginalAnalyticsBaselineAcrossEditThenDelete() async throws {
+        let context = try makeContext("transaction-analytics-baseline")
+        defer { context.cleanup() }
+        let account = TestFixtures.account(id: "card", payment: true)
+        let category = TestFixtures.category(id: "food")
+        let original = TestFixtures.transaction(
+            id: "transaction-a",
+            accountId: account.id,
+            categoryId: category.id,
+            amount: "100",
+            transactionDate: "2026-08-10",
+            version: 7
+        )
+        let edited = TestFixtures.transaction(
+            id: original.id,
+            accountId: account.id,
+            categoryId: category.id,
+            amount: "175",
+            transactionDate: "2026-09-10",
+            version: 7
+        )
+        var snapshot = FinanceLocalSnapshot.empty(scope: context.scope, deviceId: context.deviceId)
+        snapshot.accounts = [localRecord(account, entityType: .accounts)]
+        snapshot.categories = [localRecord(category, entityType: .categories)]
+        snapshot.transactions = [localRecord(original, entityType: .transactions)]
+        try await context.store.saveSnapshot(snapshot)
+        let service = FinanceSyncService(
+            apiClient: StubSyncApiClient(mode: .networkFailure),
+            localStore: context.store,
+            deviceIdentityStore: context.deviceIdentityStore
+        )
+        let ownership = PersonalOwnershipContext(
+            viewerUserId: context.scope.viewerUserId,
+            accounts: [account],
+            categories: [category],
+            assetCategories: []
+        )
+
+        try await service.enqueueOptimisticMutation(
+            scope: context.scope,
+            entityType: .transactions,
+            entityId: original.id,
+            operation: .update,
+            baseVersion: original.version,
+            request: TransactionOfflineUpdateRequest(TransactionUpdateRequest(
+                transactionType: .expense,
+                accountId: account.id,
+                counterpartyAccountId: nil,
+                categoryId: category.id,
+                amount: edited.amount,
+                currency: .RUB,
+                occurredAt: edited.occurredAt,
+                transactionDate: edited.transactionDate,
+                description: nil,
+                sourceType: "manual",
+                version: original.version
+            )),
+            optimisticEntity: edited,
+            ownershipContext: ownership
+        )
+        try await service.enqueueOptimisticMutation(
+            scope: context.scope,
+            entityType: .transactions,
+            entityId: original.id,
+            operation: .delete,
+            baseVersion: original.version,
+            optimisticEntity: edited,
+            ownershipContext: ownership
+        )
+
+        let queued = try await context.store.loadSnapshot(scope: context.scope, deviceId: context.deviceId)
+            .pendingMutations
+            .filter { $0.entityType == .transactions }
+        XCTAssertEqual(queued.count, 2)
+        for mutation in queued {
+            let payload = try XCTUnwrap(mutation.analyticsBasePayload)
+            let data = try SyncJSONValue.data(from: payload)
+            let baseline = try JSONDecoder().decode(Transaction.self, from: data)
+            XCTAssertEqual(baseline.amount, original.amount)
+            XCTAssertEqual(baseline.transactionDate, original.transactionDate)
+        }
     }
 
     private func makeContext(_ name: String) throws -> TestContext {

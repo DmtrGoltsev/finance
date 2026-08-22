@@ -52,6 +52,7 @@ struct PlanningView: View {
                 AllocationsCard(
                     plan: currentPlan,
                     dashboard: dashboard,
+                    pendingOverlay: dashboard?.pendingMonthlyOverlay(yearMonth: boundedMonth, currency: currency) ?? .empty,
                     isLoading: isLoading,
                     onCreate: { request in await createAllocation(planId: currentPlan.id, request: request) },
                     onUpdate: { allocation, request in await updateAllocation(allocation: allocation, request: request) },

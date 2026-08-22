@@ -41,12 +41,14 @@ extension FinanceDashboard {
         let expenses: Decimal
         let investments: Decimal
         let expensesByCategory: [String: Decimal]
+        let investmentsByAssetCategory: [String: Decimal]
 
         static let empty = MonthlyPendingOverlay(
             income: .zero,
             expenses: .zero,
             investments: .zero,
-            expensesByCategory: [:]
+            expensesByCategory: [:],
+            investmentsByAssetCategory: [:]
         )
     }
 
@@ -132,36 +134,61 @@ extension FinanceDashboard {
         let investmentAccountIds = Set(personalAccounts.compactMap { account in
             account.assetCategoryId.map(investmentCategoryIds.contains) == true ? account.id : nil
         })
-        let pending = personalTransactions.filter {
-            $0.isPendingLocalMutation &&
-            $0.currency == currency &&
-            $0.belongs(toYearMonth: yearMonth)
-        }
-
+        let investmentCategoryByAccount = Dictionary(uniqueKeysWithValues: personalAccounts.compactMap { account in
+            guard let categoryId = account.assetCategoryId,
+                  investmentCategoryIds.contains(categoryId) else { return nil }
+            return (account.id, categoryId)
+        })
         var income = Decimal.zero
         var expenses = Decimal.zero
         var investments = Decimal.zero
         var expensesByCategory: [String: Decimal] = [:]
+        var investmentsByAssetCategory: [String: Decimal] = [:]
 
-        for transaction in pending {
-            let amount = Decimal(string: transaction.amount) ?? .zero
-            switch transaction.transactionType {
-            case .income:
-                income += amount
-            case .expense:
-                expenses += amount
-                if let categoryId = transaction.categoryId {
-                    expensesByCategory[categoryId, default: .zero] += amount
-                }
-            case .transfer:
-                if transaction.transferStatus != .voided,
-                   let destinationId = transaction.counterpartyAccountId,
-                   accountIds.contains(transaction.accountId),
-                   investmentAccountIds.contains(destinationId) {
-                    investments += amount
-                }
-            default:
-                break
+        let pendingByEntity = Dictionary(grouping: pendingMutations.filter {
+            $0.entityType == .transactions && $0.canPush
+        }, by: \.entityId)
+
+        for (entityId, mutations) in pendingByEntity {
+            let baseline = mutations.compactMap { mutation in
+                mutation.analyticsBasePayload.flatMap(decodeTransaction)
+            }.first
+            let latest = mutations.last
+            let current = latest?.operation == .delete
+                ? nil
+                : personalTransactions.first(where: { $0.id == entityId })
+            let baselineContribution = monthlyContribution(
+                baseline,
+                yearMonth: yearMonth,
+                currency: currency,
+                accountIds: accountIds,
+                investmentAccountIds: investmentAccountIds,
+                investmentCategoryByAccount: investmentCategoryByAccount
+            )
+            let currentContribution = monthlyContribution(
+                current,
+                yearMonth: yearMonth,
+                currency: currency,
+                accountIds: accountIds,
+                investmentAccountIds: investmentAccountIds,
+                investmentCategoryByAccount: investmentCategoryByAccount
+            )
+            income += currentContribution.income - baselineContribution.income
+            expenses += currentContribution.expenses - baselineContribution.expenses
+            investments += currentContribution.investments - baselineContribution.investments
+            let categoryIds = Set(baselineContribution.expensesByCategory.keys)
+                .union(currentContribution.expensesByCategory.keys)
+            for categoryId in categoryIds {
+                expensesByCategory[categoryId, default: .zero] +=
+                    currentContribution.expensesByCategory[categoryId, default: .zero] -
+                    baselineContribution.expensesByCategory[categoryId, default: .zero]
+            }
+            let investmentCategoryIds = Set(baselineContribution.investmentsByAssetCategory.keys)
+                .union(currentContribution.investmentsByAssetCategory.keys)
+            for categoryId in investmentCategoryIds {
+                investmentsByAssetCategory[categoryId, default: .zero] +=
+                    currentContribution.investmentsByAssetCategory[categoryId, default: .zero] -
+                    baselineContribution.investmentsByAssetCategory[categoryId, default: .zero]
             }
         }
 
@@ -169,8 +196,49 @@ extension FinanceDashboard {
             income: income,
             expenses: expenses,
             investments: investments,
-            expensesByCategory: expensesByCategory
+            expensesByCategory: expensesByCategory,
+            investmentsByAssetCategory: investmentsByAssetCategory
         )
+    }
+
+    private func decodeTransaction(_ payload: [String: SyncJSONValue]) -> Transaction? {
+        guard let data = try? SyncJSONValue.data(from: payload) else { return nil }
+        return try? JSONDecoder().decode(Transaction.self, from: data)
+    }
+
+    private func monthlyContribution(
+        _ transaction: Transaction?,
+        yearMonth: String,
+        currency: CurrencyCode,
+        accountIds: Set<String>,
+        investmentAccountIds: Set<String>,
+        investmentCategoryByAccount: [String: String]
+    ) -> MonthlyPendingOverlay {
+        guard let transaction,
+              transaction.currency == currency,
+              transaction.belongs(toYearMonth: yearMonth),
+              accountIds.contains(transaction.accountId) else {
+            return .empty
+        }
+        let amount = Decimal(string: transaction.amount) ?? .zero
+        switch transaction.transactionType {
+        case .income:
+            return MonthlyPendingOverlay(income: amount, expenses: .zero, investments: .zero, expensesByCategory: [:], investmentsByAssetCategory: [:])
+        case .expense:
+            let byCategory = transaction.categoryId.map { [$0: amount] } ?? [:]
+            return MonthlyPendingOverlay(income: .zero, expenses: amount, investments: .zero, expensesByCategory: byCategory, investmentsByAssetCategory: [:])
+        case .transfer:
+            let investment = transaction.transferStatus != .voided &&
+                transaction.counterpartyAccountId.map(investmentAccountIds.contains) == true
+                ? amount
+                : .zero
+            let byAssetCategory = transaction.counterpartyAccountId
+                .flatMap { investmentCategoryByAccount[$0] }
+                .map { [$0: investment] } ?? [:]
+            return MonthlyPendingOverlay(income: .zero, expenses: .zero, investments: investment, expensesByCategory: [:], investmentsByAssetCategory: byAssetCategory)
+        default:
+            return .empty
+        }
     }
 }
 

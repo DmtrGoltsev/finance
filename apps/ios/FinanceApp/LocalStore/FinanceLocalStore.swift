@@ -105,6 +105,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
     var operation: SyncOperation
     var baseVersion: Int?
     var payload: [String: SyncJSONValue]?
+    var analyticsBasePayload: [String: SyncJSONValue]?
     let ownershipEvidence: SyncOwnershipEvidence?
     var status: PendingMutationStatus
     var attemptCount: Int
@@ -122,6 +123,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
         operation: SyncOperation,
         baseVersion: Int? = nil,
         payload: [String: SyncJSONValue]? = nil,
+        analyticsBasePayload: [String: SyncJSONValue]? = nil,
         ownershipEvidence: SyncOwnershipEvidence? = nil,
         status: PendingMutationStatus = .queued
     ) {
@@ -134,6 +136,7 @@ struct PendingMutation: Codable, Identifiable, Sendable {
         self.operation = operation
         self.baseVersion = baseVersion
         self.payload = payload
+        self.analyticsBasePayload = analyticsBasePayload
         self.ownershipEvidence = ownershipEvidence
         self.status = status
         self.attemptCount = 0

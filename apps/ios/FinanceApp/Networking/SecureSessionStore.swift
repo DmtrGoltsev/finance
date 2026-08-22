@@ -63,17 +63,22 @@ actor SessionCoordinator {
     }
 
     private let store: any SessionCredentialStoring
+    private let now: @Sendable () -> Date
     private var credentials: BearerSessionCredentials?
     private var generation: UInt64 = 0
     private var refreshFlight: RefreshFlight?
 
-    init(store: any SessionCredentialStoring = KeychainSessionCredentialStore()) {
+    init(
+        store: any SessionCredentialStoring = KeychainSessionCredentialStore(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         self.store = store
+        self.now = now
         self.credentials = try? store.load()
     }
 
     func install(_ response: BearerSessionResponse) throws -> SessionStatus {
-        guard let newCredentials = response.credentials else {
+        guard let newCredentials = response.credentials(validatedAt: now()) else {
             throw SessionCoordinatorError.invalidBearerResponse
         }
         do {
@@ -109,6 +114,13 @@ actor SessionCoordinator {
 
     func restoredSessionStatus() -> SessionStatus? {
         guard let credentials else { return nil }
+        guard OfflineSessionRestorePolicy.canRestore(
+            lastServerValidatedAt: credentials.lastServerValidatedAt,
+            now: now()
+        ) else {
+            invalidateCredentials()
+            return nil
+        }
         return SessionStatus(
             isAuthenticated: true,
             displayName: "Пользователь \(credentials.userId.prefix(8))",
@@ -116,6 +128,22 @@ actor SessionCoordinator {
             userId: credentials.userId,
             sessionId: credentials.sessionId
         )
+    }
+
+    func markServerValidated(_ status: SessionStatus) throws {
+        guard let current = credentials,
+              status.isAuthenticated,
+              status.userId == current.userId,
+              status.sessionId == current.sessionId else {
+            throw SessionCoordinatorError.superseded
+        }
+        let validated = current.serverValidated(at: now())
+        do {
+            try store.save(validated)
+        } catch {
+            throw SessionCoordinatorError.credentialPersistenceFailed
+        }
+        credentials = validated
     }
 
     func validate(_ lease: SessionLease) throws {
@@ -166,7 +194,7 @@ actor SessionCoordinator {
             throw error
         }
 
-        guard let rotatedCredentials = response.credentials else {
+        guard let rotatedCredentials = response.credentials(validatedAt: now()) else {
             clearRefreshFlight(id: flight.id)
             throw SessionCoordinatorError.invalidBearerResponse
         }
@@ -207,6 +235,8 @@ actor SessionCoordinator {
 
     func invalidateForLogout() -> LogoutAuthorization {
         let accessToken = credentials?.accessToken
+        let sessionId = credentials?.sessionId
+        let revokeToken = credentials?.revokeToken
         refreshFlight?.task.cancel()
         refreshFlight = nil
         credentials = nil
@@ -221,6 +251,8 @@ actor SessionCoordinator {
         }
         return LogoutAuthorization(
             accessToken: accessToken,
+            sessionId: sessionId,
+            revokeToken: revokeToken,
             localCredentialsCleared: cleared
         )
     }

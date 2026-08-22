@@ -566,7 +566,8 @@ struct FinanceAppView: View {
                 accounts: snapshot.accounts.map(\.entity),
                 categories: snapshot.categories.map(\.entity),
                 transactions: snapshot.transactions.map(\.entity),
-                assetCategories: snapshot.assetCategories.map(\.entity)
+                assetCategories: snapshot.assetCategories.map(\.entity),
+                pendingMutations: snapshot.pendingMutations
             )
             activeLocalScope = scope
             isAuthenticated = true
@@ -642,6 +643,7 @@ struct FinanceAppView: View {
                 categories: dashboard.assetCategories,
                 accounts: dashboard.accounts
             )
+            dashboard.pendingMutations = snapshot.pendingMutations
         } catch {
             syncOverview = LocalSyncOverview(
                 pendingCount: syncOverview.pendingCount,

@@ -4,6 +4,7 @@ struct CategoryBreakdownCard: View {
     let breakdown: ReportCategoryBreakdown?
     let transactions: [Transaction]
     let categories: [Category]
+    let pendingOverlay: FinanceDashboard.MonthlyPendingOverlay
     let currency: CurrencyCode
 
     var body: some View {
@@ -82,10 +83,10 @@ struct CategoryBreakdownCard: View {
             amountsByCategory[key, default: .zero] += Decimal(string: item.amount) ?? .zero
             namesByCategory[key] = item.categoryName
         }
-        for transaction in transactions where transaction.isPendingLocalMutation && transaction.transactionType == .expense && transaction.currency == currency {
-            let key = transaction.categoryId ?? "uncategorized"
-            amountsByCategory[key, default: .zero] += Decimal(string: transaction.amount) ?? .zero
+        for (categoryId, delta) in pendingOverlay.expensesByCategory {
+            amountsByCategory[categoryId, default: .zero] += delta
         }
+        amountsByCategory = amountsByCategory.filter { $0.value > .zero }
         let total = amountsByCategory.values.reduce(Decimal.zero, +)
 
         return amountsByCategory

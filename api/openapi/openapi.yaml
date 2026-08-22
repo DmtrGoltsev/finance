@@ -140,6 +140,26 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /sessions/revoke:
+    post:
+      tags: [Auth]
+      operationId: revokeBearerSession
+      summary: Revoke a mobile bearer session.
+      description: Revokes the session using a stable session-bound proof, including when access and refresh tokens have just rotated. Invalid proofs receive the same idempotent response.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRevokeRequest'
+      responses:
+        '204':
+          description: Revoke request processed idempotently.
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /sessions/current:
     get:
       tags: [Auth]
@@ -1999,7 +2019,7 @@ components:
     BearerSessionResponse:
       type: object
       additionalProperties: false
-      required: [tokenType, accessToken, refreshToken, expiresAt, actor]
+      required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, actor]
       properties:
         tokenType:
           type: string
@@ -2010,10 +2030,23 @@ components:
         refreshToken:
           type: string
           minLength: 1
+        revokeToken:
+          type: string
+          minLength: 1
         expiresAt:
           $ref: '#/components/schemas/DateTime'
         actor:
           $ref: '#/components/schemas/ActorContextDto'
+    SessionRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [sessionId, revokeToken]
+      properties:
+        sessionId:
+          $ref: '#/components/schemas/ResourceId'
+        revokeToken:
+          type: string
+          minLength: 1
     PwaCookieSessionResponse:
       type: object
       additionalProperties: false

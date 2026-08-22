@@ -58,12 +58,13 @@ enum SessionHTTPStatusPolicy {
 enum OfflineSessionRestorePolicy {
     static let maximumGrace: TimeInterval = 72 * 60 * 60
 
-    static func canRestore(storedExpiry: String?, now: Date = Date()) -> Bool {
-        guard let storedExpiry,
-              let expiry = parse(storedExpiry) else {
+    static func canRestore(lastServerValidatedAt: String?, now: Date = Date()) -> Bool {
+        guard let lastServerValidatedAt,
+              let validatedAt = parse(lastServerValidatedAt) else {
             return false
         }
-        return now <= expiry.addingTimeInterval(maximumGrace)
+        let elapsed = now.timeIntervalSince(validatedAt)
+        return elapsed >= 0 && elapsed <= maximumGrace
     }
 
     private static func parse(_ value: String) -> Date? {
@@ -95,6 +96,38 @@ struct BearerSessionCredentials: Codable, Equatable, Sendable {
     let expiresAt: String
     let userId: String
     let sessionId: String
+    let revokeToken: String?
+    let lastServerValidatedAt: String?
+
+    init(
+        accessToken: String,
+        refreshToken: String,
+        expiresAt: String,
+        userId: String,
+        sessionId: String,
+        revokeToken: String? = nil,
+        lastServerValidatedAt: String? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.expiresAt = expiresAt
+        self.userId = userId
+        self.sessionId = sessionId
+        self.revokeToken = revokeToken
+        self.lastServerValidatedAt = lastServerValidatedAt
+    }
+
+    func serverValidated(at date: Date) -> BearerSessionCredentials {
+        BearerSessionCredentials(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            userId: userId,
+            sessionId: sessionId,
+            revokeToken: revokeToken,
+            lastServerValidatedAt: date.ISO8601Format()
+        )
+    }
 }
 
 struct AuthorizedSession: Equatable, Sendable {
@@ -104,6 +137,8 @@ struct AuthorizedSession: Equatable, Sendable {
 
 struct LogoutAuthorization: Equatable, Sendable {
     let accessToken: String?
+    let sessionId: String?
+    let revokeToken: String?
     let localCredentialsCleared: Bool
 }
 
@@ -157,10 +192,27 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
     let tokenType: String
     let accessToken: String
     let refreshToken: String
+    let revokeToken: String?
     let expiresAt: String
     let actor: ActorContext
 
-    var credentials: BearerSessionCredentials? {
+    init(
+        tokenType: String,
+        accessToken: String,
+        refreshToken: String,
+        revokeToken: String? = nil,
+        expiresAt: String,
+        actor: ActorContext
+    ) {
+        self.tokenType = tokenType
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.revokeToken = revokeToken
+        self.expiresAt = expiresAt
+        self.actor = actor
+    }
+
+    func credentials(validatedAt: Date) -> BearerSessionCredentials? {
         let accessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let refreshToken = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let userId = actor.userId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -178,7 +230,9 @@ struct BearerSessionResponse: Codable, Equatable, Sendable {
             refreshToken: refreshToken,
             expiresAt: expiresAt,
             userId: userId,
-            sessionId: sessionId
+            sessionId: sessionId,
+            revokeToken: revokeToken,
+            lastServerValidatedAt: validatedAt.ISO8601Format()
         )
     }
 

@@ -327,3 +327,55 @@ def test_sqlalchemy_refresh_rotation_rejects_stale_expected_hash(
     assert row.refresh_token_hash == first_refresh_hash
     assert row.session_token_hash != second_access_hash
     assert row.refresh_token_hash != second_refresh_hash
+
+
+def test_sqlalchemy_refresh_rotation_atomically_extends_expiry(
+    db_auth_runtime: DbAuthRuntime,
+) -> None:
+    settings = get_settings()
+    session_factory: sessionmaker[OrmSession] = sync_session_factory_for_settings(settings)
+    store = SqlAlchemySessionTokenStore(session_factory)
+    old_refresh_hash = f"{TOKEN_HASH_PREFIX}old-expiry-refresh"
+    new_access_hash = f"{TOKEN_HASH_PREFIX}new-expiry-access"
+    new_refresh_hash = f"{TOKEN_HASH_PREFIX}new-expiry-refresh"
+    original_expiry = BASE_TIME + timedelta(hours=1)
+    renewed_expiry = BASE_TIME + timedelta(hours=13)
+    record = SessionStorageRecord(
+        id=str(uuid4()),
+        user_id=str(db_auth_runtime.user_id),
+        client_kind=AuthClientKind.IOS,
+        session_version=1,
+        issued_at=BASE_TIME,
+        expires_at=original_expiry,
+        session_token_hash=f"{TOKEN_HASH_PREFIX}old-expiry-access",
+        refresh_token_hash=old_refresh_hash,
+    )
+    store.store_session(record)
+
+    rotated = store.rotate_bearer_session_tokens(
+        session_id=record.id,
+        client_kind=AuthClientKind.IOS,
+        old_refresh_token_hash=old_refresh_hash,
+        new_session_token_hash=new_access_hash,
+        new_refresh_token_hash=new_refresh_hash,
+        rotated_at=BASE_TIME + timedelta(hours=1),
+        new_expires_at=renewed_expiry,
+    )
+    stale = store.rotate_bearer_session_tokens(
+        session_id=record.id,
+        client_kind=AuthClientKind.IOS,
+        old_refresh_token_hash=old_refresh_hash,
+        new_session_token_hash=f"{TOKEN_HASH_PREFIX}stale-access",
+        new_refresh_token_hash=f"{TOKEN_HASH_PREFIX}stale-refresh",
+        rotated_at=BASE_TIME + timedelta(hours=2),
+        new_expires_at=BASE_TIME + timedelta(hours=14),
+    )
+
+    assert rotated is not None
+    assert rotated.expires_at == renewed_expiry
+    assert stale is None
+    with session_factory() as session:
+        row = session.get(Session, UUID(record.id))
+    assert row is not None
+    assert row.expires_at.replace(tzinfo=UTC) == renewed_expiry
+    assert row.refresh_token_hash == new_refresh_hash

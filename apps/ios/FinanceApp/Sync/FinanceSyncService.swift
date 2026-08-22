@@ -288,6 +288,12 @@ actor FinanceSyncService {
 
         let deviceId = deviceIdentityStore.deviceId()
         let snapshot = try await localStore.loadSnapshot(scope: scope, deviceId: deviceId)
+        let analyticsBasePayload = try transactionAnalyticsBasePayload(
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            snapshot: snapshot
+        )
         var ownershipPayload = optimisticPayload
         if let context = planningContext,
            context.scope == .personal,
@@ -310,6 +316,7 @@ actor FinanceSyncService {
             operation: operation,
             baseVersion: baseVersion,
             payload: queuePayload,
+            analyticsBasePayload: analyticsBasePayload,
             ownershipEvidence: ownershipEvidence
         )
         let metadata = planningContext.map { context in
@@ -331,6 +338,28 @@ actor FinanceSyncService {
             planningMetadata: metadata,
             optimisticPayload: optimisticPayload
         )
+    }
+
+    private func transactionAnalyticsBasePayload(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        snapshot: FinanceLocalSnapshot
+    ) throws -> [String: SyncJSONValue]? {
+        guard entityType == .transactions, operation != .create else { return nil }
+        let prior = snapshot.pendingMutations.filter {
+            $0.entityType == .transactions && $0.entityId == entityId && $0.canPush
+        }
+        if prior.contains(where: { $0.operation == .create }) {
+            return nil
+        }
+        if let preserved = prior.compactMap(\.analyticsBasePayload).first {
+            return preserved
+        }
+        guard let transaction = snapshot.transactions.first(where: { $0.entity.id == entityId })?.entity else {
+            return nil
+        }
+        return try SyncJSONValue.object(from: transaction)
     }
 
     func rejectOnlineOnlyOperation(_ operation: OnlineOnlySyncOperation) -> SyncIssue {

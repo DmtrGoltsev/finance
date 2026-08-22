@@ -69,6 +69,7 @@ struct AnalyticsTab: View {
                     breakdown: categoryBreakdown,
                     transactions: selectedMonthTransactions,
                     categories: dashboard?.categories.filter { $0.scope == .personal } ?? [],
+                    pendingOverlay: overlay,
                     currency: currency
                 )
 

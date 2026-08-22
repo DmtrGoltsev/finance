@@ -115,6 +115,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/users",
         "/sessions",
         "/sessions/refresh",
+        "/sessions/revoke",
         "/sessions/current",
         "/accounts",
         "/accounts/{accountId}",
@@ -342,3 +343,18 @@ def test_openapi_confidence_regex_is_fully_grouped() -> None:
 
     assert "pattern: '^0(\\.[0-9]+)?|1(\\.0+)?$'" not in contract
     assert contract.count("pattern: '^(0(\\.[0-9]+)?|1(\\.0+)?)$'") >= 3
+
+
+def test_openapi_mobile_session_revoke_proof_is_explicit_and_backward_compatible() -> None:
+    bearer_response = "\n".join(_schema_block("BearerSessionResponse"))
+    revoke_request = "\n".join(_schema_block("SessionRevokeRequest"))
+    contract = _contract_text()
+
+    required_fields = (
+        "required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, actor]"
+    )
+    assert required_fields in bearer_response
+    assert "revokeToken" in bearer_response
+    assert "required: [sessionId, revokeToken]" in revoke_request
+    assert "operationId: revokeBearerSession" in contract
+    assert "including when access and refresh tokens have just rotated" in contract

@@ -49,6 +49,8 @@ jobs:
           src/app/auth
           src/app/db/model_enums.py
           tests/auth
+          tests/api/test_accounts_categories_route_contract.py
+          tests/api/test_openapi_mvp_manual_first_contract.py
           tests/db/test_ios_bearer_sessions_migration.py
           ../../db/migrations/versions/20260822_0018_ios_bearer_sessions.py
 
@@ -58,6 +60,10 @@ jobs:
           python -m pytest
           tests/auth/test_registration_flow.py
           tests/auth/test_session_flow.py
+          tests/auth/test_db_session_persistence.py
+          tests/auth/test_router_contract.py
+          tests/api/test_accounts_categories_route_contract.py
+          tests/api/test_openapi_mvp_manual_first_contract.py
           tests/db/test_ios_bearer_sessions_migration.py
 
       - name: Verify single Alembic head

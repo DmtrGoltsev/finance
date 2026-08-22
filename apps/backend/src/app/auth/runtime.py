@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -432,6 +433,25 @@ class AuthSessionService:
             return False
 
         self.sessions.revoke_session(session_id=record.id, revoked_at=datetime.now(UTC))
+        return True
+
+    def bearer_revoke_token(self, session_id: str) -> str:
+        if not session_id or self.token_hashing is None:
+            return ""
+        return self.token_hashing.hash_token(f"session-revoke:{session_id}")
+
+    def revoke_bearer_session(self, *, session_id: str, revoke_token: str) -> bool:
+        if (
+            self.sessions is None
+            or self.token_hashing is None
+            or not session_id
+            or not revoke_token
+        ):
+            return False
+        expected = self.bearer_revoke_token(session_id)
+        if not expected or not hmac.compare_digest(expected, revoke_token):
+            return False
+        self.sessions.revoke_session(session_id=session_id, revoked_at=datetime.now(UTC))
         return True
 
     def revoke_cookie_session(self, token_plaintext: str | None) -> bool:

@@ -83,7 +83,9 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
         let url = builder.makeURL(path: "/api/v1/sessions/current")
         let request = builder.makeURLRequest(url: url, method: "GET")
         let data = try await performRequest(request)
-        return try parseSessionStatus(from: data)
+        let status = try parseSessionStatus(from: data)
+        try await sessionCoordinator.markServerValidated(status)
+        return status
     }
 
     func logout() async -> LogoutResult {
@@ -91,22 +93,36 @@ final class LiveApiClient: FinanceApiClient, FinanceSessionLeaseProvider, @unche
         tokenStore.clear()
         clearSessionCookies()
 
-        guard let accessToken = logoutAuthorization.accessToken else {
+        guard logoutAuthorization.accessToken != nil || logoutAuthorization.revokeToken != nil else {
             return LogoutResult(
                 remoteSessionRevoked: true,
                 localCredentialsCleared: logoutAuthorization.localCredentialsCleared
             )
         }
 
-        let url = builder.makeURL(path: "/api/v1/sessions/current")
-        var request = builder.makeURLRequest(url: url, method: "DELETE")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let request: URLRequest
+        if let sessionId = logoutAuthorization.sessionId,
+           let revokeToken = logoutAuthorization.revokeToken {
+            let url = builder.makeURL(path: "/api/v1/sessions/revoke")
+            let body = try? ResponseParser.encode([
+                "sessionId": sessionId,
+                "revokeToken": revokeToken,
+            ])
+            request = builder.makeURLRequest(url: url, method: "POST", body: body)
+        } else if let accessToken = logoutAuthorization.accessToken {
+            let url = builder.makeURL(path: "/api/v1/sessions/current")
+            var legacyRequest = builder.makeURLRequest(url: url, method: "DELETE")
+            legacyRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            request = legacyRequest
+        } else {
+            return LogoutResult(
+                remoteSessionRevoked: false,
+                localCredentialsCleared: logoutAuthorization.localCredentialsCleared
+            )
+        }
         let remoteSessionRevoked: Bool
         do {
             _ = try await performPublicRequest(request, expectedCodes: [200, 204])
-            remoteSessionRevoked = true
-        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
-            // A 401 on logout proves the server session is already gone.
             remoteSessionRevoked = true
         } catch {
             remoteSessionRevoked = false

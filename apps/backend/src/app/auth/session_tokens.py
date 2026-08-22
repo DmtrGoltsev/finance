@@ -50,6 +50,7 @@ class SessionTokenStore(Protocol):
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         """Replace mobile bearer hashes when the old refresh hash still matches."""
 
@@ -68,6 +69,7 @@ class IssuedSession:
     session_token: str | None = None
     refresh_token: str | None = None
     csrf_token: str | None = None
+    revoke_token: str | None = None
 
 
 @dataclass(slots=True)
@@ -109,6 +111,7 @@ class InMemorySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         del rotated_at
         record = self._records.get(session_id)
@@ -124,6 +127,7 @@ class InMemorySessionTokenStore:
             record,
             session_token_hash=new_session_token_hash,
             refresh_token_hash=new_refresh_token_hash,
+            expires_at=new_expires_at or record.expires_at,
         )
         self._records[session_id] = updated
         return updated
@@ -241,6 +245,7 @@ class SessionTokenService:
             storage_record=stored,
             session_token=access_token,
             refresh_token=refresh_token,
+            revoke_token=hashing_backend.hash_token(f"session-revoke:{stored.id}"),
         )
 
     def rotate_android_tokens(
@@ -283,6 +288,7 @@ class SessionTokenService:
             new_session_token_hash=hashing_backend.hash_token(access_token),
             new_refresh_token_hash=hashing_backend.hash_token(refresh_token),
             rotated_at=current_time,
+            new_expires_at=current_time + self.android_refresh_ttl,
         )
         if updated is None:
             return None
@@ -291,6 +297,7 @@ class SessionTokenService:
             storage_record=updated,
             session_token=access_token,
             refresh_token=refresh_token,
+            revoke_token=hashing_backend.hash_token(f"session-revoke:{updated.id}"),
         )
 
     def revoke_for_client_kind(self, *, user_id: str, client_kind: AuthClientKind) -> None:

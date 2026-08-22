@@ -62,6 +62,67 @@ final class SecureSessionTests: XCTestCase {
         XCTAssertEqual(store.credentials?.refreshToken, "refresh-a")
     }
 
+    func testPersistedSessionRestoresWithinSeventyTwoHoursEvenAfterAccessExpiry() async throws {
+        let validatedAt = Date(timeIntervalSince1970: 1_000_000)
+        let store = MemorySessionCredentialStore(credentials: BearerSessionCredentials(
+            accessToken: "expired-access",
+            refreshToken: "refresh-a",
+            expiresAt: Date(timeIntervalSince1970: 900_000).ISO8601Format(),
+            userId: "user-a",
+            sessionId: "session-a",
+            revokeToken: "revoke-a",
+            lastServerValidatedAt: validatedAt.ISO8601Format()
+        ))
+        let coordinator = SessionCoordinator(
+            store: store,
+            now: { validatedAt.addingTimeInterval(OfflineSessionRestorePolicy.maximumGrace - 1) }
+        )
+
+        let restored = await coordinator.restoredSessionStatus()
+
+        XCTAssertEqual(restored?.userId, "user-a")
+        XCTAssertNotNil(store.credentials)
+    }
+
+    func testPersistedSessionPastSeventyTwoHoursRequiresReauthenticationWithoutTouchingScopedData() async throws {
+        let validatedAt = Date(timeIntervalSince1970: 1_000_000)
+        let store = MemorySessionCredentialStore(credentials: BearerSessionCredentials(
+            accessToken: "access-a",
+            refreshToken: "refresh-a",
+            expiresAt: validatedAt.addingTimeInterval(30 * 24 * 60 * 60).ISO8601Format(),
+            userId: "user-a",
+            sessionId: "session-a",
+            revokeToken: "revoke-a",
+            lastServerValidatedAt: validatedAt.ISO8601Format()
+        ))
+        let accountScopedSentinel = ["user-a": "preserved-financial-snapshot"]
+        let coordinator = SessionCoordinator(
+            store: store,
+            now: { validatedAt.addingTimeInterval(OfflineSessionRestorePolicy.maximumGrace + 1) }
+        )
+
+        let restored = await coordinator.restoredSessionStatus()
+
+        XCTAssertNil(restored)
+        XCTAssertNil(store.credentials)
+        XCTAssertEqual(accountScopedSentinel["user-a"], "preserved-financial-snapshot")
+    }
+
+    func testLegacyCredentialWithoutValidationTimestampCannotOpenOfflineData() async {
+        let store = MemorySessionCredentialStore(credentials: BearerSessionCredentials(
+            accessToken: "access-a",
+            refreshToken: "refresh-a",
+            expiresAt: "2099-01-01T00:00:00Z",
+            userId: "user-a",
+            sessionId: "session-a"
+        ))
+        let coordinator = SessionCoordinator(store: store, now: { Date(timeIntervalSince1970: 1_000_000) })
+
+        let restored = await coordinator.restoredSessionStatus()
+        XCTAssertNil(restored)
+        XCTAssertNil(store.credentials)
+    }
+
     func testConcurrent401ResponsesUseOneRefreshAndRetryEachRequestOnce() async throws {
         let store = MemorySessionCredentialStore()
         let coordinator = SessionCoordinator(store: store)
@@ -102,7 +163,7 @@ final class SecureSessionTests: XCTestCase {
         XCTAssertEqual(state.authorizations.filter { $0 == "Bearer access-a" }.count, 2)
         XCTAssertEqual(state.authorizations.filter { $0 == "Bearer access-b" }.count, 2)
         XCTAssertEqual(store.credentials?.refreshToken, "refresh-b")
-        XCTAssertEqual(store.saveCalls, 2)
+        XCTAssertEqual(store.saveCalls, 4)
     }
 
     func testRotationIsPersistedAsOneCredentialBlobBeforeGenerationAdvances() async throws {
@@ -199,6 +260,26 @@ final class SecureSessionTests: XCTestCase {
         } catch let error as SessionCoordinatorError {
             XCTAssertEqual(error, .superseded)
         }
+    }
+
+    func testLogoutUsesStableRevokeProofAndDoesNotTreatUnauthorizedAsRevoked() async throws {
+        let store = MemorySessionCredentialStore()
+        let coordinator = SessionCoordinator(store: store)
+        _ = try await coordinator.install(bearer(revoke: "stable-revoke"))
+        SecureSessionURLProtocol.configure { request in
+            XCTAssertEqual(request.url?.path, "/finance-api/api/v1/sessions/revoke")
+            let body = try self.requestBody(from: request)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+            XCTAssertEqual(json["sessionId"], "session-a")
+            XCTAssertEqual(json["revokeToken"], "stable-revoke")
+            return .json(statusCode: 401, body: self.errorJSON(code: "UNAUTHORIZED"))
+        }
+
+        let result = await makeClient(coordinator: coordinator).logout()
+
+        XCTAssertFalse(result.remoteSessionRevoked)
+        XCTAssertTrue(result.localCredentialsCleared)
+        XCTAssertNil(store.credentials)
     }
 
     func testStaleRefreshCannotOverwriteNewAccountSession() async throws {
@@ -309,6 +390,7 @@ final class SecureSessionTests: XCTestCase {
     private func bearer(
         access: String = "access-a",
         refresh: String = "refresh-a",
+        revoke: String = "revoke-a",
         userId: String = "user-a",
         sessionId: String = "session-a"
     ) -> BearerSessionResponse {
@@ -316,6 +398,7 @@ final class SecureSessionTests: XCTestCase {
             tokenType: "Bearer",
             accessToken: access,
             refreshToken: refresh,
+            revokeToken: revoke,
             expiresAt: "2026-08-22T11:00:00.000Z",
             actor: ActorContext(userId: userId, sessionId: sessionId, memberships: [])
         )
@@ -324,10 +407,11 @@ final class SecureSessionTests: XCTestCase {
     private func bearerJSON(
         access: String = "access-a",
         refresh: String = "refresh-a",
+        revoke: String = "revoke-a",
         userId: String = "user-a",
         sessionId: String = "session-a"
     ) -> String {
-        #"{"tokenType":"Bearer","accessToken":"\#(access)","refreshToken":"\#(refresh)","expiresAt":"2026-08-22T11:00:00.000Z","actor":{"userId":"\#(userId)","sessionId":"\#(sessionId)","memberships":[]}}"#
+        #"{"tokenType":"Bearer","accessToken":"\#(access)","refreshToken":"\#(refresh)","revokeToken":"\#(revoke)","expiresAt":"2026-08-22T11:00:00.000Z","actor":{"userId":"\#(userId)","sessionId":"\#(sessionId)","memberships":[]}}"#
     }
 
     private func currentSessionJSON() -> String {
@@ -364,6 +448,10 @@ private final class MemorySessionCredentialStore: SessionCredentialStoring, @unc
     private let lock = NSLock()
     private var storedCredentials: BearerSessionCredentials?
     private(set) var saveCalls = 0
+
+    init(credentials: BearerSessionCredentials? = nil) {
+        storedCredentials = credentials
+    }
 
     var credentials: BearerSessionCredentials? {
         lock.lock()

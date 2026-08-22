@@ -13,6 +13,7 @@ final class FinanceDashboard: @unchecked Sendable {
     var investmentsByCurrency: [MoneyAmount]
     var investmentsTotal: MoneyAmount?
     var categoryBreakdown: [CategoryBreakdownItem]
+    var pendingMutations: [PendingMutation]
 
     init(
         session: SessionStatus = SessionStatus(isAuthenticated: false, displayName: nil, householdId: nil),
@@ -25,7 +26,8 @@ final class FinanceDashboard: @unchecked Sendable {
         assetCategoryGroups: [AssetCategoryGroup] = [],
         investmentsByCurrency: [MoneyAmount] = [],
         investmentsTotal: MoneyAmount? = nil,
-        categoryBreakdown: [CategoryBreakdownItem] = []
+        categoryBreakdown: [CategoryBreakdownItem] = [],
+        pendingMutations: [PendingMutation] = []
     ) {
         self.session = session
         self.accounts = accounts
@@ -38,5 +40,6 @@ final class FinanceDashboard: @unchecked Sendable {
         self.investmentsByCurrency = investmentsByCurrency
         self.investmentsTotal = investmentsTotal
         self.categoryBreakdown = categoryBreakdown
+        self.pendingMutations = pendingMutations
     }
 }

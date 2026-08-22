@@ -32,6 +32,7 @@ from .service import neutral_login_failure_response
 USER_REGISTRATION_ROUTE = "/users"
 LOGIN_SESSION_ROUTE = "/sessions"
 REFRESH_SESSION_ROUTE = "/sessions/refresh"
+REVOKE_SESSION_ROUTE = "/sessions/revoke"
 CURRENT_SESSION_ROUTE = "/sessions/current"
 PASSWORD_RESET_REQUEST_ROUTE = "/password-resets"
 INVITE_REQUEST_ROUTE = "/invites/requests"
@@ -103,6 +104,11 @@ class RefreshSessionRequest(ApiModel):
     refresh_token: str = Field(min_length=1, max_length=4096)
 
 
+class RevokeSessionRequest(ApiModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    revoke_token: str = Field(min_length=1, max_length=4096)
+
+
 class ActorMembershipResponse(BaseModel):
     householdId: str
     status: str
@@ -118,6 +124,7 @@ class BearerSessionResponse(BaseModel):
     tokenType: Literal["Bearer"] = "Bearer"
     accessToken: str
     refreshToken: str
+    revokeToken: str
     expiresAt: str
     actor: ActorContextResponse
 
@@ -278,6 +285,18 @@ async def get_current_session(actor: CurrentActor) -> JSONResponse:
     )
 
 
+@router.post(REVOKE_SESSION_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_bearer_session(
+    payload: RevokeSessionRequest,
+    auth_service: AuthSessionDependency,
+) -> Response:
+    auth_service.revoke_bearer_session(
+        session_id=payload.session_id,
+        revoke_token=payload.revoke_token,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE_HEADERS)
+
+
 @router.delete(CURRENT_SESSION_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_current_session(
     request: Request,
@@ -351,6 +370,7 @@ def bearer_session_response(
     response_body = BearerSessionResponse(
         accessToken=issued.session_token or "",
         refreshToken=issued.refresh_token or "",
+        revokeToken=issued.revoke_token or "",
         expiresAt=issued.storage_record.expires_at.isoformat(),
         actor=actor_context_response(actor),
     )

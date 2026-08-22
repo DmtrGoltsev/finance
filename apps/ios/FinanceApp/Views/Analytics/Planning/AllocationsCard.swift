@@ -3,6 +3,7 @@ import SwiftUI
 struct AllocationsCard: View {
     let plan: PlanningPlan
     let dashboard: FinanceDashboard?
+    let pendingOverlay: FinanceDashboard.MonthlyPendingOverlay
     let isLoading: Bool
     let onCreate: (PlanningAllocationCreateRequest) async -> Void
     let onUpdate: (PlanningAllocation, PlanningAllocationUpdateRequest) async -> Void
@@ -74,14 +75,15 @@ struct AllocationsCard: View {
                     .foregroundColor(.secondary)
             } else {
                 ForEach(plan.allocations) { allocation in
+                    let displayedAllocation = applyingPendingActual(to: allocation)
                     PlanningAllocationRow(
-                        allocation: allocation,
+                        allocation: displayedAllocation,
                         currency: plan.currency,
                         categories: categories,
                         investments: investments,
                         isLoading: isLoading,
-                        onUpdate: onUpdate,
-                        onDelete: onDelete
+                        onUpdate: { _, request in await onUpdate(allocation, request) },
+                        onDelete: { _ in await onDelete(allocation) }
                     )
                 }
             }
@@ -89,6 +91,59 @@ struct AllocationsCard: View {
         .padding(16)
         .background(Color(UIColor.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func applyingPendingActual(to allocation: PlanningAllocation) -> PlanningAllocation {
+        guard let targetId = allocation.targetId else { return allocation }
+        let delta: Decimal
+        switch allocation.targetType {
+        case .expense_category:
+            delta = pendingOverlay.expensesByCategory[targetId, default: .zero]
+        case .investment_asset_category:
+            delta = pendingOverlay.investmentsByAssetCategory[targetId, default: .zero]
+        default:
+            delta = .zero
+        }
+        guard delta != .zero else { return allocation }
+        let actual = (Decimal(string: allocation.actualAmount ?? "0") ?? .zero) + delta
+        let planned = Decimal(string: allocation.calculatedAmount) ?? .zero
+        let variance = actual - planned
+        let requiresAttention: Bool
+        switch allocation.targetType {
+        case .expense_category:
+            requiresAttention = actual > planned
+        case .investment_asset_category:
+            requiresAttention = actual < planned
+        default:
+            requiresAttention = allocation.requiresAttention
+        }
+        let progressPercent = planned > .zero
+            ? MoneyHelpers.decimalToString(actual / planned * 100)
+            : allocation.progressPercent
+        return PlanningAllocation(
+            id: allocation.id,
+            planId: allocation.planId,
+            targetType: allocation.targetType,
+            targetId: allocation.targetId,
+            targetSnapshot: allocation.targetSnapshot,
+            requiresAttention: requiresAttention,
+            attentionReason: allocation.attentionReason,
+            comment: allocation.comment,
+            allocationMode: allocation.allocationMode,
+            allocationValue: allocation.allocationValue,
+            recurrenceType: allocation.recurrenceType,
+            isSavingsGoal: allocation.isSavingsGoal,
+            goalTargetAmount: allocation.goalTargetAmount,
+            goalDueMonth: allocation.goalDueMonth,
+            goalMonthlyAmount: allocation.goalMonthlyAmount,
+            calculatedAmount: allocation.calculatedAmount,
+            actualAmount: MoneyHelpers.decimalToString(actual),
+            varianceAmount: MoneyHelpers.decimalToString(variance),
+            progressPercent: progressPercent,
+            progressStatus: requiresAttention ? .needs_attention : .on_track,
+            status: allocation.status,
+            version: allocation.version
+        )
     }
 }
 struct PlanningTargetOption: Identifiable {

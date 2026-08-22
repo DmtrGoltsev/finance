@@ -185,6 +185,7 @@ class SqlAlchemySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         parsed_session_id = _optional_uuid(session_id)
         if (
@@ -197,6 +198,15 @@ class SqlAlchemySessionTokenStore:
             return None
 
         rotated_at_utc = _aware_utc(rotated_at)
+        new_expires_at_utc = _aware_utc(new_expires_at) if new_expires_at is not None else None
+        updated_values = {
+            "session_token_hash": new_session_token_hash,
+            "refresh_token_hash": new_refresh_token_hash,
+            "last_seen_at": rotated_at_utc,
+            "updated_at": rotated_at_utc,
+        }
+        if new_expires_at_utc is not None:
+            updated_values["expires_at"] = new_expires_at_utc
         with self.session_factory.begin() as session:
             result = session.execute(
                 update(SessionModel)
@@ -207,12 +217,7 @@ class SqlAlchemySessionTokenStore:
                     SessionModel.status == TokenRecordStatus.ACTIVE.value,
                     SessionModel.revoked_at.is_(None),
                 )
-                .values(
-                    session_token_hash=new_session_token_hash,
-                    refresh_token_hash=new_refresh_token_hash,
-                    last_seen_at=rotated_at_utc,
-                    updated_at=rotated_at_utc,
-                )
+                .values(**updated_values)
             )
             if result.rowcount != 1:
                 return None
@@ -230,6 +235,7 @@ class SqlAlchemySessionTokenStore:
         new_session_token_hash: str,
         new_refresh_token_hash: str,
         rotated_at: datetime,
+        new_expires_at: datetime | None = None,
     ) -> SessionStorageRecord | None:
         """Backward-compatible wrapper retained for existing Android callers."""
 
@@ -240,6 +246,7 @@ class SqlAlchemySessionTokenStore:
             new_session_token_hash=new_session_token_hash,
             new_refresh_token_hash=new_refresh_token_hash,
             rotated_at=rotated_at,
+            new_expires_at=new_expires_at,
         )
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
