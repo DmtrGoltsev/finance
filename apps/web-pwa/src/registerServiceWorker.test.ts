@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { registerServiceWorker } from "./registerServiceWorker";
 
 describe("registerServiceWorker", () => {
@@ -82,5 +84,32 @@ describe("registerServiceWorker", () => {
 
     expect(() => loadHandler?.()).not.toThrow();
     await Promise.resolve();
+  });
+
+  it("ships update-safe network-first navigation without caching API or OCR", () => {
+    const source = readFileSync("public/sw.js", "utf8");
+    const workerContext = {
+      URL,
+      self: {
+        registration: { scope: "https://example.test/finance/" },
+        addEventListener: vi.fn(),
+        clients: { claim: vi.fn() },
+        skipWaiting: vi.fn()
+      }
+    } as Record<string, unknown>;
+    runInNewContext(source, workerContext);
+    const isApiOrOcrRequest = workerContext.isApiOrOcrRequest as (url: URL) => boolean;
+
+    expect(source).toContain('const CACHE_NAME = `${CACHE_PREFIX}v3`');
+    expect(source).toContain("networkFirst(event.request)");
+    expect(source).toContain("self.skipWaiting()");
+    expect(source).toContain("self.clients.claim()");
+    expect(source).toContain("key.startsWith(CACHE_PREFIX)");
+    expect(source).toContain("isApiOrOcrRequest(url)");
+    expect(source).toMatch(/\/ocr/);
+    expect(isApiOrOcrRequest(new URL("https://example.test/finance/index.html"))).toBe(false);
+    expect(isApiOrOcrRequest(new URL("https://example.test/finance-api/api/v1/accounts"))).toBe(true);
+    expect(isApiOrOcrRequest(new URL("https://example.test/finance/api/v1/accounts"))).toBe(true);
+    expect(isApiOrOcrRequest(new URL("https://example.test/finance/ocr/upload"))).toBe(true);
   });
 });

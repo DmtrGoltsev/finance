@@ -5,7 +5,7 @@ struct CapitalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Капитал \u{2022} \(view.scopeTitle)")
+            Text("Капитал")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.78))
 

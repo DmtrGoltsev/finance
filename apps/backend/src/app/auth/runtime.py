@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,11 @@ from .session_tokens import IssuedSession, SessionTokenService, SessionTokenStor
 
 ACTIVE_AUTH_STATUS = "active"
 ACTIVE_RECORD_STATUS = "active"
+BEARER_CLIENT_KIND_BY_TRANSPORT = {
+    AuthTransport.ANDROID_BEARER: AuthClientKind.ANDROID,
+    AuthTransport.IOS_BEARER: AuthClientKind.IOS,
+}
+BEARER_CLIENT_KINDS = frozenset(BEARER_CLIENT_KIND_BY_TRANSPORT.values())
 
 
 class CredentialStore(Protocol):
@@ -148,6 +154,18 @@ class AuthRegistrationResult:
         return self.issued_session is not None and self.actor is not None
 
 
+@dataclass(frozen=True, slots=True)
+class AuthRefreshResult:
+    """Refresh outcome that carries rotated plaintext tokens only at the response boundary."""
+
+    issued_session: IssuedSession | None = None
+    actor: Actor | None = None
+
+    @property
+    def refreshed(self) -> bool:
+        return self.issued_session is not None and self.actor is not None
+
+
 @dataclass(slots=True)
 class AuthSessionService:
     """Credential verification, session issuance, and token actor resolution."""
@@ -157,7 +175,8 @@ class AuthSessionService:
     password_hasher: PasswordHashingBackend | None = None
     token_hashing: TokenHashingBackend | None = None
     token_factory: RandomTokenFactory = field(default_factory=RandomTokenFactory)
-    bearer_session_ttl: timedelta = timedelta(hours=12)
+    bearer_access_ttl: timedelta = timedelta(minutes=15)
+    bearer_session_ttl: timedelta = timedelta(days=30)
     pwa_session_ttl: timedelta = timedelta(hours=12)
 
     @property
@@ -192,9 +211,10 @@ class AuthSessionService:
 
         token_service = self._token_service()
         match request.transport:
-            case AuthTransport.ANDROID_BEARER:
-                issued = token_service.issue_android_tokens(
+            case AuthTransport.ANDROID_BEARER | AuthTransport.IOS_BEARER:
+                issued = token_service.issue_bearer_tokens(
                     user_id=user.id,
+                    client_kind=BEARER_CLIENT_KIND_BY_TRANSPORT[request.transport],
                     session_version=user.session_version,
                 )
             case AuthTransport.PWA_COOKIE:
@@ -235,9 +255,10 @@ class AuthSessionService:
 
         token_service = self._token_service()
         match request.transport:
-            case AuthTransport.ANDROID_BEARER:
-                issued = token_service.issue_android_tokens(
+            case AuthTransport.ANDROID_BEARER | AuthTransport.IOS_BEARER:
+                issued = token_service.issue_bearer_tokens(
                     user_id=user.id,
+                    client_kind=BEARER_CLIENT_KIND_BY_TRANSPORT[request.transport],
                     session_version=user.session_version,
                 )
             case AuthTransport.PWA_COOKIE:
@@ -263,11 +284,14 @@ class AuthSessionService:
         now: datetime | None = None,
     ) -> Actor | None:
         record = self._session_record_for_token(token_plaintext)
+        if record is None or record.client_kind not in BEARER_CLIENT_KINDS:
+            return None
         return self._actor_for_session_record(
             record,
-            client_kind=AuthClientKind.ANDROID,
+            client_kind=record.client_kind,
             request_id=request_id,
             now=now,
+            require_active_access=True,
         )
 
     def actor_for_cookie_session(
@@ -311,6 +335,76 @@ class AuthSessionService:
         except ValueError:
             return False
 
+    def refresh_android_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
+        """Refresh only an Android session for backward-compatible internal callers."""
+
+        return self._refresh_bearer_session(
+            refresh_token_plaintext,
+            required_client_kind=AuthClientKind.ANDROID,
+            request_id=request_id,
+            now=now,
+        )
+
+    def refresh_bearer_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
+        """Refresh an Android or iOS bearer session, inferred from the stored token hash."""
+
+        return self._refresh_bearer_session(
+            refresh_token_plaintext,
+            request_id=request_id,
+            now=now,
+        )
+
+    def _refresh_bearer_session(
+        self,
+        refresh_token_plaintext: str | None,
+        *,
+        required_client_kind: AuthClientKind | None = None,
+        request_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthRefreshResult:
+        record = self._session_record_for_refresh_token(refresh_token_plaintext)
+        if (
+            record is None
+            or record.client_kind not in BEARER_CLIENT_KINDS
+            or (required_client_kind is not None and record.client_kind != required_client_kind)
+        ):
+            return AuthRefreshResult()
+        actor = self._actor_for_session_record(
+            record,
+            client_kind=record.client_kind,
+            request_id=request_id,
+            now=now,
+        )
+        if (
+            record is None
+            or actor is None
+            or record.refresh_token_hash is None
+            or self.sessions is None
+        ):
+            return AuthRefreshResult()
+
+        issued = self._token_service().rotate_bearer_tokens(
+            record=record,
+            old_refresh_token_hash=record.refresh_token_hash,
+            rotated_at=now,
+        )
+        if issued is None:
+            return AuthRefreshResult()
+
+        return AuthRefreshResult(issued_session=issued, actor=actor)
+
     def _actor_for_session_record(
         self,
         record: SessionStorageRecord | None,
@@ -318,11 +412,13 @@ class AuthSessionService:
         client_kind: AuthClientKind,
         request_id: str | None,
         now: datetime | None = None,
+        require_active_access: bool = False,
     ) -> Actor | None:
         if (
             record is None
             or record.client_kind != client_kind
             or not session_record_is_active(record, now=now)
+            or (require_active_access and not bearer_access_record_is_active(record, now=now))
         ):
             return None
 
@@ -336,10 +432,31 @@ class AuthSessionService:
         return actor_from_user_record(user, session_id=record.id, request_id=request_id)
 
     def revoke_bearer_token(self, token_plaintext: str | None) -> bool:
-        return self._revoke_token_for_client_kind(
-            token_plaintext,
-            client_kind=AuthClientKind.ANDROID,
-        )
+        record = self._session_record_for_token(token_plaintext)
+        if record is None or record.client_kind not in BEARER_CLIENT_KINDS or self.sessions is None:
+            return False
+
+        self.sessions.revoke_session(session_id=record.id, revoked_at=datetime.now(UTC))
+        return True
+
+    def bearer_revoke_token(self, session_id: str) -> str:
+        if not session_id or self.token_hashing is None:
+            return ""
+        return self.token_hashing.hash_token(f"session-revoke:{session_id}")
+
+    def revoke_bearer_session(self, *, session_id: str, revoke_token: str) -> bool:
+        if (
+            self.sessions is None
+            or self.token_hashing is None
+            or not session_id
+            or not revoke_token
+        ):
+            return False
+        expected = self.bearer_revoke_token(session_id)
+        if not expected or not hmac.compare_digest(expected, revoke_token):
+            return False
+        self.sessions.revoke_session(session_id=session_id, revoked_at=datetime.now(UTC))
+        return True
 
     def revoke_cookie_session(self, token_plaintext: str | None) -> bool:
         return self._revoke_token_for_client_kind(
@@ -373,6 +490,22 @@ class AuthSessionService:
 
         return self.sessions.get_session_by_session_token_hash(session_token_hash=token_hash)
 
+    def _session_record_for_refresh_token(
+        self,
+        refresh_token_plaintext: str | None,
+    ) -> SessionStorageRecord | None:
+        if not refresh_token_plaintext or not self.configured:
+            return None
+
+        assert self.sessions is not None
+        assert self.token_hashing is not None
+        try:
+            token_hash = self.token_hashing.hash_token(refresh_token_plaintext)
+        except ValueError:
+            return None
+
+        return self.sessions.get_session_by_refresh_token_hash(refresh_token_hash=token_hash)
+
     def _token_service(self) -> SessionTokenService:
         assert self.sessions is not None
         assert self.token_hashing is not None
@@ -381,6 +514,7 @@ class AuthSessionService:
             token_factory=self.token_factory,
             hashing_backend=self.token_hashing,
             pwa_session_ttl=self.pwa_session_ttl,
+            bearer_access_ttl=self.bearer_access_ttl,
             android_refresh_ttl=self.bearer_session_ttl,
         )
 
@@ -406,6 +540,17 @@ def session_record_is_active(
         and record.revoked_at is None
         and record.expires_at > current_time
     )
+
+
+def bearer_access_record_is_active(
+    record: SessionStorageRecord,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if record.client_kind not in BEARER_CLIENT_KINDS or record.access_expires_at is None:
+        return False
+    current_time = now or datetime.now(UTC)
+    return record.access_expires_at > current_time
 
 
 def actor_from_user_record(
@@ -454,6 +599,7 @@ def get_auth_session_service() -> AuthSessionService:
         sessions=SqlAlchemySessionTokenStore(session_factory),
         password_hasher=password_hasher,
         token_hashing=token_hashing,
-        bearer_session_ttl=timedelta(seconds=settings.auth_bearer_session_ttl_seconds),
+        bearer_access_ttl=timedelta(seconds=settings.auth_bearer_access_ttl_seconds),
+        bearer_session_ttl=timedelta(seconds=settings.effective_auth_bearer_refresh_ttl_seconds),
         pwa_session_ttl=timedelta(seconds=settings.auth_pwa_session_ttl_seconds),
     )

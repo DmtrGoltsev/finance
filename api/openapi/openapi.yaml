@@ -50,6 +50,7 @@ security:
   - pwaCookieAuth: []
     csrfHeader: []
   - androidBearerAuth: []
+  - iosBearerAuth: []
 paths:
   /users:
     post:
@@ -90,7 +91,7 @@ paths:
       tags: [Auth]
       operationId: createSession
       summary: Login and create current session.
-      description: Account-neutral login. PWA receives HttpOnly cookie transport; Android receives bearer-capable token material by implementation policy.
+      description: Account-neutral login. PWA receives HttpOnly cookie transport; Android and iOS receive bearer-capable token material by implementation policy.
       security: []
       requestBody:
         required: true
@@ -109,6 +110,52 @@ paths:
                   - $ref: '#/components/schemas/PwaCookieSessionResponse'
         '429':
           $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sessions/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotate mobile bearer session tokens.
+      description: Public Android/iOS refresh-token contract. Accepts only refresh token material and returns rotated bearer access and refresh tokens for an active, non-revoked, non-expired mobile session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRefreshRequest'
+      responses:
+        '200':
+          description: Rotated Android or iOS bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BearerSessionResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '4XX':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /sessions/revoke:
+    post:
+      tags: [Auth]
+      operationId: revokeBearerSession
+      summary: Revoke a mobile bearer session.
+      description: Revokes the session using a stable session-bound proof, including when access and refresh tokens have just rotated. Invalid proofs receive the same idempotent response.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRevokeRequest'
+      responses:
+        '204':
+          description: Revoke request processed idempotently.
         '4XX':
           $ref: '#/components/responses/Error'
         default:
@@ -1416,6 +1463,11 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: Opaque bearer access token for Android; refresh token storage and rotation are platform secure-storage concerns.
+    iosBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Opaque bearer access token for native iOS; refresh tokens must be stored in the iOS Keychain and rotated by the client.
   responses:
     Error:
       description: Canonical error envelope.
@@ -1869,7 +1921,7 @@ components:
             - type: 'null'
     AuthTransport:
       type: string
-      enum: [pwa_cookie, android_bearer]
+      enum: [pwa_cookie, android_bearer, ios_bearer]
     UserRegistrationRequest:
       type: object
       additionalProperties: false
@@ -1931,6 +1983,15 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+    SessionRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+          maxLength: 4096
     ActorMembershipDto:
       type: object
       additionalProperties: false
@@ -1958,7 +2019,7 @@ components:
     BearerSessionResponse:
       type: object
       additionalProperties: false
-      required: [tokenType, accessToken, expiresAt, actor]
+      required: [tokenType, accessToken, refreshToken, revokeToken, expiresAt, accessExpiresAt, refreshExpiresAt, actor]
       properties:
         tokenType:
           type: string
@@ -1966,10 +2027,33 @@ components:
         accessToken:
           type: string
           minLength: 1
+        refreshToken:
+          type: string
+          minLength: 1
+        revokeToken:
+          type: string
+          minLength: 1
         expiresAt:
           $ref: '#/components/schemas/DateTime'
+          description: Backward-compatible alias for refreshExpiresAt.
+        accessExpiresAt:
+          $ref: '#/components/schemas/DateTime'
+          description: Expiry of the current short-lived bearer access token.
+        refreshExpiresAt:
+          $ref: '#/components/schemas/DateTime'
+          description: Sliding expiry of the rotating refresh token and mobile session.
         actor:
           $ref: '#/components/schemas/ActorContextDto'
+    SessionRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [sessionId, revokeToken]
+      properties:
+        sessionId:
+          $ref: '#/components/schemas/ResourceId'
+        revokeToken:
+          type: string
+          minLength: 1
     PwaCookieSessionResponse:
       type: object
       additionalProperties: false

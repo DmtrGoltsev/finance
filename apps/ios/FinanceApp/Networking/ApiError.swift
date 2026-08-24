@@ -12,8 +12,11 @@ enum FinanceApiError: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .httpError(let code, let msg):
-            if code == 401 || code == 403 {
+            if code == 401 {
                 return "Сессия истекла. Войдите снова."
+            }
+            if code == 403 {
+                return "Операция запрещена или CSRF-токен устарел. Локальные данные сохранены."
             }
             if msg.contains("ACCOUNT_CURRENCY_IMMUTABLE_AFTER_TRANSACTIONS") {
                 return "Валюту счёта нельзя изменить после создания операций."
@@ -35,7 +38,7 @@ enum FinanceApiError: Error, LocalizedError, Sendable {
     }
 
     var isAuthError: Bool {
-        if case .httpError(let code, _) = self { return code == 401 || code == 403 }
+        if case .httpError(let code, _) = self { return code == 401 }
         if case .unauthorized = self { return true }
         return false
     }

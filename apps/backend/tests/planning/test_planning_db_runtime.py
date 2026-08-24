@@ -776,6 +776,27 @@ def test_actual_progress_attention_rules_and_previous_month_surplus(
                     updated_at=BASE_TIME,
                     version=1,
                 ),
+                Transaction(
+                    id=uuid4(),
+                    transaction_type="transfer",
+                    account_id=UUID(str(planning_graph["owner_account_id"])),
+                    counterparty_account_id=UUID(str(planning_graph["owner_asset_account_id"])),
+                    category_id=None,
+                    amount=Decimal("250.0000"),
+                    currency="RUB",
+                    occurred_at=datetime(2027, 5, 21, 12, 0, tzinfo=UTC),
+                    transaction_date=datetime(2027, 5, 21, 12, 0, tzinfo=UTC).date(),
+                    description="May transfer into investment account",
+                    source_type="manual",
+                    transfer_scope="personal_same_owner",
+                    transfer_status="posted",
+                    record_status="active",
+                    created_by_user_id=owner_id,
+                    last_edited_by_user_id=owner_id,
+                    created_at=BASE_TIME,
+                    updated_at=BASE_TIME,
+                    version=1,
+                ),
             ]
         )
         session.flush()

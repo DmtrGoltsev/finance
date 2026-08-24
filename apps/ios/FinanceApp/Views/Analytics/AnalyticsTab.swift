@@ -2,10 +2,11 @@ import SwiftUI
 
 struct AnalyticsTab: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
     @State private var selectedSubsection: AnalyticsSubsection = .summary
     @State private var reportMonth = DateHelpers.currentYearMonth()
@@ -17,8 +18,6 @@ struct AnalyticsTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                ModeChips(selectedMode: selectedMode, onModeSelected: onModeSelected)
-
                 AnalyticsSubsectionPicker(selected: $selectedSubsection)
 
                 switch selectedSubsection {
@@ -27,9 +26,10 @@ struct AnalyticsTab: View {
                 case .planning:
                     PlanningView(
                         dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        onModeSelected: onModeSelected,
-                        apiClient: apiClient
+                        apiClient: apiClient,
+                        syncService: syncService,
+                        localScope: localScope,
+                        onLocalSnapshotChanged: onLocalSnapshotChanged
                     )
                 }
             }
@@ -51,22 +51,30 @@ struct AnalyticsTab: View {
             if isLoadingReport {
                 ProgressView("Загружаем отчёт...")
             } else {
-                let currency = dashboard?.viewFor(selectedMode).primaryCurrency ?? .RUB
+                let currency = dashboard?.personalView().primaryCurrency ?? .RUB
+                let overlay = dashboard?.pendingMonthlyOverlay(yearMonth: reportMonth, currency: currency) ?? .empty
+                let selectedMonthTransactions = (dashboard?.personalTransactions ?? []).filter {
+                    $0.belongs(toYearMonth: reportMonth)
+                }
+                let totals = reportSummary?.totalsByCurrency
+                    ?? (reportMonth == DateHelpers.currentYearMonth() ? dashboard?.totals ?? [] : [])
 
                 AnalyticsSummaryCard(
-                    totals: reportSummary?.totalsByCurrency ?? dashboard?.totals ?? [],
-                    investmentAmount: investmentAmount(for: currency),
+                    totals: totals,
+                    pendingOverlay: overlay,
                     currency: currency
                 )
 
                 CategoryBreakdownCard(
-                    transactions: dashboard?.viewFor(selectedMode).visibleTransactions ?? [],
-                    categories: dashboard?.categories ?? [],
+                    breakdown: categoryBreakdown,
+                    transactions: selectedMonthTransactions,
+                    categories: dashboard?.categories.filter { $0.scope == .personal } ?? [],
+                    pendingOverlay: overlay,
                     currency: currency
                 )
 
                 CapitalBreakdownCard(
-                    groups: dashboard?.assetCategoryGroups ?? [],
+                    groups: accountBalances?.assetCategoryGroups ?? dashboard?.assetCategoryGroups ?? [],
                     currency: currency
                 )
             }
@@ -74,28 +82,26 @@ struct AnalyticsTab: View {
     }
 
     private func loadReport() async {
-        guard let mode = reportMode else { return }
         isLoadingReport = true
         defer { isLoadingReport = false }
         do {
-            let hhId = householdId
             let tz = TimeZone.current.identifier
             async let summary = apiClient.getReportSummary(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
                 accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let breakdown = apiClient.getReportCategoryBreakdown(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
                 accountIds: nil, categoryIds: nil, transactionTypes: nil, currency: nil
             )
             async let balances = apiClient.getReportAccountBalances(
-                reportMode: mode, householdId: hhId,
+                reportMode: .personal, householdId: nil,
                 startDate: DateHelpers.monthStartDate(reportMonth),
                 endDate: DateHelpers.monthEndDate(reportMonth),
                 timezone: tz,
@@ -106,33 +112,11 @@ struct AnalyticsTab: View {
             accountBalances = try await balances
         } catch {
             reportSummary = nil
+            categoryBreakdown = nil
+            accountBalances = nil
         }
     }
 
-    private var reportMode: ReportMode? {
-        switch selectedMode {
-        case .personal: return .personal
-        case .shared: return .shared_family_report
-        case .overview: return .combined_viewer_overview
-        }
-    }
-
-    private var householdId: String? {
-        selectedMode == .shared ? dashboard?.session.householdId : nil
-    }
-
-    private func investmentAmount(for currency: CurrencyCode) -> String {
-        if let amount = dashboard?.investmentsByCurrency.first(where: { $0.currency == currency })?.amount {
-            return amount
-        }
-        if let total = dashboard?.investmentsTotal, total.currency == currency {
-            return total.amount
-        }
-        if let amount = reportSummary?.totalsByCurrency.first(where: { $0.currency == currency })?.investmentsTotal {
-            return amount
-        }
-        return "0"
-    }
 }
 
 enum AnalyticsSubsection: String, CaseIterable {

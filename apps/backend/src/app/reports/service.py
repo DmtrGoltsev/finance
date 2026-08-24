@@ -399,6 +399,33 @@ class ReportService:
                 grouped[row.asset_category.currency] += row.current_balance_total
         return tuple(sorted(grouped.items()))
 
+    def summary_investment_transfer_totals(
+        self,
+        context: ReportContext,
+    ) -> tuple[tuple[str, Decimal], ...]:
+        investment_category_ids = {
+            category.id
+            for category in context.visible_asset_categories
+            if category.is_investment
+        }
+        if not investment_category_ids:
+            return ()
+
+        accounts_by_id = {account.id: account for account in context.visible_accounts}
+        grouped: dict[str, Decimal] = defaultdict(lambda: ZERO)
+        for record in self.visible_report_transactions(context):
+            if record.transaction_type != "transfer":
+                continue
+            if record.counterparty_account_id is None:
+                continue
+            destination = accounts_by_id.get(record.counterparty_account_id)
+            if destination is None:
+                continue
+            if destination.asset_category_id not in investment_category_ids:
+                continue
+            grouped[record.currency] += record.amount
+        return tuple(sorted(grouped.items()))
+
     def _balance_for_report(
         self,
         account: AccountRecord,

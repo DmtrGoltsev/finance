@@ -16,6 +16,7 @@ from typing import Literal
 class AuthTransport(StrEnum):
     PWA_COOKIE = "pwa_cookie"
     ANDROID_BEARER = "android_bearer"
+    IOS_BEARER = "ios_bearer"
 
 
 class NeutralFlow(StrEnum):
@@ -128,6 +129,18 @@ class AndroidBearerRefreshContract:
 
 
 @dataclass(frozen=True, slots=True)
+class IosBearerRefreshContract:
+    transport: AuthTransport = AuthTransport.IOS_BEARER
+    authorization_scheme: str = "Bearer"
+    access_token_format: str = "opaque"
+    access_token_storage: str = "memory_preferred"
+    refresh_token_storage: str = "ios_keychain_this_device_only"
+    refresh_token_rotation_required: bool = True
+    server_revocation_required: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class SessionTransportContracts:
     pwa: PwaCookieCsrfContract = PwaCookieCsrfContract()
     android: AndroidBearerRefreshContract = AndroidBearerRefreshContract()
+    ios: IosBearerRefreshContract = IosBearerRefreshContract()

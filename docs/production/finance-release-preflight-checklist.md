@@ -3,7 +3,8 @@
 Scope: read-only production readiness checks before running the Finance
 production CI/CD workflow. Do not deploy, migrate, restart services, create
 backups, or run authenticated production smoke until the blockers below are
-closed and the operator has approval.
+closed and production authorization is established by an owner push to
+`prod/release-*` or an owner-started manual run with exact confirmations.
 
 ## Release set
 
@@ -40,7 +41,10 @@ Expected result:
 
 - deploy and rollback workflows are visible in `gh workflow list`;
 - the `production` environment exists;
-- reviewer approval is configured on the environment;
+- no Required reviewer is necessary under the Finance solo-owner waiver;
+- `deployment_branch_policy.protected_branches=false`;
+- `deployment_branch_policy.custom_branch_policies=true`;
+- the only deployment branch policy is `prod/release-*` with type `branch`;
 - environment secrets are present by name only:
   - `HEXCORE_PROD_SSH_HOST`
   - `HEXCORE_PROD_SSH_USER`
@@ -49,6 +53,12 @@ Expected result:
   - `HEXCORE_PROD_SSH_PORT`, optional when SSH uses port `22`
 
 Do not print or copy secret values.
+
+The owner waiver removes only the extra approval click. It does not waive CI,
+environment secrets, pinned host verification, backup, migrations, health
+checks, evidence, or rollback readiness. Direct SSH/SCP deployment is
+prohibited; host access in this checklist is read-only and must use the approved
+pinned path.
 
 ## Public health gate
 
@@ -129,7 +139,7 @@ Minimum read-only evidence:
 
 ```bash
 ssh <pinned-prod-ssh> 'set -euo pipefail
-  find /var/backups/finance -maxdepth 1 -type f -name "finance_prod*.dump" \
+  find /opt/finance/backups/postgres -maxdepth 1 -type f -name "finance_prod*.dump" \
     -printf "%TY-%Tm-%TdT%TH:%TM:%TSZ %s %p\n" | sort | tail -n 5
 '
 ```
@@ -146,10 +156,11 @@ Required operator evidence:
 Do not run `pg_dump`, `pg_restore`, backup jobs, restore jobs, or cleanup from
 this preflight unless a separate approved runbook and operator approval exist.
 
-## Deploy inputs after approval
+## Deploy inputs after authorization
 
-When all preflight gates are closed, use the GitHub Actions workflow instead of
-manual host commands:
+When all preflight gates are closed, push the reviewed commit as repository
+owner to `prod/release-*`, or use the GitHub Actions workflow dispatch instead
+of manual host commands:
 
 ```text
 workflow: .github/workflows/finance-hexcore-prod-deploy.yml
@@ -164,6 +175,16 @@ confirm_production_deploy: finance-production
 confirm_backend_restart: finance-backend.service, only when restart_backend=true
 environment: production
 ```
+
+A dispatch with `deploy_frontend=false`, `deploy_backend=false`,
+`run_migrations=false`, and `restart_backend=false` is CI-only. It must run both
+package jobs and `production-package-gate`, while `host-preflight` and both
+deploy jobs are skipped. It must not request the `production` environment,
+secrets, or host access.
+
+For any production action, the workflow performs its own blocking host
+preflight after both package jobs. Do not treat a manual observation as a
+substitute for that in-run gate.
 
 Retain the GitHub Actions deploy workflow run URL in the release record together
 with production health evidence and links to the sanitized production smoke/E2E

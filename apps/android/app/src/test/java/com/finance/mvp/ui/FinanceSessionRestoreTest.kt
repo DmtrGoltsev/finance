@@ -129,22 +129,68 @@ class FinanceSessionRestoreTest {
     }
 
     @Test
-    fun liveClientClearsPersistedTokenWhenSessionRequestReturns403WithServerBody() = runBlocking {
+    fun liveClientKeepsPersistedSessionWhenAuthorizedRequestReturns403() = runBlocking {
         withJsonResponseServer(
             statusCode = 403,
             body = """{"error":{"message":"subscription required"}}""",
         ) { baseUrl, seenAuthorization ->
             val tokenStore = InMemorySecureTokenStore()
-            tokenStore.saveAccessToken("stale-token")
+            tokenStore.saveSessionTokens("access-token", "refresh-token")
             val apiClient = LiveFinanceApiClient(ApiConfig(baseUrl), tokenStore)
 
             val result = apiClient.dashboard()
 
             assertTrue(result is ApiResult.Failure)
             assertEquals(403, (result as ApiResult.Failure).statusCode)
-            assertEquals("Bearer stale-token", seenAuthorization.get())
-            assertNull(tokenStore.readAccessToken())
+            assertEquals("Bearer access-token", seenAuthorization.get())
+            assertEquals("access-token", tokenStore.readAccessToken())
+            assertEquals("refresh-token", tokenStore.readRefreshToken())
         }
+    }
+
+    @Test
+    fun offlineLogoutDropsAuthorizedUiAndSensitiveDashboard() {
+        val state = loggedOutFinanceUiState(
+            ApiResult.Failure("server unavailable", kind = com.finance.mvp.api.ApiFailureKind.NETWORK),
+        )
+
+        assertNull(state.session)
+        assertNull(state.dashboard)
+        assertTrue(state.message.contains("завершена", ignoreCase = true))
+        assertTrue(!state.isLoading)
+    }
+
+    @Test
+    fun lateLogoutDiscardsUserADashboardAndReloadsConcurrentUserB() = runBlocking {
+        val userASession = SessionStatus(true, "User A", null, userId = "user-a", sessionId = "session-a")
+        val userADashboard = dashboardFixture(userASession)
+        val currentState = FinanceUiState(
+            session = userASession,
+            dashboard = userADashboard,
+            isLoading = true,
+            message = "Выходим",
+        )
+        val userBSession = SessionStatus(true, "User B", null, userId = "user-b", sessionId = "session-b")
+        val userBDashboard = dashboardFixture(userBSession)
+        val apiClient = FakeFinanceApiClient(
+            sessionResult = ApiResult.Success(userBSession),
+            dashboardResult = ApiResult.Success(userBDashboard),
+        )
+
+        val state = completedLogoutUiState(
+            ApiResult.Failure(
+                "session changed",
+                kind = com.finance.mvp.api.ApiFailureKind.SESSION_CHANGED,
+            ),
+            apiClient,
+        )
+
+        assertTrue(currentState.dashboard !== state.dashboard)
+        assertEquals(userBSession, state.session)
+        assertSame(userBDashboard, state.dashboard)
+        assertEquals(1, apiClient.sessionStatusCalls)
+        assertEquals(1, apiClient.dashboardCalls)
+        assertTrue(!state.isLoading)
     }
 
     private fun dashboardFixture(session: SessionStatus): FinanceDashboard {
@@ -317,6 +363,7 @@ private class FakeFinanceApiClient(
         source: AccountSummary,
         destination: AccountSummary,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> {
         return ApiResult.Failure("unused")
     }

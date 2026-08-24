@@ -1,20 +1,31 @@
 import SwiftUI
 
 struct FinanceAppView: View {
-    let apiClient: FinanceApiClient
+    let apiClient: LiveApiClient
+    let syncService: FinanceSyncService
+    let syncLeaseProvider: AuthBoundSyncSessionLeaseProvider
+    let sessionDataWiper: FinanceSessionDataWiper
+    let configurationError: String?
 
     @State private var dashboard: FinanceDashboard?
     @State private var isLoading = false
     @State private var selectedTab = 0
-    @State private var selectedMode: FinanceMode = .personal
     @State private var message: String?
     @State private var isAuthenticated = false
+    @State private var isRestoringSession = true
     @State private var showQuickAdd = false
     @State private var quickAddError: String?
+    @State private var syncOverview = LocalSyncOverview.empty
+    @State private var syncResult: ManualSyncResult?
+    @State private var isSyncing = false
+    @State private var showSyncSheet = false
+    @State private var activeLocalScope: LocalStoreScope?
 
     var body: some View {
         Group {
-            if !isAuthenticated {
+            if isRestoringSession {
+                sessionRestoringView
+            } else if !isAuthenticated {
                 authView
             } else {
                 mainView
@@ -25,11 +36,23 @@ struct FinanceAppView: View {
         }
     }
 
+    private var sessionRestoringView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Открываем финансы")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Восстановление сохранённой сессии")
+    }
+
     private var authView: some View {
         ScrollView {
             SignInCard(
                 isLoading: isLoading,
-                message: message ?? "Войдите, чтобы увидеть финансы",
+                message: configurationError ?? message ?? "Войдите, чтобы увидеть финансы",
                 onLogin: { email, password in
                     Task { await performLogin(email: email, password: password) }
                 },
@@ -38,6 +61,7 @@ struct FinanceAppView: View {
                 }
             )
             .padding(16)
+            .disabled(configurationError != nil)
 
             if isLoading {
                 LoadingOverlay(message: "Обновляем данные")
@@ -47,13 +71,15 @@ struct FinanceAppView: View {
     }
 
     private var mainView: some View {
-        ZStack(alignment: .bottomTrailing) {
+        NavigationStack {
+            ZStack(alignment: .bottomTrailing) {
             TabView(selection: $selectedTab) {
                 HomeTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
-                    onOpenPlanning: { selectedTab = 4 }
+                    onOpenPlanning: { selectedTab = 4 },
+                    syncOverview: syncOverview,
+                    isSyncing: isSyncing,
+                    onSyncTapped: { Task { await openSyncSheet() } }
                 )
                 .tabItem {
                     Image(systemName: "house")
@@ -63,12 +89,12 @@ struct FinanceAppView: View {
 
                 OperationsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     onDeleteTransaction: { id in Task { await deleteTransaction(id) } },
                     apiClient: apiClient,
-                    householdId: dashboard?.session.householdId,
-                    onRefreshDashboard: loadDashboard
+                    onRefreshDashboard: loadDashboard,
+                    onUpdateTransaction: { id, request in
+                        try await updateTransactionOnlineOrQueue(id: id, request: request)
+                    }
                 )
                 .tabItem {
                     Image(systemName: "list.bullet")
@@ -78,10 +104,11 @@ struct FinanceAppView: View {
 
                 AssetsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
-                    onRefresh: { await loadDashboard() }
+                    syncService: syncService,
+                    localScope: currentLocalScope,
+                    onRefresh: { await loadDashboard() },
+                    onLocalSnapshotChanged: { await refreshLocalSnapshotAndOverview() }
                 )
                 .tabItem {
                     Image(systemName: "building.columns")
@@ -91,23 +118,25 @@ struct FinanceAppView: View {
 
                 CategoriesTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
-                    onRefresh: { await loadDashboard() }
+                    syncService: syncService,
+                    localScope: currentLocalScope,
+                    onRefresh: { await loadDashboard() },
+                    onLocalSnapshotChanged: { await refreshLocalSnapshotAndOverview() }
                 )
                 .tabItem {
                     Image(systemName: "tag")
-                        .accessibilityLabel("Категории")
+                        .accessibilityLabel("Категории расходов")
                 }
                 .tag(3)
 
                 AnalyticsTab(
                     dashboard: dashboard,
-                    selectedMode: selectedMode,
-                    onModeSelected: { selectedMode = $0 },
                     apiClient: apiClient,
-                    onRefresh: { await loadDashboard() }
+                    syncService: syncService,
+                    localScope: currentLocalScope,
+                    onRefresh: { await loadDashboard() },
+                    onLocalSnapshotChanged: { await refreshLocalSnapshotAndOverview() }
                 )
                 .tabItem {
                     Image(systemName: "chart.bar")
@@ -131,14 +160,38 @@ struct FinanceAppView: View {
             }
             .padding(16)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    Task { await openSyncSheet() }
+                } label: {
+                    Image(systemName: syncToolbarSymbol)
+                }
+                .accessibilityLabel("Синхронизация")
+                .disabled(isLoading || currentLocalScope == nil)
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await performLogout() }
+                } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                }
+                .accessibilityLabel("Выйти")
+                .disabled(isLoading)
+            }
+        }
+        }
         .sheet(isPresented: $showQuickAdd) {
             QuickAddSheet(
                 dashboard: dashboard,
-                selectedMode: selectedMode,
                 errorMessage: quickAddError,
                 onDismiss: { showQuickAdd = false },
                 onSubmit: { draft in Task { await submitQuickAdd(draft) } }
             )
+        }
+        .sheet(isPresented: $showSyncSheet) {
+            syncSheet
         }
         .overlay(alignment: .bottom) {
             if let msg = message, !msg.isEmpty, isAuthenticated {
@@ -175,23 +228,153 @@ struct FinanceAppView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
+    private var syncToolbarSymbol: String {
+        if !syncOverview.issues.isEmpty { return "exclamationmark.triangle" }
+        if syncOverview.pendingCount > 0 { return "arrow.triangle.2.circlepath" }
+        return "checkmark.icloud"
+    }
+
+    private var syncSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Image(systemName: syncToolbarSymbol)
+                            .foregroundColor(syncOverview.issues.isEmpty ? FinanceColors.primary : .orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(isSyncing ? "Синхронизация" : "Синхронизировать")
+                                .font(.headline)
+                            Text("Ожидает: \(syncOverview.pendingCount), проблемы: \(syncOverview.issues.count)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            Task { await runManualSync() }
+                        } label: {
+                            if isSyncing {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                        }
+                        .disabled(isSyncing || currentLocalScope == nil)
+                    }
+
+                    if let lastError = syncOverview.lastError, !lastError.isEmpty {
+                        Text(lastError)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if let syncResult {
+                    Section("Последний запуск") {
+                        Text("Отправлено: \(syncResult.push.pushed), применено: \(syncResult.push.applied), получено: \(syncResult.pulledChanges)")
+                            .font(.caption)
+                        if syncResult.hasMorePullChanges {
+                            Text("На сервере есть еще изменения. Запустите синхронизацию еще раз.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                if !syncOverview.issues.isEmpty {
+                    Section("Проблемы") {
+                        ForEach(syncOverview.issues) { issue in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(issue.title)
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                    Text(syncIssueStatusTitle(issue.status))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text(issue.safeDescription)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if issue.decision == .retryAllowed {
+                                    Button {
+                                        Task { await retrySyncIssue(issue) }
+                                    } label: {
+                                        Label("Повторить", systemImage: "arrow.clockwise")
+                                    }
+                                    .disabled(isSyncing)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Синхронизация")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Готово") { showSyncSheet = false }
+                }
+            }
+        }
+    }
+
+    private func syncIssueStatusTitle(_ status: SyncIssueStatus) -> String {
+        switch status {
+        case .failed:
+            return "Проблемы"
+        case .rejected:
+            return "Отклонено"
+        }
+    }
+
     private func restoreSession() async {
         isLoading = true
+        defer {
+            isLoading = false
+            isRestoringSession = false
+        }
+
+        guard let persistedStatus = await apiClient.persistedSessionStatus() else {
+            message = configurationError ?? "Войдите, чтобы увидеть финансы"
+            return
+        }
+
         do {
+            try await syncLeaseProvider.activate(session: persistedStatus)
+            activeLocalScope = LocalStoreScope.fromSession(
+                persistedStatus,
+                fallbackUserId: persistedStatus.userId ?? ""
+            )
+            isAuthenticated = true
+
+            if let configurationError {
+                if !(await restoreBoundOfflineSession(status: persistedStatus, message: "Офлайн-режим. \(configurationError)")) {
+                    message = configurationError
+                }
+                return
+            }
+
             let status = try await apiClient.sessionStatus()
             if status.isAuthenticated {
-                isAuthenticated = true
-                await loadDashboard()
+                await activateAuthenticatedSession(status)
             } else {
-                message = "Войдите, чтобы увидеть финансы"
+                await wipeConfirmedIdentityState(message: "Войдите, чтобы увидеть финансы")
             }
+        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
         } catch {
-            message = "Войдите, чтобы увидеть финансы"
+            if !(await restoreBoundOfflineSession(status: persistedStatus, message: "Нет связи с сервером. Доступны сохранённые данные.")) {
+                message = error.localizedDescription
+            }
         }
-        isLoading = false
     }
 
     private func performLogin(email: String, password: String) async {
+        guard configurationError == nil else {
+            message = configurationError
+            return
+        }
         guard !email.isEmpty, !password.isEmpty else {
             message = "Введите email и пароль"
             return
@@ -201,8 +384,7 @@ struct FinanceAppView: View {
         do {
             let status = try await apiClient.login(email: email, password: password)
             if status.isAuthenticated {
-                isAuthenticated = true
-                await loadDashboard()
+                await activateAuthenticatedSession(status)
             } else {
                 message = "Не удалось войти"
             }
@@ -213,6 +395,10 @@ struct FinanceAppView: View {
     }
 
     private func performRegister(email: String, password: String, confirmPassword: String, displayName: String) async {
+        guard configurationError == nil else {
+            message = configurationError
+            return
+        }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { message = "Введите email"; return }
         guard !password.isEmpty else { message = "Введите пароль"; return }
@@ -232,9 +418,8 @@ struct FinanceAppView: View {
                 displayName: displayName.isEmpty ? nil : displayName
             )
             switch result {
-            case .authenticated:
-                isAuthenticated = true
-                await loadDashboard()
+            case .authenticated(let status):
+                await activateAuthenticatedSession(status)
             case .accepted:
                 message = "Заявка принята. Если аккаунт доступен, войдите по email и паролю."
             }
@@ -254,34 +439,398 @@ struct FinanceAppView: View {
                 startDate: DateHelpers.monthStartDate(yearMonth),
                 endDate: boundary
             )
+            await refreshLocalSnapshotAndOverview()
             message = "Данные обновлены"
-        } catch let error as FinanceApiError where error.isAuthError {
-            isAuthenticated = false
-            message = "Сессия истекла. Войдите снова."
+        } catch where SessionRestorePolicy.isConfirmedInvalidIdentity(error) {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
         } catch {
-            message = error.localizedDescription
+            if !(await restoreBoundOfflineSession(message: "Нет связи с сервером. Доступны сохранённые данные.")) {
+                message = error.localizedDescription
+            }
         }
         isLoading = false
     }
 
+    private func performLogout() async {
+        isLoading = true
+        message = "Выходим"
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
+        let result = await apiClient.logout()
+        let statusMessage = result.remoteSessionRevoked
+            ? "Сессия завершена"
+            : "Сессия завершена локально. Сервер будет отозван при следующем входе."
+        await wipeConfirmedIdentityState(message: statusMessage)
+        isLoading = false
+    }
+
+    private func wipeConfirmedIdentityState(message: String) async {
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
+        await wipeProtectedStores()
+        activeLocalScope = nil
+        dashboard = nil
+        selectedTab = 0
+        showQuickAdd = false
+        quickAddError = nil
+        showSyncSheet = false
+        syncResult = nil
+        syncOverview = .empty
+        isAuthenticated = false
+        self.message = message
+    }
+
+    private var currentLocalScope: LocalStoreScope? {
+        if let activeLocalScope { return activeLocalScope }
+        guard let session = dashboard?.session,
+              let userId = session.userId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userId.isEmpty else {
+            return nil
+        }
+        return LocalStoreScope.fromSession(session, fallbackUserId: userId)
+    }
+
+    private var personalOwnershipContext: PersonalOwnershipContext {
+        PersonalOwnershipContext(
+            viewerUserId: currentLocalScope?.viewerUserId,
+            accounts: dashboard?.accounts ?? [],
+            categories: dashboard?.categories ?? [],
+            assetCategories: dashboard?.assetCategories ?? []
+        )
+    }
+
+    private func wipeForAccountSwitchIfNeeded(newSession: SessionStatus) async {
+        guard let newBinding = SessionIdentityBinding(session: newSession) else { return }
+        let existingUserId = activeLocalScope?.viewerUserId
+        guard let existingUserId, existingUserId != newBinding.userId else {
+            return
+        }
+        await syncService.cancelActiveSync()
+        await syncLeaseProvider.invalidate()
+        do {
+            try await sessionDataWiper.wipeCurrentUser(scope: LocalStoreScope(viewerUserId: existingUserId))
+        } catch {
+            // A failed cleanup must not expose the previous account; the new scope is still isolated by user id.
+        }
+        CategoryAggregateMappingStore.shared.clearAll()
+    }
+
+    private func wipeProtectedStores() async {
+        do {
+            if let scope = currentLocalScope {
+                try await sessionDataWiper.wipeCurrentUser(scope: scope)
+            }
+        } catch {
+            // Best-effort local privacy cleanup; auth state still has to be cleared.
+        }
+        CategoryAggregateMappingStore.shared.clearAll()
+    }
+
+    private func activateAuthenticatedSession(_ status: SessionStatus) async {
+        guard let binding = SessionIdentityBinding(session: status) else {
+            await wipeConfirmedIdentityState(message: "Сервер не подтвердил пользователя.")
+            return
+        }
+        let previousUserId = activeLocalScope?.viewerUserId
+        await wipeForAccountSwitchIfNeeded(newSession: status)
+        if let previousUserId, previousUserId != binding.userId {
+            dashboard = nil
+            syncOverview = .empty
+        }
+        do {
+            try await syncLeaseProvider.activate(session: status)
+        } catch {
+            await wipeConfirmedIdentityState(message: error.localizedDescription)
+            return
+        }
+        activeLocalScope = LocalStoreScope.fromSession(status, fallbackUserId: binding.userId)
+        isAuthenticated = true
+        await loadDashboard()
+    }
+
+    @discardableResult
+    private func restoreBoundOfflineSession(message: String) async -> Bool {
+        guard let status = await apiClient.persistedSessionStatus() else { return false }
+        return await restoreBoundOfflineSession(status: status, message: message)
+    }
+
+    @discardableResult
+    private func restoreBoundOfflineSession(status: SessionStatus, message: String) async -> Bool {
+        guard let binding = SessionIdentityBinding(session: status) else { return false }
+        let scope = LocalStoreScope.fromSession(status, fallbackUserId: binding.userId)
+        do {
+            try await syncLeaseProvider.activate(session: status)
+            let snapshot = try await syncService.localSnapshot(scope: scope)
+            dashboard = FinanceDashboard(
+                session: status,
+                accounts: snapshot.accounts.map(\.entity),
+                categories: snapshot.categories.map(\.entity),
+                transactions: snapshot.transactions.map(\.entity),
+                assetCategories: snapshot.assetCategories.map(\.entity),
+                pendingMutations: snapshot.pendingMutations
+            )
+            activeLocalScope = scope
+            isAuthenticated = true
+            await applyLocalSnapshotToDashboard()
+            await refreshSyncOverview()
+            self.message = message
+            return true
+        } catch {
+            self.message = "Сохранённые данные не открыты: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func openSyncSheet() async {
+        showSyncSheet = true
+        await refreshSyncOverview()
+    }
+
+    private func refreshSyncOverview() async {
+        guard let scope = currentLocalScope else {
+            syncOverview = .empty
+            return
+        }
+        syncOverview = await syncService.overview(scope: scope)
+    }
+
+    private func refreshLocalSnapshotAndOverview() async {
+        await applyLocalSnapshotToDashboard()
+        await refreshSyncOverview()
+    }
+
+    private func applyLocalSnapshotToDashboard() async {
+        guard let scope = currentLocalScope, let dashboard else { return }
+        do {
+            let snapshot = try await syncService.localSnapshot(scope: scope)
+            let mergedTransactions = mergedEntities(
+                existing: dashboard.transactions,
+                localRecords: snapshot.transactions,
+                tombstones: snapshot.tombstones,
+                entityType: .transactions
+            )
+            dashboard.accounts = mergedEntities(
+                existing: dashboard.accounts,
+                localRecords: snapshot.accounts,
+                tombstones: snapshot.tombstones,
+                entityType: .accounts
+            ).filter {
+                $0.ownershipType == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
+            dashboard.categories = mergedEntities(
+                existing: dashboard.categories,
+                localRecords: snapshot.categories,
+                tombstones: snapshot.tombstones,
+                entityType: .categories
+            ).filter {
+                $0.scope == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
+            dashboard.assetCategories = mergedEntities(
+                existing: dashboard.assetCategories,
+                localRecords: snapshot.assetCategories,
+                tombstones: snapshot.tombstones,
+                entityType: .assetCategories
+            ).filter {
+                $0.scopeType == .personal && $0.ownerUserId == scope.viewerUserId && $0.householdId == nil
+            }
+            let personalAccountIds = Set(dashboard.accounts.map(\.id))
+            dashboard.transactions = mergedTransactions.filter { transaction in
+                personalAccountIds.contains(transaction.accountId) &&
+                transaction.counterpartyAccountId.map(personalAccountIds.contains) != false
+            }
+            dashboard.assetCategoryGroups = rebuiltAssetCategoryGroups(
+                existing: dashboard.assetCategoryGroups,
+                categories: dashboard.assetCategories,
+                accounts: dashboard.accounts
+            )
+            dashboard.pendingMutations = snapshot.pendingMutations
+        } catch {
+            syncOverview = LocalSyncOverview(
+                pendingCount: syncOverview.pendingCount,
+                issues: syncOverview.issues,
+                lastError: SyncSafeMessage.describe(error.localizedDescription)
+            )
+        }
+    }
+
+    private func mergedEntities<Entity: Identifiable & Codable & Sendable>(
+        existing: [Entity],
+        localRecords: [LocalRecord<Entity>],
+        tombstones: [SyncTombstone],
+        entityType: SyncEntityType
+    ) -> [Entity] where Entity.ID == String {
+        let tombstonedIds = Set(tombstones
+            .filter { $0.entityType == entityType }
+            .map(\.entityId))
+        var merged = existing.filter { !tombstonedIds.contains($0.id) }
+        for entity in localRecords.map(\.entity) where !tombstonedIds.contains(entity.id) {
+            if let index = merged.firstIndex(where: { $0.id == entity.id }) {
+                merged[index] = entity
+            } else {
+                merged.append(entity)
+            }
+        }
+        return merged
+    }
+
+    private func rebuiltAssetCategoryGroups(
+        existing: [AssetCategoryGroup],
+        categories: [AssetCategory],
+        accounts: [Account]
+    ) -> [AssetCategoryGroup] {
+        var existingById: [String: AssetCategoryGroup] = [:]
+        for group in existing {
+            existingById[group.assetCategoryId] = group
+        }
+        return categories
+            .filter { $0.recordStatus == .active && $0.scopeType == .personal && $0.householdId == nil }
+            .map { category in
+                let linked = accounts.filter {
+                    $0.assetCategoryId == category.id &&
+                    $0.status == .active &&
+                    $0.currency == category.currency
+                }
+                let accountsTotal = linked.reduce(Decimal.zero) { total, account in
+                    total + (Decimal(string: account.currentBalance) ?? .zero)
+                }
+                let manualAmount = Decimal(string: category.manualAmount) ?? .zero
+                let totalAmount = accountsTotal + manualAmount
+                let existingGroup = existingById[category.id]
+                return AssetCategoryGroup(
+                    assetCategoryId: category.id,
+                    name: category.name,
+                    scopeType: category.scopeType,
+                    householdId: nil,
+                    currency: category.currency,
+                    manualAmount: category.manualAmount,
+                    accountsTotal: MoneyHelpers.decimalToString(accountsTotal),
+                    totalAmount: MoneyHelpers.decimalToString(totalAmount),
+                    isInvestment: category.isInvestment,
+                    assetType: category.assetType,
+                    iconKey: category.iconKey,
+                    accountCount: linked.isEmpty ? existingGroup?.accountCount : linked.count
+                )
+            }
+    }
+
+    private func runManualSync() async {
+        guard let scope = currentLocalScope else { return }
+        isSyncing = true
+        let result = await syncService.syncNow(scope: scope)
+        if result.requiresReauthentication {
+            await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
+            isSyncing = false
+            return
+        }
+        syncResult = result
+        await refreshLocalSnapshotAndOverview()
+        isSyncing = false
+    }
+
+    private func retrySyncIssue(_ issue: SyncIssue) async {
+        guard issue.decision == .retryAllowed, let scope = currentLocalScope else { return }
+        isSyncing = true
+        do {
+            try await syncService.retryIssue(scope: scope, issueId: issue.id)
+            let result = await syncService.syncNow(scope: scope)
+            if result.requiresReauthentication {
+                await wipeConfirmedIdentityState(message: "Сессия истекла. Войдите снова.")
+                isSyncing = false
+                return
+            }
+            syncResult = result
+        } catch {
+            syncOverview = LocalSyncOverview(
+                pendingCount: syncOverview.pendingCount,
+                issues: syncOverview.issues,
+                lastError: SyncSafeMessage.describe(error.localizedDescription)
+            )
+        }
+        await refreshSyncOverview()
+        isSyncing = false
+    }
+
     private func deleteTransaction(_ id: String) async {
+        let localTransaction = dashboard?.transactions.first(where: { $0.id == id })
         isLoading = true
         message = "Удаляем операцию"
         do {
             try await apiClient.deleteTransaction(transactionId: id)
             await loadDashboard()
             message = "Операция удалена"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            if let scope = currentLocalScope {
+                do {
+                    guard let localTransaction else { throw LocalOptimisticError.missingCurrentEntity }
+                    try await syncService.enqueueOptimisticMutation(
+                        scope: scope,
+                        entityType: .transactions,
+                        entityId: id,
+                        operation: .delete,
+                        baseVersion: localTransaction.version,
+                        optimisticEntity: localTransaction,
+                        ownershipContext: personalOwnershipContext
+                    )
+                    await refreshLocalSnapshotAndOverview()
+                    message = "Операция удалена локально, ожидает синхронизации"
+                } catch {
+                    message = error.localizedDescription
+                }
+            } else {
+                message = error.localizedDescription
+            }
+            isLoading = false
         } catch {
             message = error.localizedDescription
             isLoading = false
         }
     }
 
-    private func submitQuickAdd(_ draft: QuickAddDraft) async {
-        guard draft.visibility != .overview else {
-            quickAddError = "Мой обзор только показывает видимые вам данные. Выберите Личное или Общее перед сохранением."
-            return
+    private func updateTransactionOnlineOrQueue(
+        id: String,
+        request: TransactionUpdateRequest
+    ) async throws {
+        guard let current = dashboard?.transactions.first(where: { $0.id == id }) else {
+            throw LocalOptimisticError.missingCurrentEntity
         }
+
+        do {
+            _ = try await apiClient.updateTransaction(transactionId: id, request)
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            guard let scope = currentLocalScope else { throw error }
+            let optimistic = Transaction(
+                id: current.id,
+                transactionType: request.transactionType ?? current.transactionType,
+                accountId: request.accountId ?? current.accountId,
+                counterpartyAccountId: request.counterpartyAccountId ?? current.counterpartyAccountId,
+                categoryId: request.categoryId ?? current.categoryId,
+                amount: request.amount ?? current.amount,
+                currency: request.currency ?? current.currency,
+                occurredAt: request.occurredAt ?? current.occurredAt,
+                transactionDate: request.transactionDate ?? current.transactionDate,
+                description: request.description ?? current.description,
+                sourceType: request.sourceType ?? current.sourceType,
+                transferScope: current.transferScope,
+                transferStatus: current.transferStatus,
+                createdAt: current.createdAt,
+                version: current.version
+            )
+            try await syncService.enqueueOptimisticMutation(
+                scope: scope,
+                entityType: .transactions,
+                entityId: id,
+                operation: .update,
+                baseVersion: current.version,
+                request: TransactionOfflineUpdateRequest(request),
+                optimisticEntity: optimistic,
+                ownershipContext: personalOwnershipContext
+            )
+            await refreshLocalSnapshotAndOverview()
+            message = "Изменения сохранены локально и ожидают синхронизации"
+        }
+    }
+
+    private func submitQuickAdd(_ draft: QuickAddDraft) async {
         let normalizedAmount = draft.amount
         guard Decimal(string: normalizedAmount) != nil else {
             quickAddError = "Проверьте сумму"
@@ -293,23 +842,28 @@ struct FinanceAppView: View {
         do {
             let accounts = dashboard?.accounts ?? []
             let categories = dashboard?.categories ?? []
+            var queuedOffline = false
 
             switch draft.type {
             case .expense, .income:
-                let scopedAccounts = accounts
-                    .filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
+                let scopedAccounts = accounts.filter { $0.status == .active && $0.ownershipType == .personal }
+                let operationAccounts = draft.type == .expense
+                    ? scopedAccounts.filter { $0.isPaymentAccount }
+                    : scopedAccounts
                 let source: Account
-                if let found = scopedAccounts.first(where: { $0.id == draft.accountId }) {
+                if let found = operationAccounts.first(where: { $0.id == draft.accountId }) {
                     source = found
-                } else if let first = scopedAccounts.first {
+                } else if let first = operationAccounts.first {
                     source = first
                 } else {
-                    quickAddError = "В режиме \(draft.visibility.title) нет активного счёта."
+                    quickAddError = draft.type == .expense
+                        ? "Нет активного счёта, отмеченного для оплаты."
+                        : "Нет активного счёта."
                     isLoading = false
                     return
                 }
 
-                let scopedCategories = categories.filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
+                let scopedCategories = categories.filter { $0.scope == .personal && $0.status == .active }
                 let category = scopedCategories.first { $0.id == draft.categoryId }
                 if category == nil {
                     quickAddError = "Выберите категорию"
@@ -324,18 +878,28 @@ struct FinanceAppView: View {
                     categoryId: draft.categoryId.isEmpty ? nil : draft.categoryId,
                     amount: normalizedAmount,
                     currency: source.currency,
-                    occurredAt: DateHelpers.nowISO(),
+                    occurredAt: nil,
                     transactionDate: draft.transactionDate,
                     description: nil,
                     sourceType: "manual"
                 )
-                _ = try await apiClient.createTransaction(request)
+                queuedOffline = try await createTransactionOnlineOrQueue(request)
 
-            case .transfer:
-                let scopedAccounts = accounts
-                    .filteredByMode(draft.visibility, householdId: dashboard?.session.householdId)
-                guard let source = scopedAccounts.first(where: { $0.id == draft.accountId }) ?? scopedAccounts.first,
-                      let dest = scopedAccounts.first(where: { $0.id == draft.destinationAccountId }) else {
+            case .transfer, .investment:
+                let scopedAccounts = accounts.filter { $0.status == .active && $0.ownershipType == .personal }
+                let investmentCategoryIds = Set((dashboard?.assetCategories ?? [])
+                    .filter { $0.scopeType == .personal && $0.recordStatus == .active && $0.isInvestment }
+                    .map(\.id))
+                let sourceCandidates = draft.type == .investment
+                    ? scopedAccounts.filter(\.isPaymentAccount)
+                    : scopedAccounts
+                let destinationCandidates = draft.type == .investment
+                    ? scopedAccounts.filter { $0.assetCategoryId.map(investmentCategoryIds.contains) == true }
+                    : scopedAccounts
+                guard let source = sourceCandidates.first(where: { $0.id == draft.accountId }) ?? sourceCandidates.first,
+                      let dest = destinationCandidates.first(where: { $0.id == draft.destinationAccountId }),
+                      source.id != dest.id,
+                      source.currency == dest.currency else {
                     quickAddError = "Выберите оба счёта для перевода"
                     isLoading = false
                     return
@@ -347,21 +911,63 @@ struct FinanceAppView: View {
                     categoryId: nil,
                     amount: normalizedAmount,
                     currency: source.currency,
-                    occurredAt: DateHelpers.nowISO(),
+                    occurredAt: nil,
                     transactionDate: draft.transactionDate,
                     description: nil,
                     sourceType: "manual"
                 )
-                _ = try await apiClient.createTransaction(request)
+                queuedOffline = try await createTransactionOnlineOrQueue(request)
             }
 
             showQuickAdd = false
-            await loadDashboard()
-            message = "Сохранено в \(draft.visibility.title.lowercased())"
+            if queuedOffline {
+                await refreshLocalSnapshotAndOverview()
+                message = "Сохранено локально, ожидает синхронизации"
+                isLoading = false
+            } else {
+                await loadDashboard()
+                message = "Операция сохранена"
+            }
         } catch {
             quickAddError = error.localizedDescription
             message = error.localizedDescription
             isLoading = false
+        }
+    }
+
+    private func createTransactionOnlineOrQueue(_ request: TransactionCreateRequest) async throws -> Bool {
+        do {
+            _ = try await apiClient.createTransaction(request)
+            return false
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            guard let scope = currentLocalScope else { throw error }
+            let transaction = Transaction(
+                id: UUID().uuidString,
+                transactionType: request.transactionType,
+                accountId: request.accountId,
+                counterpartyAccountId: request.counterpartyAccountId,
+                categoryId: request.categoryId,
+                amount: request.amount,
+                currency: request.currency,
+                occurredAt: request.occurredAt ?? DateHelpers.nowISO(),
+                transactionDate: request.transactionDate,
+                description: request.description,
+                sourceType: request.sourceType,
+                transferScope: nil,
+                transferStatus: request.transactionType == .transfer ? .posted : nil,
+                version: nil
+            )
+            try await syncService.enqueueOptimisticMutation(
+                scope: scope,
+                entityType: .transactions,
+                entityId: transaction.id,
+                operation: .create,
+                request: request,
+                optimisticEntity: transaction,
+                ownershipContext: personalOwnershipContext
+            )
+            await refreshLocalSnapshotAndOverview()
+            return true
         }
     }
 }

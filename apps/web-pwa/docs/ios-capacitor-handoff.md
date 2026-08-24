@@ -6,11 +6,11 @@
 - Bundle id: `com.codex.finance`.
 - App name: `Finance`.
 - Web assets bundled locally из `dist`.
-- Mobile build reproducible из clean checkout: `npm run build:ios` задает `VITE_BASE_PATH=/` и `VITE_API_BASE_URL=http://45.10.110.42/finance-api` внутри tracked Node script `scripts/build-ios.mjs`.
+- Mobile build задает `VITE_BASE_PATH=/`, но требует явные HTTPS URL в `CAPACITOR_API_BASE_URL` и `CAPACITOR_SERVER_URL`.
 - Mobile build использует base path `/`, чтобы WebView грузил ассеты от корня приложения.
-- Mobile API base: `http://45.10.110.42/finance-api`.
+- HTTP production API/server URL отклоняется до сборки или `cap sync`.
 - iOS permission: только `NSPhotoLibraryUsageDescription` для выбора скриншота из медиатеки.
-- ATS: временное исключение только для `45.10.110.42`, потому что текущий API доступен по HTTP.
+- Release ATS exception отсутствует.
 - Camera, SMS, push, background modes и document picker не добавлены.
 - AppIcon сгенерирован из `public/pwa-icon.svg`.
 
@@ -20,6 +20,8 @@
 
 ```bash
 npm ci
+export CAPACITOR_API_BASE_URL="https://finance.example.com/finance-api"
+export CAPACITOR_SERVER_URL="https://finance.example.com/finance/"
 npm run build:ios
 npx cap sync ios
 ```
@@ -30,7 +32,7 @@ npx cap sync ios
 npm run cap:sync:ios
 ```
 
-`build:ios` не зависит от `.env.capacitor`: файл `.env.capacitor` игнорируется общим `.gitignore` как `.env.*` и не должен быть нужен для iOS-сборки. Если локальный `.env.capacitor` существует у разработчика, считайте его optional scratch-файлом; canonical значения для iOS находятся в `scripts/build-ios.mjs`.
+`build:ios` не читает `.env.capacitor`: HTTPS URL должны быть переданы через окружение сборки. Скрипт завершится с ошибкой, если URL отсутствует, невалиден или использует HTTP.
 
 Обычная production PWA сборка остается отдельной:
 
@@ -68,7 +70,7 @@ open ios/App/App.xcodeproj
 
 - Приложение открывается без белого экрана.
 - В WebView ассеты грузятся локально, без запросов к `/finance/`.
-- Login/session flow доходит до API `http://45.10.110.42/finance-api`.
+- Login/session flow доходит до HTTPS API из `CAPACITOR_API_BASE_URL`.
 - Dashboard открывается после входа.
 - Базовые операции UI работают: счета, категории, операции, переводы.
 - Загрузка скрина расходов открывает выбор из Photo Library и не просит Camera permission.
@@ -78,6 +80,5 @@ open ios/App/App.xcodeproj
 ## Ограничения и риски
 
 - Xcode build и запуск на iPhone не выполнялись на Windows.
-- ATS exception для HTTP API временный. Для релиза нужно перевести API на HTTPS и удалить `NSAppTransportSecurity` exception из `ios/App/App/Info.plist`.
+- Legacy wrapper требует доступные HTTPS endpoint с валидной TLS-цепочкой; cleartext fallback отсутствует.
 - API работает с cookie credentials. На устройстве нужно проверить, что backend CORS/cookie policy принимает origin Capacitor WebView (`capacitor://localhost`) и credentials. Backend в этой задаче не менялся.
-- Если backend требует secure cookies, HTTP endpoint может не сохранить session cookie на iOS; это решается HTTPS на API.

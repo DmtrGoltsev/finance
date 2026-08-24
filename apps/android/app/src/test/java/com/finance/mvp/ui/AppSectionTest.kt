@@ -18,7 +18,7 @@ class AppSectionTest {
     fun exposesMobileFinanceSectionsWithCategoryManagement() {
         val titles = financeSections().map { it.title }
 
-        assertEquals(listOf("Главная", "Операции", "Активы", "Категории", "Аналитика"), titles)
+        assertEquals(listOf("Главная", "Операции", "Активы", "Категории расходов", "Аналитика"), titles)
     }
 
     @Test
@@ -221,15 +221,15 @@ class AppSectionTest {
 
         assertEquals("Для перевода нужны два совместимых счета в одном scope и одной валюте.", transferPairValidationMessage(personal, null))
         assertEquals("Выберите два разных счета", transferPairValidationMessage(personal, personal))
-        assertEquals("Перед отправкой выберите счета одного scope: Личное с Личным или Общее с Общим.", transferPairValidationMessage(personal, shared))
+        assertEquals("Перед отправкой выберите два личных счёта.", transferPairValidationMessage(personal, shared))
         assertEquals("Перед отправкой выберите счета в одной валюте: конвертация в переводе недоступна.", transferPairValidationMessage(personal, eur))
         assertEquals(null, transferPairValidationMessage(personal, personal.copy(id = "personal-2")))
     }
 
     @Test
-    fun writableModesExcludeOverviewForWriteFlows() {
+    fun writableModesAreAlwaysPersonalEvenWhenSessionHasHousehold() {
         assertEquals(listOf(FinanceMode.Personal), writableFinanceModes(hasHousehold = false))
-        assertEquals(listOf(FinanceMode.Personal, FinanceMode.Shared), writableFinanceModes(hasHousehold = true))
+        assertEquals(listOf(FinanceMode.Personal), writableFinanceModes(hasHousehold = true))
         assertFalse(writableFinanceModes(hasHousehold = true).contains(FinanceMode.Overview))
     }
 
@@ -255,8 +255,8 @@ class AppSectionTest {
             transferValidation = null,
         )
 
-        assertTrue(overviewReason.orEmpty().contains("Мой обзор read-only"))
-        assertTrue(missingCategoryReason.orEmpty().contains("нет категории"))
+        assertTrue(overviewReason.orEmpty().contains("личных финансах"))
+        assertTrue(missingCategoryReason.orEmpty().contains("нет категории", ignoreCase = true))
         assertFalse(quickAddEntryTypes().contains(QuickEntryType.Asset))
     }
 
@@ -750,7 +750,7 @@ class AppSectionTest {
     }
 
     @Test
-    fun emptyOverviewLegacyInvestmentMigrationRequiresExplicitScope() {
+    fun emptyLegacyInvestmentMigrationFallsBackToPersonalScope() {
         val selection = selectLegacyAssetCategoryMigrationTarget(
             selectedMode = FinanceMode.Overview,
             accounts = emptyList(),
@@ -759,8 +759,10 @@ class AppSectionTest {
             groupName = "Брокер",
         )
 
-        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Blocked)
-        assertTrue((selection as LegacyAssetCategoryMigrationTargetSelection.Blocked).message.contains("Переключитесь"))
+        assertTrue(selection is LegacyAssetCategoryMigrationTargetSelection.Ready)
+        val target = (selection as LegacyAssetCategoryMigrationTargetSelection.Ready).target
+        assertEquals("personal", target.scopeType)
+        assertEquals(null, target.householdId)
     }
 
     @Test
@@ -845,6 +847,74 @@ class AppSectionTest {
         assertEquals("2026-02-28", boundary.endDate)
         assertTrue("2026-02-28".isDateOnly())
         assertFalse("2026-02-28T00:00:00Z".isDateOnly())
+    }
+
+    @Test
+    fun reportMonthSwitcherKeepsMonthNavigationCompactAndDeterministic() {
+        val state = reportMonthSwitcherState(
+            selectedMonth = "2026-08",
+            currentMonth = "2026-08",
+        )
+
+        assertEquals("Август 2026", state.label)
+        assertEquals("2026-07", state.previousMonth)
+        assertEquals("2026-08", state.currentMonth)
+        assertEquals("2026-09", state.nextMonth)
+    }
+
+    @Test
+    fun operationsSortNewestByDateThenOccurredCreatedAndId() {
+        val oldest = TransactionSummary(
+            type = "income",
+            amount = "1",
+            currency = "USD",
+            occurredAt = "2026-08-22T12:00:00Z",
+            description = "oldest",
+            transferScope = null,
+            transferStatus = null,
+            id = "a",
+            accountId = "payment",
+            transactionDate = "2026-08-22",
+            createdAt = "2026-08-22T12:01:00Z",
+        )
+        val newerExpense = oldest.copy(
+            type = "expense",
+            description = "newer expense",
+            id = "b",
+            createdAt = "2026-08-22T12:02:00Z",
+        )
+        val newestTransfer = oldest.copy(
+            type = "transfer",
+            description = "newest transfer",
+            id = "c",
+            counterpartyAccountId = "broker",
+            createdAt = "2026-08-22T12:03:00Z",
+        )
+
+        assertEquals(
+            listOf("c", "b", "a"),
+            listOf(oldest, newestTransfer, newerExpense).sortedNewestFirst().map { it.id },
+        )
+    }
+
+    @Test
+    fun categorySearchMatchesPartialTextAndSortsVerticalOptions() {
+        val categories = listOf(
+            CategorySummary("Супермаркеты", "expense", "personal", id = "market"),
+            CategorySummary("Кафе и рестораны", "expense", "personal", id = "cafe"),
+            CategorySummary("Такси", "expense", "personal", id = "taxi"),
+        )
+
+        assertEquals(listOf("cafe"), categories.filterCategories("рест").map { it.id })
+        assertEquals(listOf("cafe", "market", "taxi"), categories.filterCategories("").map { it.id })
+    }
+
+    @Test
+    fun quickAddSelectionImmediatelyAdoptsNewlyLoadedPaymentAccount() {
+        assertEquals("", resolvedSelectionId("", emptyList()))
+        assertEquals("payment", resolvedSelectionId("", listOf("payment")))
+        assertEquals("payment", resolvedSelectionId("stale", listOf("payment", "cash")))
+        assertEquals("cash", resolvedSelectionId("cash", listOf("payment", "cash")))
     }
 
     private fun dashboardFixture(): FinanceDashboard {

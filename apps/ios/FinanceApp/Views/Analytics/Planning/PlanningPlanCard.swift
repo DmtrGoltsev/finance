@@ -15,7 +15,7 @@ struct PlanningPlanCard: View {
                     Text("Текущий план")
                         .font(.headline)
                     if let plan = plan {
-                        Text("\(localizedPlanningScope(plan.scope)) • \(localizedPlanningMonth(plan.month)) • \(plan.currency.rawValue)")
+                        Text("\(localizedPlanningMonth(plan.month)) • \(plan.currency.rawValue)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {

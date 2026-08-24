@@ -3,12 +3,11 @@ import PhotosUI
 
 struct OperationsTab: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let onDeleteTransaction: (String) -> Void
     let apiClient: FinanceApiClient
-    let householdId: String?
     let onRefreshDashboard: @Sendable () async -> Void
+    // Integration hook for a root-owned online-or-queue update path.
+    let onUpdateTransaction: ((String, TransactionUpdateRequest) async throws -> Void)?
 
     @State private var captureDrafts: [CaptureDraft] = []
     @State private var screenshotAggregateDrafts: [ScreenshotAggregateDraftUi] = []
@@ -17,16 +16,28 @@ struct OperationsTab: View {
     @State private var screenshotOcrStatus: String?
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
+    @State private var editingTransaction: Transaction?
+
+    init(
+        dashboard: FinanceDashboard?,
+        onDeleteTransaction: @escaping (String) -> Void,
+        apiClient: FinanceApiClient,
+        onRefreshDashboard: @escaping @Sendable () async -> Void,
+        onUpdateTransaction: ((String, TransactionUpdateRequest) async throws -> Void)? = nil
+    ) {
+        self.dashboard = dashboard
+        self.onDeleteTransaction = onDeleteTransaction
+        self.apiClient = apiClient
+        self.onRefreshDashboard = onRefreshDashboard
+        self.onUpdateTransaction = onUpdateTransaction
+    }
 
     var body: some View {
-        let view = dashboard?.viewFor(selectedMode)
-        let items = (dashboard?.transactionsFor(selectedMode) ?? [])
-            .sorted { dashboard?.sortDateKey($0) ?? "" < dashboard?.sortDateKey($1) ?? "" }
+        let items = (dashboard?.personalTransactions ?? [])
+            .sorted(by: Transaction.newestFirst)
 
         ScrollView {
             VStack(spacing: 12) {
-                ModeChips(selectedMode: selectedMode, onModeSelected: onModeSelected)
-
                 CaptureDraftReviewCard(
                     isAuthenticated: dashboard?.session.isAuthenticated == true,
                     drafts: captureDrafts,
@@ -48,11 +59,9 @@ struct OperationsTab: View {
                 )
 
                 if items.isEmpty {
-                    EmptyState(
-                        text: "\(view?.scopeTitle ?? ""): операций пока нет. Добавьте расход, доход или переключитесь на другой scope."
-                    )
+                    EmptyState(text: "Операций пока нет. Добавьте расход, доход, перевод или инвестицию.")
                 } else {
-                    Text("Операции \u{2022} \(view?.scopeTitle ?? "")")
+                    Text("Операции")
                         .font(.headline)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -60,7 +69,8 @@ struct OperationsTab: View {
                         TransactionRow(
                             transaction: transaction,
                             categories: dashboard?.categories ?? [],
-                            onDelete: { onDeleteTransaction(transaction.id) }
+                            onDelete: { onDeleteTransaction(transaction.id) },
+                            onEdit: { editingTransaction = transaction }
                         )
                     }
                 }
@@ -82,18 +92,31 @@ struct OperationsTab: View {
         .refreshable {
             await loadCaptureDrafts()
         }
+        .sheet(item: $editingTransaction) { transaction in
+            TransactionEditSheet(
+                transaction: transaction,
+                dashboard: dashboard,
+                onSave: { request in
+                    if let onUpdateTransaction {
+                        try await onUpdateTransaction(transaction.id, request)
+                    } else {
+                        _ = try await apiClient.updateTransaction(transactionId: transaction.id, request)
+                    }
+                    await onRefreshDashboard()
+                },
+                onDismiss: { editingTransaction = nil }
+            )
+        }
     }
 
     private var reviewAccounts: [Account] {
         (dashboard?.accounts ?? [])
-            .filter { $0.status == .active && !$0.id.isEmpty }
-            .filteredByMode(selectedMode, householdId: householdId)
+            .filter { $0.status == .active && !$0.id.isEmpty && $0.ownershipType == .personal && $0.isPaymentAccount }
     }
 
     private var reviewCategories: [Category] {
         (dashboard?.categories ?? [])
-            .filter { $0.status == .active && !$0.id.isEmpty }
-            .filteredByMode(selectedMode, householdId: householdId)
+            .filter { $0.status == .active && !$0.id.isEmpty && $0.scope == .personal && $0.type == .expense }
     }
 }
 
@@ -128,7 +151,7 @@ extension OperationsTab {
                 imageData: data,
                 contentType: "image/jpeg",
                 capturedAt: capturedAt,
-                householdId: householdId
+                householdId: nil
             )
 
             if response.items.isEmpty {
@@ -182,19 +205,14 @@ extension OperationsTab {
     }
 
     private func createCategoryForAggregate(key: String, categoryName: String) async {
-        guard selectedMode != .overview else {
-            captureMessage = "Мой обзор read-only. Переключитесь на Личное или Общее."
-            return
-        }
         captureIsLoading = true
         captureMessage = "Создаём категорию"
         do {
-            let scope: CategoryScope = selectedMode == .shared ? .household : .personal
             let request = CategoryCreateRequest(
                 name: categoryName,
                 type: .expense,
-                scope: scope,
-                householdId: selectedMode == .shared ? householdId : nil,
+                scope: .personal,
+                householdId: nil,
                 iconKey: nil,
                 color: nil
             )

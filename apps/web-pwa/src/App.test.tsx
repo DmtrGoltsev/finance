@@ -137,6 +137,15 @@ const financeSnapshot: DashboardSnapshot = {
   ],
   reports: [
     {
+      mode: "personal",
+      title: "Личное",
+      periodLabel: "Текущий месяц",
+      income: { value: 250, currency: "USD" },
+      expense: { value: 69.75, currency: "USD" },
+      balanceDelta: { value: 180.25, currency: "USD" },
+      investmentsTotal: { value: 0, currency: "USD" }
+    },
+    {
       mode: "shared_family_report",
       title: "Общее",
       periodLabel: "Текущий месяц",
@@ -172,7 +181,7 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
     createDemoAccount: vi.fn(async () => snapshot.accounts[0]),
     createDemoCategory: vi.fn(async () => snapshot.categories[0]),
     createDemoOperation: vi.fn(async (_input: unknown) => snapshot.operations[0]),
-    createDemoTransfer: vi.fn(async () => snapshot.transfers[0]),
+    createDemoTransfer: vi.fn(async (_input: unknown) => snapshot.transfers[0]),
     createCaptureDraft: vi.fn(async (_input: CaptureDraftCreateInput) => ({
       id: "draft-1",
       status: "pending" as const,
@@ -213,6 +222,17 @@ function makeClient(snapshot: DashboardSnapshot = financeSnapshot) {
       investmentsByCurrency: [],
       investmentsTotal: null
     })),
+    getCategoryBreakdown: vi.fn(async () => [
+      {
+        categoryId: "category-1",
+        categoryName: "Продукты",
+        categoryType: "expense" as const,
+        categoryScope: "personal" as const,
+        amount: { value: 69.75, currency: "USD" as const },
+        transactionCount: 1,
+        shareOfVisibleTotal: 1
+      }
+    ]),
     loginWithPassword: vi.fn(async () => undefined),
     registerUser: vi.fn(
       async (): Promise<{ status: "authenticated" } | { status: "accepted" }> => ({
@@ -297,6 +317,23 @@ function pendingDraft(input: Partial<CaptureDraftSummary> & { id: string }): Cap
     categoryId: input.categoryId ?? null,
     confidence: input.confidence ?? 0.88
   };
+}
+
+async function chooseCategory(
+  user: ReturnType<typeof userEvent.setup>,
+  root: HTMLElement,
+  label: string,
+  optionName: string,
+  query = optionName
+) {
+  await user.click(within(root).getByLabelText(label));
+  const dialog = await screen.findByRole("dialog", { name: label });
+  await user.clear(within(dialog).getByLabelText("Поиск категории"));
+  await user.type(within(dialog).getByLabelText("Поиск категории"), query);
+  await user.click(within(dialog).getByRole("button", { name: new RegExp(optionName, "i") }));
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: label })).not.toBeInTheDocument();
+  });
 }
 
 describe("PWA finance experience", () => {
@@ -445,6 +482,23 @@ describe("PWA finance experience", () => {
     expect(screen.queryByText("Капитал")).not.toBeInTheDocument();
   });
 
+  it("does not claim logout when server-side cookie revocation fails", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.logout = vi.fn(async () => {
+      throw new Error("revocation unavailable");
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByRole("button", { name: /Выйти/i }));
+
+    expect(await screen.findByRole("heading", { name: "Не удалось завершить выход" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Сессия может оставаться активной");
+    expect(screen.queryByRole("form", { name: "Вход в финансы" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Капитал")).not.toBeInTheDocument();
+  });
+
   it("renders the financial dashboard and hides technical wording", async () => {
     render(<App client={makeClient()} />);
 
@@ -473,6 +527,99 @@ describe("PWA finance experience", () => {
     expect(screen.queryByRole("heading", { name: "Импорт отчета" })).not.toBeInTheDocument();
   });
 
+  it("opens all top spending categories from the server breakdown", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-12T10:00:00.000Z"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const client = makeClient();
+    client.getCategoryBreakdown = vi.fn(async () => [
+      {
+        categoryId: "category-transport",
+        categoryName: "Транспорт",
+        categoryType: "expense" as const,
+        categoryScope: "personal" as const,
+        amount: { value: 15, currency: "USD" as const },
+        transactionCount: 1,
+        shareOfVisibleTotal: 0.176
+      },
+      {
+        categoryId: "category-1",
+        categoryName: "Продукты",
+        categoryType: "expense" as const,
+        categoryScope: "personal" as const,
+        amount: { value: 70, currency: "USD" as const },
+        transactionCount: 2,
+        shareOfVisibleTotal: 0.824
+      }
+    ]);
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getByRole("button", { name: "Все" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Все категории трат" });
+    const dialogLayer = dialog.closest(".modalLayer");
+    expect(dialogLayer?.parentElement).toBe(document.body);
+    expect(dialog.closest(".appShell")).toBeNull();
+    expect(client.getCategoryBreakdown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reportMode: "personal",
+        householdId: null,
+        startDate: "2026-06-01",
+        endDate: "2026-06-30"
+      })
+    );
+    expect(within(dialog).getByText("Продукты").compareDocumentPosition(within(dialog).getByText("Транспорт"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("shows newer posted operations before older ones in overview and operations", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        client={makeClient({
+          ...financeSnapshot,
+          operations: [
+            {
+              id: "operation-old",
+              date: "2026-06-10",
+              title: "Old grocery run",
+              accountId: "account-1",
+              categoryId: "category-1",
+              version: 1,
+              categoryName: "Products",
+              accountName: "Card",
+              amount: { value: -10, currency: "USD" }
+            },
+            {
+              id: "operation-new",
+              date: "2026-06-18",
+              title: "New cafe visit",
+              accountId: "account-1",
+              categoryId: "category-1",
+              version: 1,
+              categoryName: "Products",
+              accountName: "Card",
+              amount: { value: -20, currency: "USD" }
+            }
+          ],
+          transfers: []
+        })}
+      />
+    );
+
+    await screen.findByText("New cafe visit");
+    expect(screen.getByText("New cafe visit").compareDocumentPosition(screen.getByText("Old grocery run"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+
+    await user.click(screen.getByTestId("mobile-nav-operations"));
+    expect(screen.getByText("New cafe visit").compareDocumentPosition(screen.getByText("Old grocery run"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
   it("adds an expense from quick add", async () => {
     const user = userEvent.setup();
     const client = makeClient();
@@ -486,7 +633,7 @@ describe("PWA finance experience", () => {
     await user.clear(within(sheet).getByLabelText("Сумма"));
     await user.type(within(sheet).getByLabelText("Сумма"), "345");
     await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
-    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
+    await chooseCategory(user, sheet, "Категория", "Продукты", "дук");
     await user.click(within(sheet).getByText("Еще"));
     fireEvent.change(within(sheet).getByLabelText("Дата"), {
       target: { value: "2026-06-05" }
@@ -506,6 +653,41 @@ describe("PWA finance experience", () => {
     });
     expect(client.createDemoOperation.mock.calls[0][0]).not.toHaveProperty("occurredAt");
     expect(client.getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters quick add categories in a searchable overlay", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      ...financeSnapshot,
+      categories: [
+        ...financeSnapshot.categories,
+        {
+          id: "category-transport",
+          name: "Транспорт",
+          direction: "expense",
+          iconKey: "car",
+          color: "#7c3aed",
+          scope: "personal",
+          householdId: null,
+          status: "active",
+          version: 1,
+          planned: { value: 0, currency: "USD" },
+          actual: { value: 0, currency: "USD" }
+        }
+      ]
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.click(within(sheet).getByLabelText("Категория"));
+    const dialog = await screen.findByRole("dialog", { name: "Категория" });
+    await user.type(within(dialog).getByLabelText("Поиск категории"), "дук");
+
+    expect(within(dialog).getByRole("button", { name: /Продукты/i })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Транспорт/i })).not.toBeInTheDocument();
   });
 
   it("limits expense account choices to active payment accounts without blocking income", async () => {
@@ -544,18 +726,18 @@ describe("PWA finance experience", () => {
     await user.clear(within(sheet).getByLabelText("Сумма"));
     await user.type(within(sheet).getByLabelText("Сумма"), "345");
     await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
-    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
+    await chooseCategory(user, sheet, "Категория", "Продукты");
     await user.click(within(sheet).getByRole("button", { name: /Доход/i }));
 
     await waitFor(() => {
-      expect(within(sheet).getByLabelText("Категория")).toHaveValue("");
+      expect(within(sheet).getByLabelText("Категория")).toHaveTextContent("Выберите категорию");
     });
 
     expect(within(sheet).getByTestId("quick-add-submit")).toBeDisabled();
     await user.click(within(sheet).getByTestId("quick-add-submit"));
     expect(client.createDemoOperation).not.toHaveBeenCalled();
 
-    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-2");
+    await chooseCategory(user, sheet, "Категория", "Зарплата");
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -590,6 +772,10 @@ describe("PWA finance experience", () => {
     await user.type(within(sheet).getByLabelText("Сумма"), "125");
     await user.selectOptions(within(sheet).getByLabelText("Откуда"), "account-1");
     await user.selectOptions(within(sheet).getByLabelText("Куда"), "account-2");
+    await user.click(within(sheet).getByText("Еще"));
+    fireEvent.change(within(sheet).getByLabelText("Дата"), {
+      target: { value: "2026-06-05" }
+    });
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -597,14 +783,85 @@ describe("PWA finance experience", () => {
         expect.objectContaining({
           fromAccountId: "account-1",
           toAccountId: "account-2",
-          amount: 125
+          amount: 125,
+          transactionDate: "2026-06-05"
+        })
+      );
+    });
+    expect(client.createDemoTransfer.mock.calls[0][0]).not.toHaveProperty("occurredAt");
+    expect(client.createDemoOperation).not.toHaveBeenCalled();
+  });
+
+  it("adds an investment transfer into an investment account from quick add", async () => {
+    const user = userEvent.setup();
+    const investmentSnapshot: DashboardSnapshot = {
+      ...financeSnapshot,
+      accounts: [
+        ...financeSnapshot.accounts,
+        {
+          id: "account-invest",
+          name: "Брокер",
+          ownerName: "Личное",
+          kind: "brokerage",
+          isPaymentAccount: false,
+          ownershipType: "personal",
+          householdId: null,
+          status: "active",
+          version: 1,
+          balance: { value: 0, currency: "USD" },
+          assetCategoryId: "asset-cat-invest"
+        }
+      ],
+      assetCategories: [
+        {
+          id: "asset-cat-invest",
+          name: "Инвестиции",
+          scopeType: "personal",
+          householdId: null,
+          ownerUserId: "user-1",
+          currency: "USD",
+          manualAmount: { value: 0, currency: "USD" },
+          isInvestment: true,
+          assetType: "brokerage",
+          iconKey: "chart",
+          recordStatus: "active",
+          version: 1
+        }
+      ]
+    };
+    const client = makeClient(investmentSnapshot);
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    await user.click(screen.getAllByRole("button", { name: "Добавить" })[0]);
+    const sheet = screen.getByRole("form", { name: "Быстро добавить" });
+
+    await user.click(within(sheet).getByRole("button", { name: /Инвестиция/i }));
+    await user.clear(within(sheet).getByLabelText("Сумма"));
+    await user.type(within(sheet).getByLabelText("Сумма"), "250");
+    await user.selectOptions(within(sheet).getByLabelText("Откуда"), "account-1");
+    await user.selectOptions(within(sheet).getByLabelText("Инвестсчет"), "account-invest");
+    await user.click(within(sheet).getByText("Еще"));
+    fireEvent.change(within(sheet).getByLabelText("Дата"), {
+      target: { value: "2026-06-09" }
+    });
+    await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
+
+    await waitFor(() => {
+      expect(client.createDemoTransfer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromAccountId: "account-1",
+          toAccountId: "account-invest",
+          amount: 250,
+          transactionDate: "2026-06-09",
+          description: "Инвестиция"
         })
       );
     });
     expect(client.createDemoOperation).not.toHaveBeenCalled();
   });
 
-  it("preserves shared visibility when adding an asset from quick add", async () => {
+  it("creates quick-add assets in personal scope without a scope selector", async () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<App client={client} />);
@@ -618,7 +875,7 @@ describe("PWA finance experience", () => {
     await user.type(within(sheet).getByLabelText("Сумма"), "222");
     await user.selectOptions(within(sheet).getByLabelText("Тип"), "deposit");
     await user.click(within(sheet).getByText("Еще"));
-    await user.click(within(sheet).getByLabelText("Общее"));
+    expect(within(sheet).queryByRole("group", { name: "Куда сохранить" })).not.toBeInTheDocument();
     await user.click(within(sheet).getByRole("button", { name: /Готово/i }));
 
     await waitFor(() => {
@@ -626,15 +883,15 @@ describe("PWA finance experience", () => {
         expect.objectContaining({
           kind: "deposit",
           initialBalance: 222,
-          ownershipType: "shared",
-          householdId: "household-1"
+          ownershipType: "personal",
+          householdId: null
         })
       );
     });
     expect(client.createDemoOperation).not.toHaveBeenCalled();
   });
 
-  it("disables shared asset creation when the current session has no household", async () => {
+  it("does not expose shared asset creation when the session has no household", async () => {
     const user = userEvent.setup();
     const client = makeClient({
       ...financeSnapshot,
@@ -651,7 +908,8 @@ describe("PWA finance experience", () => {
     await user.click(within(sheet).getByRole("button", { name: /Актив/i }));
     await user.click(within(sheet).getByText("Еще"));
 
-    expect(within(sheet).getByLabelText("Общее")).toBeDisabled();
+    expect(within(sheet).queryByText("Общее")).not.toBeInTheDocument();
+    expect(within(sheet).queryByText("Личное")).not.toBeInTheDocument();
   });
 
   it("creates and edits categories from the categories UI", async () => {
@@ -664,20 +922,21 @@ describe("PWA finance experience", () => {
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
 
     const form = screen.getByRole("form", { name: "Управление категорией" });
-    await user.type(within(form).getByLabelText("Название"), "Подработка");
-    await user.selectOptions(within(form).getByLabelText("Тип"), "income");
-    await user.selectOptions(within(form).getByLabelText("Доступ"), "household");
-    await user.selectOptions(within(form).getByLabelText("Иконка"), "income");
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
+    expect(within(form).queryByLabelText("Тип")).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText("Доступ")).not.toBeInTheDocument();
+    await user.type(within(form).getByLabelText("Название"), "Дом");
+    await user.selectOptions(within(form).getByLabelText("Иконка"), "home");
     fireEvent.change(within(form).getByLabelText("Цвет"), { target: { value: "#087F5B" } });
     await user.click(within(form).getByRole("button", { name: "Создать" }));
 
     await waitFor(() => {
       expect(client.createDemoCategory).toHaveBeenCalledWith({
-        name: "Подработка",
-        direction: "income",
-        scope: "household",
-        householdId: "household-1",
-        iconKey: "income",
+        name: "Дом",
+        direction: "expense",
+        scope: "personal",
+        householdId: null,
+        iconKey: "home",
         color: "#087f5b"
       });
     });
@@ -712,8 +971,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByText(/Карта Мир → Вклад/)).toBeInTheDocument();
   });
 
-  it("does not fall back to another report mode when overview report is absent", async () => {
-    const user = userEvent.setup();
+  it("does not fall back to a shared report when the personal report is absent", async () => {
     render(
       <App
         client={makeClient({
@@ -726,11 +984,10 @@ describe("PWA finance experience", () => {
     );
 
     await screen.findByRole("heading", { name: "Деньги" });
-    await user.click(screen.getByRole("button", { name: /Обзор/i }));
-
     const spendingMetric = screen.getByText("Расходы месяца").closest("article");
     expect(spendingMetric).toHaveTextContent("0 $");
     expect(spendingMetric).not.toHaveTextContent("30");
+    expect(screen.queryByRole("group", { name: "Режим просмотра" })).not.toBeInTheDocument();
   });
 
   it("hides transfers when only one side is visible in the current scope", async () => {
@@ -772,7 +1029,7 @@ describe("PWA finance experience", () => {
     expect(screen.getByText("Карта Мир")).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
-    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
     expect(screen.getByText("Продукты")).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
@@ -783,8 +1040,35 @@ describe("PWA finance experience", () => {
     expect(screen.queryByRole("heading", { name: "Импорт отчета" })).not.toBeInTheDocument();
   });
 
-  it("switches analytics month and reloads reports with selected date boundaries", async () => {
+  it("shows monthly investments from summary report instead of account balances", async () => {
     const user = userEvent.setup();
+    render(
+      <App
+        client={makeClient({
+          ...financeSnapshot,
+          reports: financeSnapshot.reports.map((report) =>
+            report.mode === "personal"
+              ? { ...report, investmentsTotal: { value: 40, currency: "USD" } }
+              : report
+          ),
+          investmentsTotal: { value: 999, currency: "USD" }
+        })}
+      />
+    );
+
+    await screen.findByRole("heading", { name: "Деньги" });
+    const nav = screen.getByRole("navigation", { name: "Основная навигация" });
+    await user.click(within(nav).getByRole("button", { name: /Аналитика/i }));
+
+    const investmentsMetric = screen.getByText("Инвестиции").closest("article");
+    expect(investmentsMetric).toHaveTextContent("40");
+    expect(investmentsMetric).not.toHaveTextContent("999");
+  });
+
+  it("switches analytics month and reloads reports with selected date boundaries", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-12T10:00:00.000Z"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const client = makeClient();
     render(<App client={client} />);
 
@@ -828,7 +1112,7 @@ describe("PWA finance experience", () => {
 
     await user.click(within(nav).getByRole("button", { name: /Категории/i }));
 
-    expect(screen.getByRole("heading", { level: 2, name: "Категории" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Категории расходов" })).toBeInTheDocument();
     expect(screen.getByText("Продукты")).toBeInTheDocument();
   });
 
@@ -871,7 +1155,7 @@ describe("PWA finance experience", () => {
     expect(await screen.findByText("Products")).toBeInTheDocument();
     expect(screen.getByText("Products · 3 operations")).toBeInTheDocument();
     expect(screen.getByText("3 операций")).toBeInTheDocument();
-    expect(screen.getByLabelText("Категория для Products")).toHaveValue("category-1");
+    expect(screen.getByLabelText("Категория для Products")).toHaveTextContent("Продукты");
     expect(client.createCaptureDraft).not.toHaveBeenCalled();
 
     await user.selectOptions(screen.getByLabelText("Счет для черновиков"), "account-1");
@@ -975,7 +1259,7 @@ describe("PWA finance experience", () => {
     await user.clear(within(firstDraft).getByLabelText("Описание draft-1"));
     await user.type(within(firstDraft).getByLabelText("Описание draft-1"), "Market reviewed");
     await user.selectOptions(within(firstDraft).getByLabelText("Счет draft-1"), "account-1");
-    await user.selectOptions(within(firstDraft).getByLabelText("Категория draft-1"), "category-1");
+    await chooseCategory(user, firstDraft, "Категория draft-1", "Продукты");
     await user.click(within(firstDraft).getByRole("button", { name: /Подтвердить/i }));
 
     await waitFor(() => {
@@ -1054,7 +1338,7 @@ describe("PWA finance experience", () => {
     await user.clear(within(sheet).getByLabelText("Сумма"));
     await user.type(within(sheet).getByLabelText("Сумма"), "456");
     await user.selectOptions(within(sheet).getByLabelText("Счет"), "account-1");
-    await user.selectOptions(within(sheet).getByLabelText("Категория"), "category-1");
+    await chooseCategory(user, sheet, "Категория", "Продукты");
     await user.click(screen.getByTestId("quick-add-submit"));
 
     await waitFor(() => {
@@ -1066,28 +1350,13 @@ describe("PWA finance experience", () => {
       );
     });
   });
-  it("shows explicit personal, shared and overview modes without technical wording", async () => {
-    const user = userEvent.setup();
+  it("shows only personal finance data without scope modes", async () => {
     render(<App client={makeClient()} />);
 
     await screen.findByRole("heading", { name: "Деньги" });
-    const modeSwitch = screen.getByRole("group", { name: "Режим просмотра" });
-    expect(within(modeSwitch).getByRole("button", { name: /Личное/i })).toBeInTheDocument();
-    expect(within(modeSwitch).getByRole("button", { name: /Общее/i })).toBeInTheDocument();
-    expect(within(modeSwitch).getByRole("button", { name: /Обзор/i })).toBeInTheDocument();
-    expect(screen.getByText("Личное видно только вам")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Режим просмотра" })).not.toBeInTheDocument();
     expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
     expect(screen.queryByText("Домашняя покупка")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Общее/i }));
-    expect(screen.getByText("Общее для семьи")).toBeInTheDocument();
-    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
-    expect(screen.queryByText("Покупка продуктов")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Обзор/i }));
-    expect(screen.getByText("Мой обзор: личное + общее, без личных данных других участников")).toBeInTheDocument();
-    expect(screen.getByText("Покупка продуктов")).toBeInTheDocument();
-    expect(screen.getByText("Домашняя покупка")).toBeInTheDocument();
-    expect(document.body).not.toHaveTextContent(/combined_viewer_overview|shared_family_report/i);
+    expect(document.body).not.toHaveTextContent(/Общее|Мой обзор|combined_viewer_overview|shared_family_report/i);
   });
 });

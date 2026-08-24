@@ -8,7 +8,132 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 
 `newDis` copy alignment находится в плановом состоянии и не означает, что редизайн уже выпущен, задеплоен или прошел релизные проверки. Любые утверждения о новом UX, Planning parity, OCR smoke, release-signed APK или public/security GO должны появляться только после отдельного release-agent evidence.
 
+## Android production release (2026-08-22)
+
+- Release branch: `prod/finance-personal-android-backend-20260822`.
+- Final Android source: `43f4b1780e3bdcf6891b877fe03ee53971f74500`.
+- Change commits: `af22cce6417012e2adedb2fe0689c0670e322cf1`,
+  `12a1b91f20c2ce3f48bcae6919b76eb976b12c3f`,
+  `43f4b1780e3bdcf6891b877fe03ee53971f74500`.
+- Authentication/session: encrypted access+refresh persistence, process-wide
+  refresh coordination, session identity/generation/user binding, sync lease
+  account isolation, offline logout cleanup and one refresh retry for OCR.
+- Android behavior: investment transfers are calculated for the selected month,
+  operations and transfers are newest-first, expense categories use a vertical
+  searchable picker, payment-account selection refreshes immediately, transfer
+  date is preserved, and the analytics month switcher is compact.
+- Final manual-install APK:
+  `C:\Users\style\Documents\Codex\Финансы\artifacts\apk\finance-android-prod-20260822-035412-personal-FINAL-manual-install.apk`.
+  SHA-256 `b7244a339eb71bcb91dc8a02066e93bc219707691a350488315255a57f5cb1c4`,
+  size `8119142` bytes, certificate SHA-256
+  `b5675864b9cb8a046d889f54e58f5b0256d6937ecd448e69d7faa955e587aca0`.
+- APK gates: package `com.finance.mvp`, version `0.1.0`/code `1`,
+  `debuggable=false`, production API only, ZIP integrity/alignment PASS, no
+  trailing bytes or abnormal gaps, v2/v3 signatures PASS.
+- Android verification: unit `167/167`, lint `0` errors, installation and
+  production login on `emulator-5554` PASS. Targeted E2E confirmed persisted
+  session, investment transfer, newest-first operations, payment-account refresh,
+  category dialog/search and manual expense creation.
+- Backend-only production deployment used GitHub Actions run
+  `32540824773` at source `12a1b91f20c2ce3f48bcae6919b76eb976b12c3f`.
+  Release path: `/opt/finance/releases/finance-personal-backend-20260822-12a1b91f`.
+  Health, OpenAPI, login and refresh PASS; frontend deploy skipped.
+- For that historical Android-only backend release, backend/schema were
+  unchanged. Migrations and backup were intentionally skipped; the then-current
+  revision was `20260618_0017`. Rollback candidate at that time:
+  `/opt/finance/releases/20260726T220603Z-55f4ac53`.
+- Residual coverage: full UI offline create/reconnect/sync was not rerun on the
+  final APK; OCR was not exercised with a real image; Android 17 Espresso has a
+  framework compatibility failure before assertions. Production plain HTTP is
+  an accepted but unresolved TLS risk.
+- Sanitized evidence:
+  `MVP_EVIDENCE/android-production-release-20260822/SUMMARY_SANITIZED.md`.
+
+## Native iOS current parity (2026-08-22)
+
+- Integrated branch: `codex/ios-native-current-parity-20260822`.
+- Deployed code SHA: `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`.
+  Later commits on the integration branch may contain documentation only; use
+  the immutable release branch
+  `prod/release-finance-ios-current-parity-20260823-db7ebdd` when reproducing
+  the deployed source.
+- The deployed SHA contains all three required ancestors:
+  `4e1ef36724f804d648f2ea385da5259688915325` (solo-owner governance),
+  `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c` (production pipeline gates), and
+  `744a422c5d012149f6c0051dcaf291623fd9a19c` (personal HTTP isolation).
+- Native target remains `apps/ios`; legacy `apps/web-pwa/ios` is not the
+  release target.
+- Integrated production workflow ancestry is proven by worker run
+  `32576848852`: frontend and backend package jobs plus their common gate PASS;
+  host preflight and both deploy jobs SKIPPED; no GitHub deployment was created.
+- Integrated iOS security ancestry is proven by runs `32601960992` and
+  `32602392746` on exact SHA `744a422...`: backend auth/migration gates,
+  XcodeGen, Debug, ordinary Release, PersonalSideloadHTTP, normal XCTest/UI and
+  the dedicated personal transport tests all PASS. The built-plist check is
+  fail-closed and verifies target identity, ATS, manual Apple Development
+  signing settings and the no-archive/no-export policy.
+- Final iOS CI run `32603535573` on the exact deployed SHA is successful:
+  Debug, ordinary Release and PersonalSideloadHTTP builds PASS; normal XCTest/UI
+  model `87/0`; personal transport XCTest `10/0`. Artifact `9483613408`, digest
+  `sha256:52d98838dd947420e0093c308c58286ab3f5db831017030c4f64be61f6c7bc43`.
+- CI-only production workflow run `32604090062` is successful: both package
+  lanes and common package gate PASS; host preflight and deploy jobs SKIPPED.
+  Frontend artifact `9483667044`, digest
+  `sha256:0e430fdb2cfca47dcac29d18cec1351b45e17807fb2524800337c78a1db28bed`;
+  backend artifact `9483674722`, digest
+  `sha256:d38af135dab7b04ca1ce5c72c920f9e3f5b542eb73284964465d60fe3b522864`.
+- Integrated behavior includes secure persistent session without password
+  storage, single-flight refresh, safe `403`, offline logout, account-isolated
+  SwiftData/sync, JSON migration/recovery, transactional/stale-response guards,
+  searchable modal category picker, newest-first ordering, transaction editing,
+  selected-month pending investments, personal-only behavior, online-only OCR,
+  payment-account filtering and compact month switching.
+- Worker evidence: secure session run `32554005096`, SwiftData/sync run
+  `32554343934`, UX parity run `32552813248`. Final integration status is based
+  on run `32603535573` at exact SHA `db7ebdd...`, not on worker runs alone.
+- Review cycle 1 findings are closed: the 72-hour offline restore cap is
+  enforced on the real Keychain restore path; refresh extends the server
+  session atomically; offline edit/delete affects analytics before sync; and
+  logout uses a stable session-bound revoke proof across refresh races.
+- Review cycle 2 findings are closed: access expiry (15 minutes) is separated
+  from the sliding refresh/session lifetime (30 days); partial edit -> delete
+  sync rebases analytics on the applied edit; and uncategorized expenses use
+  the canonical `uncategorized` analytics key.
+- **NOT RUN/BLOCKED:** physical iPhone signing/install and device smoke. No
+  signed IPA exists. Ordinary Release remains HTTPS-only. The separate
+  `FinanceAppPersonalHTTP` target uses bundle id
+  `com.codex.FinanceApp.PersonalSideload`, manual Apple Development signing,
+  cannot be archived/exported, and is restricted to the exact waived HTTP
+  endpoint. The owner waiver must be reviewed by 2026-11-22; broad ATS
+  exceptions remain prohibited.
+- **PRODUCTION DEPLOYED:** owner push to release branch above triggered GitHub
+  Actions run `32604838031`, which completed successfully in the required order:
+  packages -> common gate -> host preflight -> backend -> frontend. Both current
+  symlinks now point to release `20260822T231803Z-db7ebdd4`; backend service is
+  active through `/opt/finance/current`.
+- Production DB migrated `20260618_0017 -> 20260822_0018 -> 20260822_0019`.
+  Pre-upgrade backup:
+  `/opt/finance/backups/postgres/finance_prod-20260822T232027Z-20260822T231803Z-db7ebdd4-20260618_0017-to-20260822_0019.dump`,
+  SHA-256 `238d8d441b5bacca2a5f0ddba728cdf4066c34bd0e32a6c1a589f13cfcd57142`;
+  sibling evidence file uses suffix `.dump.evidence.txt`.
+- Production smoke PASS: health `200`, OpenAPI `200` with 42 routes, frontend
+  shell/manifest/JS/CSS/icon/service worker `200`, scope `/finance/`, hard reload
+  current; login `201`, refresh `200` with rotation, logout `204`, post-logout
+  request `401`, personal read-only endpoints `200`. No rollback was required.
+- QA model: `docs/testing/ios-native-parity-qa-test-model.md`.
+- Sanitized evidence:
+  `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md`.
+
 ## Production
+
+- Current production source/release (2026-08-23): deployed code
+  `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`, release ID
+  `20260822T231803Z-db7ebdd4`, GitHub Actions run `32604838031`, database
+  revision `20260822_0019`.
+- Previous backend `finance-personal-backend-20260822-12a1b91f` and frontend
+  `20260726T220603Z-55f4ac53` are retained rollback candidates. The older
+  entries below are historical release records, not the current production
+  pointers.
 
 - Backend commit: `26b487d61b7d2d6de704f0a632bcb08ff7f240f7` / short `26b487d` (deployed 2026-06-12).
 - PWA commit: `8b0447a` / short `8b0447a` (deployed 2026-06-12, includes registration + all 18 Android-PWA gap closures).
@@ -16,8 +141,8 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 - PWA assets: `index-cwshrAjc.js`, `index-CLMqvBfm.css`.
 - Observed local tag state: `v0.1.0-mvp` points to `94d2484a74131f53badf0cd83610b925770fb710`.
 - Tag alignment: open; aligning `v0.1.0-mvp` to production deployed commit evidence requires explicit owner approval before any retag/push/tag mutation.
-- Frontend: `http://45.10.110.42/finance/`.
-- Backend API: `http://45.10.110.42/finance-api`.
+- Frontend: production Finance PWA URL is intentionally omitted from this native iOS status note; use release evidence or environment configuration for exact endpoints.
+- Backend API: production Finance API URL is intentionally omitted from this native iOS status note; use release evidence or environment configuration for exact endpoints.
 - Authoritative final report: `MVP_EVIDENCE/prod-final-20260519/FINAL_PROD_MVP_REPORT.md`.
 
 ## Self-service registration (2026-06-12)
@@ -86,6 +211,26 @@ QA evidence для этого scope должно опираться на targete
 - Workflows on `main`: files present; active workflows confirmed: `Finance HexCore Production CI/CD` id `298526666`, `Finance Production Manual Rollback` id `298581092`.
 - Production deploy не считать выполненным. Public backend health PASS и frontend PASS, но `workflow_dispatch` остается BLOCKED: GitHub `production` environment absent (`total_count=0`, direct endpoint 404), environment secrets absent, repo secrets `total_count=0`; также нужны backup proof, production `alembic current`, service/symlink proof.
 
+## Native iOS offline CRUD wiring status (2026-06-19)
+
+- Native `apps/ios` теперь ставит optimistic sync mutations в очередь при сетевой ошибке для manual transaction quick-add create, transaction delete, account create/update/archive/restore, category create/update/archive/restore и asset category create/update/archive.
+- Planning fallback добавлен для exposed native UI mutations: plan create, income source create/update/confirm/delete и allocation create/update/delete. Эти операции используют typed `SyncEntityType` (`planning_plans`, `planning_income_sources`, `planning_allocations`) и optimistic local planning records.
+- Online path остается live API first; fallback в local pending mutation срабатывает только для `FinanceApiError.networkError`/`URLError`. Auth, validation и server errors не ставятся в очередь.
+- OCR/screenshot/capture draft workflows остаются online-only и не представлены offline sync mutations. Planning copy/history/target repair также остаются online-only и не ставятся в pending queue.
+- Точный TODO: в текущих SwiftUI экранах native iOS нет exposed hard-delete callbacks для accounts, normal categories и asset categories; довязанные destructive flows используют archive/restore там, где такие callbacks уже существуют. Hard-delete offline wiring требует сначала явной native UI/API callback surface.
+- Точный TODO: в текущем native `PlanningView` нет exposed callbacks для plan update/delete; offline fallback покрывает только доступный в UI plan create. Copy plan остается online-only из-за зависимости от текущей серверной истории и прав доступа.
+- Точный TODO: pending local writes накладываются на in-memory dashboard и sync overview, но report totals/investments не пересчитываются полностью из pending mutations без отдельного native local read-model pass или Xcode/device verification.
+- Точный TODO: planning pending writes отображаются в `PlanningView` через локальные optimistic records и упрощенный пересчет summary; окончательная серверная нормализация, conflict behavior и Xcode/device proof остаются отдельными проверками.
+
+## Native iOS parity branch final status (2026-06-19)
+
+- Branch/worktree: `codex/IOS`, path `C:\Users\style\Documents\Codex\Финансы-ios`, base `origin/main` commit `66feadd94dbf936faec500f565638973ca270f64`.
+- Target remains native-only: `apps/ios` SwiftUI/UIKit/Foundation/Security/PhotosUI. PWA/Capacitor exists separately under `apps/web-pwa` and is not the parity target.
+- Implemented in the current native branch: API config hardening and Release guard; auth/register/session/logout wipe improvements; manual transaction date-only behavior and payment account filter fallback; capture editable amount/date with online-only OCR/copy boundary; payment account/assets/investment/icon preservation; analytics month/category/investment wiring; planning fallback for exposed syncable mutations; icon-only tabs; offline-first local JSON store, sync queue, manual sync, issue UI and Russian sync messages.
+- QA status: Windows static QA is PASS with no FAIL recorded. The only BLOCKED items are Mac/Xcode-only gates because `swift`, `xcodebuild` and `xcodegen` are unavailable in the current Windows environment.
+- Future required gates before native iOS release sign-off: XcodeGen project generation, Debug/Release builds, simulator/device flows, Keychain/cookie wipe runtime proof, offline queue backend push/pull convergence, and OCR/copy online-only UX validation.
+- Evidence hygiene: this status records only sanitized summary facts. No secrets, raw logs, raw screenshots, APKs, `.xcresult` bundles, raw OCR payloads or evidence binaries are stored in docs.
+
 ## Финальные доказательства
 
 - Android final GO: `MVP_EVIDENCE/prod-qa-20260519-040640/android-final/android-final-prod-qa-report.md`.
@@ -106,3 +251,27 @@ QA evidence для этого scope должно опираться на targete
 ## Измененные файлы
 
 - Changed files are tracked in git diff/status; this document is not an authoritative complete list.
+
+## Personal-only/native iOS final regression (2026-08-21)
+
+- Branch `codex/ios-native-personal-parity-20260820` is verified at commit
+  `96aa58226ad8f80834ea333192ebace7885d69c2`.
+- Native target is `apps/ios`; legacy `apps/web-pwa/ios` Capacitor output is not
+  the target native app.
+- GitHub Actions run `32523201106` is successful for the exact branch/commit:
+  XcodeGen PASS, Debug build PASS, Release build PASS, XCTest 47/47, UI 1/1.
+- Local final regression: backend 296 passed/6 skipped and Ruff PASS; Android
+  143/143 plus debug and unsigned release builds PASS; PWA 69/69, production
+  build, runtime audit and service-worker/HTTP guards PASS.
+- Reachable Android/PWA/native iOS UI and API behavior is personal-only. Finance
+  mode selectors are absent, reports use `reportMode=personal`, and category
+  management is `Категории расходов` with expense-only list/create behavior.
+- Internal legacy shared/household enum/DTO/decode branches remain only for
+  backend/wire compatibility and are not exposed as product modes.
+- **Release blocker:** native iOS code/CI is ready, but actual production login on
+  a physical iPhone is blocked until a trusted HTTPS API endpoint is selected.
+  Do not add an arbitrary ATS exception. Use an owned domain with trusted TLS or
+  a trusted short-lived Let's Encrypt IP-address certificate with renewal control.
+- Mac handoff: `docs/ios-native-mac-handoff.md`.
+- Sanitized regression evidence:
+  `MVP_EVIDENCE/personal-native-ios-final-regression-20260821-234120/SUMMARY_SANITIZED.md`.

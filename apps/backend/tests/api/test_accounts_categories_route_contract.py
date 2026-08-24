@@ -40,6 +40,8 @@ EXPECTED_APPROVED_SCHEMA_OPERATIONS = {
 EXPECTED_APPROVED_SESSION_OPERATIONS = {
     ("POST", "/api/v1/users"): "createUser",
     ("POST", "/api/v1/sessions"): "createSession",
+    ("POST", "/api/v1/sessions/refresh"): "refreshSession",
+    ("POST", "/api/v1/sessions/revoke"): "revokeBearerSession",
     ("GET", "/api/v1/sessions/current"): "getCurrentSession",
     ("DELETE", "/api/v1/sessions/current"): "deleteCurrentSession",
 }

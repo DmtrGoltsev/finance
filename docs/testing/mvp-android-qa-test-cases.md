@@ -1,5 +1,9 @@
 # Finance MVP Android — QA Test Cases
 
+> Актуальное release-дополнение для secure session, account-isolated sync,
+> monthly investments, category picker и production APK от 2026-08-22:
+> `docs/testing/android-production-release-qa-20260822.md`.
+
 **Проект:** Finance MVP Android-приложение  
 **Источник:** `FinanceApp.kt` (~3030 строк), `ApiClient.kt` (~936 строк)  
 **Дата составления:** 2026-06-06  

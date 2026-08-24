@@ -240,6 +240,7 @@ MVP строится на следующих безопасных допущен
 - Sensitive logs: централизованная фильтрация логов, запрет debug-логов с request/response body в production.
 - Dependency risk: dependency scanning перед релизом, обновление критичных CVE, запрет известных уязвимых auth/crypto библиотек.
 - Transport security: HTTPS only для production/staging с реальными данными, HSTS перед публичным запуском.
+- Единственное временное исключение оформлено в [owner waiver для personal iOS sideload](ios-personal-http-waiver-2026-08-22.md): с 2026-08-22 только `FinanceAppPersonalHTTP` на iPhone владельца/семьи может обращаться к точному `http://45.10.110.42/finance-api`. Оно не действует для public/App Store, обычного `FinanceApp` или `Release`, прекращается при изменении host/path/auth/identity либо появлении HTTPS и подлежит review до 2026-11-22.
 - Mobile/PWA storage: финансовые данные в локальном кэше минимизируются; при необходимости кэш шифруется средствами платформы и очищается при logout.
 - Error handling: stack traces, SQL errors и внутренние id окружения не возвращаются пользователю.
 
@@ -252,7 +253,7 @@ MVP строится на следующих безопасных допущен
 - Реализованы безопасные login/logout/password reset и rate limits.
 - Сессии имеют secure storage, logout/revocation и защиту от CSRF/CORS ошибок.
 - Audit events пишутся для auth, family membership, account/transaction changes и security-sensitive событий.
-- Production/staging с реальными данными работает только через HTTPS.
+- Production/staging с реальными данными работает только через HTTPS; personal HTTP waiver не является production/staging исключением и не разрешает public/App Store/normal Release использование HTTP.
 - Секреты вынесены из репозитория и frontend/mobile bundles.
 - База и backups имеют encryption at rest; restore проверен минимум один раз.
 - Логи и telemetry проверены на отсутствие финансовых значений, паролей, токенов и invite/reset secrets.

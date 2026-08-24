@@ -39,6 +39,35 @@ struct AssetCategoryUpdateRequest: Codable, Sendable {
     let version: Int?
 }
 
+struct InvestmentMigrationCreateRequest: Codable, Sendable {
+    let assetCategoryId: String
+    let name: String
+    let icon: String?
+    let color: String?
+    let assetType: AccountType
+    let currency: CurrencyCode
+    let scope: AssetCategoryScope?
+    let householdId: String?
+    let accountIds: [String]
+    let accountVersions: [String: Int]
+}
+
+struct AssetCategoryOfflineUpdateRequest: Codable, Sendable {
+    let name: String?
+    let manualAmount: String?
+    let assetType: AccountType?
+    let iconKey: String?
+    let isInvestment: Bool?
+
+    init(_ request: AssetCategoryUpdateRequest) {
+        name = request.name
+        manualAmount = request.manualAmount
+        assetType = request.assetType
+        iconKey = request.iconKey
+        isInvestment = request.isInvestment
+    }
+}
+
 struct AssetCategoryGroup: Codable, Identifiable, Sendable {
     var id: String { assetCategoryId }
     let assetCategoryId: String

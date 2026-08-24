@@ -12,6 +12,7 @@ from typing import Protocol
 
 from .schemas import (
     AndroidBearerRefreshContract,
+    IosBearerRefreshContract,
     PwaCookieCsrfContract,
     SessionTransportContracts,
 )
@@ -160,11 +161,12 @@ class Pbkdf2Sha256PasswordHashingBackend:
 
 
 def session_transport_contracts() -> SessionTransportContracts:
-    """Return PWA and Android auth transport contracts."""
+    """Return PWA, Android, and iOS auth transport contracts."""
 
     return SessionTransportContracts(
         pwa=PwaCookieCsrfContract(),
         android=AndroidBearerRefreshContract(),
+        ios=IosBearerRefreshContract(),
     )
 
 

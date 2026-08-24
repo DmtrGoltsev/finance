@@ -33,6 +33,7 @@ Traceability caveat: production backend/PWA runtime remains release path `808f72
 - `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/png-validation-final-valid.json`
 - `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/evidence-validation-summary.json`
 - `MVP_EVIDENCE/prod-full-test-20260522-000115-rerun/android-emulator/data/secret-scan-password-exact.json`
+- `MVP_EVIDENCE/android-production-release-20260822/SUMMARY_SANITIZED.md`
 
 ## Latest Rerun Reference Paths
 

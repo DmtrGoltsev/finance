@@ -3,7 +3,6 @@ import SwiftUI
 struct AddAccountSheet: View {
     let assetCategoryId: String?
     let assetCategories: [AssetCategory]
-    let householdId: String?
     let onDismiss: () -> Void
     let onCreate: (AccountCreateRequest) async -> Void
 
@@ -11,7 +10,6 @@ struct AddAccountSheet: View {
     @State private var initialBalance = "0"
     @State private var currency: CurrencyCode = .RUB
     @State private var accountType: AccountType = .bank
-    @State private var ownershipType: OwnershipType = .personal
     @State private var selectedAssetCategoryId: String?
     @State private var isPaymentAccount = false
     @State private var isLoading = false
@@ -86,15 +84,10 @@ struct AddAccountSheet: View {
                 Section {
                     Picker("Категория активов", selection: $selectedAssetCategoryId) {
                         Text("Без категории").tag(String?.none)
-                        ForEach(assetCategories.filter { $0.recordStatus == .active }) { cat in
+                        ForEach(assetCategories.filter { $0.recordStatus == .active && $0.scopeType == .personal }) { cat in
                             Text(cat.name).tag(String?.some(cat.id))
                         }
                     }
-
-                    Toggle("Личное", isOn: .init(
-                        get: { ownershipType == .personal },
-                        set: { ownershipType = $0 ? .personal : .shared }
-                    ))
 
                     Toggle("Счёт для оплаты", isOn: $isPaymentAccount)
                 }
@@ -137,8 +130,8 @@ struct AddAccountSheet: View {
         let request = AccountCreateRequest(
             name: trimmed,
             accountType: accountType,
-            ownershipType: ownershipType,
-            householdId: ownershipType == .shared ? householdId : nil,
+            ownershipType: .personal,
+            householdId: nil,
             assetCategoryId: selectedAssetCategoryId,
             currency: currency,
             initialBalance: initialBalance,

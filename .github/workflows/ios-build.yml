@@ -2,58 +2,319 @@ name: iOS Build
 
 on:
   push:
-    branches: [glm]
+    branches:
+      - "codex/ios-native-*"
+      - "codex/ios-personal-http-*"
     paths:
       - "apps/ios/**"
+      - "apps/backend/src/app/auth/**"
+      - "apps/backend/src/app/db/model_enums.py"
+      - "apps/backend/tests/auth/**"
+      - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "apps/backend/tests/db/test_bearer_access_expiry_migration.py"
+      - "api/openapi/openapi.yaml"
+      - "db/migrations/**"
+      - ".github/workflows/ios-build.yml"
+  pull_request:
+    paths:
+      - "apps/ios/**"
+      - "apps/backend/src/app/auth/**"
+      - "apps/backend/src/app/db/model_enums.py"
+      - "apps/backend/tests/auth/**"
+      - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
+      - "apps/backend/tests/db/test_bearer_access_expiry_migration.py"
+      - "api/openapi/openapi.yaml"
+      - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-15
+  backend-auth-and-migration-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/backend[dev]"
+
+      - name: Lint backend auth and migration changes
+        working-directory: apps/backend
+        run: >-
+          python -m ruff check
+          src/app/auth
+          src/app/db/model_enums.py
+          tests/auth
+          tests/api/test_accounts_categories_route_contract.py
+          tests/api/test_openapi_mvp_manual_first_contract.py
+          tests/db/test_ios_bearer_sessions_migration.py
+          tests/db/test_bearer_access_expiry_migration.py
+          ../../db/migrations/versions/20260822_0018_ios_bearer_sessions.py
+          ../../db/migrations/versions/20260822_0019_bearer_access_expiry.py
+
+      - name: Test iOS bearer auth and migration contract
+        working-directory: apps/backend
+        run: >-
+          python -m pytest
+          tests/auth/test_registration_flow.py
+          tests/auth/test_session_flow.py
+          tests/auth/test_db_session_persistence.py
+          tests/auth/test_router_contract.py
+          tests/api/test_accounts_categories_route_contract.py
+          tests/api/test_openapi_mvp_manual_first_contract.py
+          tests/db/test_ios_bearer_sessions_migration.py
+          tests/db/test_bearer_access_expiry_migration.py
+
+      - name: Verify single Alembic head
+        working-directory: apps/backend
+        run: |
+          set -o pipefail
+          python -m alembic -c alembic.ini heads | tee /tmp/alembic-heads.txt
+          test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
+          grep -q '^20260822_0019 ' /tmp/alembic-heads.txt
+
+  build-and-test:
+    runs-on: macos-15
+    needs: backend-auth-and-migration-gates
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         working-directory: apps/ios
-        run: xcodegen generate
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts
+          xcodegen generate 2>&1 | tee ci-artifacts/xcodegen.log
 
       - name: Verify project
         working-directory: apps/ios
-        run: ls -la FinanceApp.xcodeproj
-
-      - name: Build
-        working-directory: apps/ios
         run: |
+          xcodebuild -list -project FinanceApp.xcodeproj -json \
+            > ci-artifacts/project-list.json
+          cat ci-artifacts/project-list.json
+
+      - name: Build Debug, Release and PersonalSideloadHTTP, then run XCTest
+        working-directory: apps/ios
+        env:
+          FINANCE_RELEASE_API_BASE_URL: https://finance.invalid/finance-api
+        run: |
+          set +e
+          set -o pipefail
+
           xcodebuild build \
             -project FinanceApp.xcodeproj \
             -scheme FinanceApp \
             -destination 'generic/platform=iOS' \
             -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-Debug" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            2>&1 | tee build.log
+            FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+            2>&1 | tee ci-artifacts/debug-build.log
+          DEBUG_STATUS=${PIPESTATUS[0]}
 
-      - name: Check build result
-        working-directory: apps/ios
-        run: |
-          if grep -q "BUILD SUCCEEDED" build.log; then
-            echo "BUILD SUCCEEDED"
+          xcodebuild build \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceApp \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-Release" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+            2>&1 | tee ci-artifacts/release-build.log
+          RELEASE_STATUS=${PIPESTATUS[0]}
+
+          xcodebuild build \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceAppPersonalHTTP \
+            -destination 'generic/platform=iOS' \
+            -configuration PersonalSideloadHTTP \
+            -derivedDataPath "$RUNNER_TEMP/FinanceApp-PersonalSideloadHTTP" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee ci-artifacts/personal-sideload-http-build.log
+          PERSONAL_SIDELOAD_STATUS=${PIPESTATUS[0]}
+
+          xcodebuild -showBuildSettings \
+            -project FinanceApp.xcodeproj \
+            -scheme FinanceAppPersonalHTTP \
+            -configuration PersonalSideloadHTTP \
+            -sdk iphoneos \
+            > ci-artifacts/personal-sideload-http-settings.txt
+          PERSONAL_SETTINGS_STATUS=$?
+
+          xcrun simctl list devices available -j > ci-artifacts/simulators.json
+          SIMULATOR_UDID=$(ruby -rjson -e '
+            data = JSON.parse(File.read(ARGV[0]))
+            device = data.fetch("devices").values.flatten.find do |item|
+              item["isAvailable"] && item.fetch("name", "").start_with?("iPhone")
+            end
+            abort "No available iPhone simulator" unless device
+            print device.fetch("udid")
+          ' ci-artifacts/simulators.json)
+          SIMULATOR_STATUS=$?
+
+          if [ "$SIMULATOR_STATUS" -eq 0 ]; then
+            xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+            xcodebuild test \
+              -project FinanceApp.xcodeproj \
+              -scheme FinanceApp \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -configuration Debug \
+              -derivedDataPath "$RUNNER_TEMP/FinanceApp-Tests" \
+              -resultBundlePath ci-artifacts/FinanceAppTests.xcresult \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              FINANCE_RELEASE_API_BASE_URL="$FINANCE_RELEASE_API_BASE_URL" \
+              2>&1 | tee ci-artifacts/xctest.log
+            TEST_STATUS=${PIPESTATUS[0]}
+
+            xcodebuild test \
+              -project FinanceApp.xcodeproj \
+              -scheme FinanceAppPersonalHTTP \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -configuration PersonalSideloadHTTP \
+              -derivedDataPath "$RUNNER_TEMP/FinanceApp-PersonalSideloadHTTP-Tests" \
+              -resultBundlePath ci-artifacts/FinanceAppPersonalHTTPTests.xcresult \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              2>&1 | tee ci-artifacts/personal-sideload-http-xctest.log
+            PERSONAL_TEST_STATUS=${PIPESTATUS[0]}
           else
-            echo "BUILD FAILED"
-            grep -E "error:" build.log || true
+            TEST_STATUS=$SIMULATOR_STATUS
+            PERSONAL_TEST_STATUS=$SIMULATOR_STATUS
+            echo "No available iPhone simulator" | tee ci-artifacts/xctest.log
+            echo "No available iPhone simulator" | tee ci-artifacts/personal-sideload-http-xctest.log
+          fi
+
+          printf 'debug=%s\nrelease=%s\npersonal_sideload_http=%s\npersonal_settings=%s\ntest=%s\npersonal_sideload_test=%s\n' \
+            "$DEBUG_STATUS" "$RELEASE_STATUS" "$PERSONAL_SIDELOAD_STATUS" "$PERSONAL_SETTINGS_STATUS" "$TEST_STATUS" "$PERSONAL_TEST_STATUS" \
+            | tee ci-artifacts/status.txt
+
+          if [ "$DEBUG_STATUS" -ne 0 ] || [ "$RELEASE_STATUS" -ne 0 ] || [ "$PERSONAL_SIDELOAD_STATUS" -ne 0 ] || [ "$PERSONAL_SETTINGS_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$PERSONAL_TEST_STATUS" -ne 0 ]; then
             exit 1
           fi
 
-      - name: Upload build log
+      - name: Verify isolated built plist, signing, and archive policy
+        working-directory: apps/ios
+        env:
+          DEBUG_APP_PLIST: ${{ runner.temp }}/FinanceApp-Debug/Build/Products/Debug-iphoneos/FinanceApp.app/Info.plist
+          RELEASE_APP_PLIST: ${{ runner.temp }}/FinanceApp-Release/Build/Products/Release-iphoneos/FinanceApp.app/Info.plist
+          PERSONAL_APP_PLIST: ${{ runner.temp }}/FinanceApp-PersonalSideloadHTTP/Build/Products/PersonalSideloadHTTP-iphoneos/FinanceAppPersonalHTTP.app/Info.plist
+        run: |
+          set -o pipefail
+          cp "$DEBUG_APP_PLIST" ci-artifacts/FinanceApp-Debug.plist
+          cp "$RELEASE_APP_PLIST" ci-artifacts/FinanceApp-Release.plist
+          cp "$PERSONAL_APP_PLIST" ci-artifacts/FinanceAppPersonalHTTP.plist
+
+          python3 - <<'PY' | tee ci-artifacts/personal-sideload-http-plist.txt
+          import os
+          import plistlib
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          def load(name):
+              with open(os.environ[name], "rb") as stream:
+                  return plistlib.load(stream)
+
+          debug = load("DEBUG_APP_PLIST")
+          release = load("RELEASE_APP_PLIST")
+          personal = load("PERSONAL_APP_PLIST")
+
+          personal_ip = "45.10.110.42"
+          personal_url = "http://45.10.110.42/finance-api"
+          for name, plist in (("Debug", debug), ("Release", release)):
+              assert personal_ip not in repr(plist), f"{name} contains the personal IP"
+              assert personal_url not in repr(plist), f"{name} contains the personal HTTP URL"
+              assert plist.get("CFBundleIdentifier") == "com.codex.FinanceApp", (name, plist.get("CFBundleIdentifier"))
+              assert plist.get("CFBundleDisplayName") == "Finance", (name, plist.get("CFBundleDisplayName"))
+
+          assert debug.get("FINANCE_API_BASE_URL") == "http://127.0.0.1:8000/finance-api"
+          assert release.get("FINANCE_API_BASE_URL") == "https://finance.invalid/finance-api"
+          assert release.get("NSAppTransportSecurity") == {
+              "NSAllowsArbitraryLoads": False,
+              "NSAllowsLocalNetworking": False,
+          }
+
+          expected_ats = {
+              "NSAllowsArbitraryLoads": False,
+              "NSAllowsLocalNetworking": False,
+              "NSExceptionDomains": {
+                  "45.10.110.42": {
+                      "NSExceptionAllowsInsecureHTTPLoads": True,
+                      "NSIncludesSubdomains": False,
+                  }
+              },
+          }
+          actual_ats = personal.get("NSAppTransportSecurity")
+          assert personal.get("CFBundleIdentifier") == "com.codex.FinanceApp.PersonalSideload"
+          assert personal.get("CFBundleIdentifier") != release.get("CFBundleIdentifier")
+          assert personal.get("CFBundleDisplayName") == "Finance Personal HTTP"
+          assert personal.get("CFBundleName") == "FinanceAppPersonalHTTP"
+          assert personal.get("FINANCE_API_BASE_URL") == personal_url, personal.get("FINANCE_API_BASE_URL")
+          assert actual_ats == expected_ats, actual_ats
+          settings = Path("ci-artifacts/personal-sideload-http-settings.txt").read_text()
+          assert "PRODUCT_BUNDLE_IDENTIFIER = com.codex.FinanceApp.PersonalSideload" in settings
+          assert "CODE_SIGN_STYLE = Manual" in settings
+          assert "CODE_SIGN_IDENTITY = Apple Development" in settings
+          scheme = ET.parse("FinanceApp.xcodeproj/xcshareddata/xcschemes/FinanceAppPersonalHTTP.xcscheme")
+          archive_entries = [
+              entry for entry in scheme.findall(".//BuildActionEntry")
+              if entry.find("BuildableReference").attrib.get("BlueprintName") == "FinanceAppPersonalHTTP"
+          ]
+          assert len(archive_entries) == 1, archive_entries
+          assert archive_entries[0].attrib.get("buildForArchiving") == "NO", archive_entries[0].attrib
+          project = Path("project.yml").read_text()
+          personal_scheme = project[project.rfind("\n  FinanceAppPersonalHTTP:\n"):]
+          assert "archive:" not in personal_scheme
+          assert "FinanceAppPersonalHTTP: [run, test, profile, analyze]" in personal_scheme
+          assert "exportArchive" not in project
+          print("FINANCE_API_BASE_URL=http://45.10.110.42/finance-api")
+          print("Debug and Release plists: no personal IP, personal HTTP URL, or personal ATS")
+          print("Personal bundle=com.codex.FinanceApp.PersonalSideload")
+          print("Personal signing=Manual Apple Development")
+          print("Personal app buildForArchiving=NO; no exportArchive; signing=Manual Apple Development")
+          print("NSAllowsArbitraryLoads=false")
+          print("NSAllowsLocalNetworking=false")
+          print("NSExceptionDomains=[45.10.110.42]")
+          print("45.10.110.42.NSExceptionAllowsInsecureHTTPLoads=true")
+          print("45.10.110.42.NSIncludesSubdomains=false")
+          PY
+
+      - name: Package CI evidence
+        if: always()
+        working-directory: apps/ios
+        run: |
+          tar -czf ios-ci-evidence.tar.gz ci-artifacts
+
+      - name: Upload iOS build and test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-log
-          path: apps/ios/build.log
-          retention-days: 7
+          name: ios-build-test-evidence-${{ github.run_id }}
+          path: |
+            apps/ios/ios-ci-evidence.tar.gz
+            apps/ios/ci-artifacts/*.log
+            apps/ios/ci-artifacts/*.txt
+            apps/ios/ci-artifacts/*.json
+            apps/ios/ci-artifacts/*.plist
+            apps/ios/ci-artifacts/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14

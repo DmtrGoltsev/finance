@@ -27,25 +27,78 @@ class AndroidSecureTokenStoreTest {
     }
 
     @Test
-    fun persistsTokenAcrossStoreInstancesWithoutPlaintextXml() = runBlocking {
-        val token = "test-token-${UUID.randomUUID()}"
+    fun persistsSessionAcrossStoreInstancesWithoutPlaintextXml() = runBlocking {
+        val accessToken = "access-token-${UUID.randomUUID()}"
+        val refreshToken = "refresh-token-${UUID.randomUUID()}"
+        val sessionIdentity = "session-${UUID.randomUUID()}"
+        val authenticatedUserId = "user-${UUID.randomUUID()}"
 
-        AndroidSecureTokenStore(context).saveAccessToken(token)
+        AndroidSecureTokenStore(context).saveSessionTokens(
+            accessToken,
+            refreshToken,
+            sessionIdentity,
+            authenticatedUserId,
+        )
 
-        assertEquals(token, AndroidSecureTokenStore(context).readAccessToken())
+        val restoredStore = AndroidSecureTokenStore(context)
+        val restoredSession = restoredStore.readSession()
+        assertEquals(accessToken, restoredSession?.accessToken)
+        assertEquals(refreshToken, restoredSession?.refreshToken)
+        assertEquals(sessionIdentity, restoredSession?.sessionIdentity)
+        assertEquals(authenticatedUserId, restoredSession?.authenticatedUserId)
+        assertTrue((restoredSession?.generation ?: 0L) > 0L)
 
         val encryptedFile = AndroidSecureTokenStore.encryptedPreferencesFile(context)
         assertTrue(encryptedFile.exists())
-        assertFalse(encryptedFile.readText().contains(token))
+        val encryptedText = encryptedFile.readText()
+        assertFalse(encryptedText.contains(accessToken))
+        assertFalse(encryptedText.contains(refreshToken))
+        assertFalse(encryptedText.contains(sessionIdentity))
+        assertFalse(encryptedText.contains(authenticatedUserId))
     }
 
     @Test
     fun clearRemovesStoredToken() = runBlocking {
         val store = AndroidSecureTokenStore(context)
-        store.saveAccessToken("test-token-${UUID.randomUUID()}")
+        store.saveSessionTokens(
+            accessToken = "access-token-${UUID.randomUUID()}",
+            refreshToken = "refresh-token-${UUID.randomUUID()}",
+        )
 
         store.clear()
 
-        assertNull(AndroidSecureTokenStore(context).readAccessToken())
+        val restoredStore = AndroidSecureTokenStore(context)
+        assertNull(restoredStore.readAccessToken())
+        assertNull(restoredStore.readRefreshToken())
+    }
+
+    @Test
+    fun refreshPreservesGenerationAndLogoutInvalidatesItAcrossStoreInstances() = runBlocking {
+        val store = AndroidSecureTokenStore(context)
+        store.saveSessionTokens("access-a", "refresh-a", "session-a", "user-a")
+        val original = requireNotNull(store.readSession())
+
+        assertTrue(
+            AndroidSecureTokenStore(context).rotateSessionTokens(
+                expectedGeneration = original.generation,
+                expectedIdentity = original.sessionIdentity,
+                accessToken = "access-a-rotated",
+                refreshToken = "refresh-a-rotated",
+            ),
+        )
+        val rotated = requireNotNull(AndroidSecureTokenStore(context).readSession())
+        assertEquals(original.generation, rotated.generation)
+        assertEquals(original.sessionIdentity, rotated.sessionIdentity)
+
+        AndroidSecureTokenStore(context).clear()
+        AndroidSecureTokenStore(context).saveSessionTokens(
+            "access-b",
+            "refresh-b",
+            "session-b",
+            "user-b",
+        )
+        val replacement = requireNotNull(AndroidSecureTokenStore(context).readSession())
+        assertTrue(replacement.generation > original.generation)
+        assertEquals("session-b", replacement.sessionIdentity)
     }
 }

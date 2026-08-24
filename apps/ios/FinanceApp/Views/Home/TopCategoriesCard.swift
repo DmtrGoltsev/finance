@@ -2,14 +2,22 @@ import SwiftUI
 
 struct TopCategoriesCard: View {
     let categories: [FinanceDashboard.CategorySpend]
+    @State private var showAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Топ категории")
-                .font(.headline)
+            HStack {
+                Text("Топ категории")
+                    .font(.headline)
+                Spacer()
+                if categories.count > 3 {
+                    Button("Все") { showAll = true }
+                        .font(.subheadline)
+                }
+            }
 
             if categories.isEmpty {
-                Text("В выбранном scope расходов пока нет. Добавьте расход или переключитесь на другой scope.")
+                Text("Расходов за месяц пока нет.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -23,6 +31,20 @@ struct TopCategoriesCard: View {
         .background(FinanceColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
+        .sheet(isPresented: $showAll) {
+            NavigationStack {
+                List(categories, id: \.categoryId) { category in
+                    categoryRow(category)
+                }
+                .navigationTitle("Все категории трат")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Готово") { showAll = false }
+                    }
+                }
+            }
+        }
     }
 
     private func categoryRow(_ category: FinanceDashboard.CategorySpend) -> some View {

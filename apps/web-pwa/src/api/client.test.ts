@@ -63,7 +63,7 @@ describe("LiveFinanceApiClient", () => {
         return jsonResponse({ actor: actor() });
       }
 
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -79,12 +79,12 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories") {
+      if (path.startsWith("/api/v1/categories?")) {
         return jsonResponse({
           items: [{ id: "category-1", name: "Dev Salary", type: "income" }]
         });
       }
-      if (path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({
           items: [
             {
@@ -143,24 +143,24 @@ describe("LiveFinanceApiClient", () => {
     expect(localStorageSet).not.toHaveBeenCalled();
     expect(localStorageRemove).not.toHaveBeenCalled();
     expect(snapshot.session.accessLabel).toBe("Вход выполнен");
-    expect(snapshot.session.householdId).toBe("household-1");
+    expect(snapshot.session.householdId).toBeNull();
     expect(snapshot.accounts[0]).toMatchObject({
       name: "Личные наличные",
-      ownerName: "Личное",
+      ownerName: "Владелец",
       balance: { value: 925.5, currency: "USD" }
     });
     expect(snapshot.categories[0]).toMatchObject({
       name: "Зарплата"
     });
     expect(snapshot.operations[0]).toMatchObject({
-      title: "Зарплата",
-      amount: { value: 250, currency: "USD" }
-    });
-    expect(snapshot.operations[1]).toMatchObject({
       title: "Покупка актива",
       amount: { value: 50, currency: "USD" }
     });
-    expect(snapshot.reports).toHaveLength(2);
+    expect(snapshot.operations[1]).toMatchObject({
+      title: "Зарплата",
+      amount: { value: 250, currency: "USD" }
+    });
+    expect(snapshot.reports).toHaveLength(1);
     expect(
       fetcher.mock.calls.some(([url]) =>
         /\/api\/v1\/imports\//.test(String(url))
@@ -252,7 +252,11 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts" || path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (
+        path.startsWith("/api/v1/accounts?") ||
+        path.startsWith("/api/v1/categories?") ||
+        path.startsWith("/api/v1/transactions?")
+      ) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -310,7 +314,7 @@ describe("LiveFinanceApiClient", () => {
     ).toBe(false);
   });
 
-  it("sends householdId when creating a shared account", async () => {
+  it("forces personal ownership when creating an account", async () => {
     document.cookie = "finance_csrf=csrf-account; path=/";
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const path = String(url).replace("http://api.test", "");
@@ -324,8 +328,8 @@ describe("LiveFinanceApiClient", () => {
           name: "Family Wallet",
           accountType: "bank",
           isPaymentAccount: true,
-          ownershipType: "shared",
-          householdId: "household-1",
+          ownershipType: "personal",
+          householdId: null,
           currency: "RUB",
           initialBalance: "100"
         })
@@ -336,9 +340,9 @@ describe("LiveFinanceApiClient", () => {
           id: "account-new",
           name: "Family Wallet",
           accountType: "bank",
-          ownershipType: "shared",
-          ownerUserId: null,
-          householdId: "household-1",
+          ownershipType: "personal",
+          ownerUserId: "user-1",
+          householdId: null,
           currency: "RUB",
           currentBalance: "100.00",
           status: "active",
@@ -361,7 +365,8 @@ describe("LiveFinanceApiClient", () => {
       householdId: "household-1"
     });
 
-    expect(account.householdId).toBe("household-1");
+    expect(account.householdId).toBeNull();
+    expect(account.ownershipType).toBe("personal");
   });
 
   it("creates manual income and expense with transactionDate instead of local-noon occurredAt", async () => {
@@ -421,6 +426,62 @@ describe("LiveFinanceApiClient", () => {
     expect(operation.date).toBe("2026-06-05");
   });
 
+  it("creates transfers with transactionDate instead of synthesized occurredAt", async () => {
+    document.cookie = "finance_csrf=csrf-transfer; path=/";
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      const headers = new Headers(init?.headers);
+
+      expect(path).toBe("/api/v1/transactions");
+      expect(init?.method).toBe("POST");
+      expect(headers.get("X-CSRF-Token")).toBe("csrf-transfer");
+      const parsed = JSON.parse(String(init?.body));
+      expect(parsed).toEqual({
+        transactionType: "transfer",
+        accountId: "account-1",
+        counterpartyAccountId: "account-2",
+        amount: "125.0000",
+        currency: "RUB",
+        transactionDate: "2026-06-05",
+        description: "Инвестиция",
+        sourceType: "manual"
+      });
+      expect(parsed).not.toHaveProperty("occurredAt");
+
+      return jsonResponse({
+        data: {
+          id: "transfer-1",
+          transactionType: "transfer",
+          accountId: "account-1",
+          counterpartyAccountId: "account-2",
+          categoryId: null,
+          amount: "125.0000",
+          currency: "RUB",
+          occurredAt: "2026-06-05T00:00:00Z",
+          transactionDate: "2026-06-05",
+          description: "Инвестиция",
+          sourceType: "manual",
+          version: 1
+        }
+      });
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const transfer = await client.createDemoTransfer({
+      fromAccountId: "account-1",
+      toAccountId: "account-2",
+      currency: "RUB",
+      amount: 125,
+      transactionDate: "2026-06-05",
+      description: "Инвестиция"
+    });
+
+    expect(transfer.date).toBe("2026-06-05");
+  });
+
   it("creates and updates category payload fields supported by the API", async () => {
     document.cookie = "finance_csrf=csrf-category; path=/";
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -433,8 +494,8 @@ describe("LiveFinanceApiClient", () => {
           JSON.stringify({
             name: "Подработка",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "income",
             color: "#087f5b"
           })
@@ -444,8 +505,8 @@ describe("LiveFinanceApiClient", () => {
             id: "category-new",
             name: "Подработка",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "income",
             color: "#087f5b",
             version: 1
@@ -467,8 +528,8 @@ describe("LiveFinanceApiClient", () => {
             id: "category-new",
             name: "Подработка новая",
             type: "income",
-            scope: "household",
-            householdId: "household-1",
+            scope: "personal",
+            householdId: null,
             iconKey: "wallet",
             color: "#2563eb",
             version: 2
@@ -486,8 +547,8 @@ describe("LiveFinanceApiClient", () => {
     const category = await client.createDemoCategory({
       name: "Подработка",
       direction: "income",
-      scope: "household",
-      householdId: "household-1",
+      scope: "personal",
+      householdId: null,
       iconKey: "income",
       color: "#087f5b"
     });
@@ -503,13 +564,13 @@ describe("LiveFinanceApiClient", () => {
       id: "category-new",
       name: "Подработка новая",
       direction: "income",
-      scope: "household",
-      householdId: "household-1",
+      scope: "personal",
+      householdId: null,
       version: 2
     });
   });
 
-  it("maps the nested live report summary shape", async () => {
+  it("maps the personal nested live report summary shape", async () => {
     const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const path = String(url).replace("http://api.test", "");
       expect(init?.credentials).toBe("include");
@@ -517,7 +578,7 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -533,7 +594,7 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -564,15 +625,170 @@ describe("LiveFinanceApiClient", () => {
     const snapshot = await client.getDashboardSnapshot();
 
     expect(snapshot.reports[0]).toMatchObject({
-      mode: "shared_family_report",
-      title: "Общее",
+      mode: "personal",
+      title: "Финансы",
       income: { value: 250, currency: "USD" },
       expense: { value: 105.75, currency: "USD" },
       balanceDelta: { value: 144.25, currency: "USD" }
     });
-    expect(snapshot.reports[1]).toMatchObject({
-      mode: "combined_viewer_overview",
-      title: "Обзор"
+    expect(snapshot.reports).toHaveLength(1);
+  });
+
+  it("maps monthly investments from report summary totals, not account balances net worth", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({ actor: actor() });
+      }
+      if (path.startsWith("/api/v1/accounts?")) {
+        return jsonResponse({
+          items: [
+            {
+              id: "account-1",
+              name: "Brokerage",
+              accountType: "brokerage",
+              ownershipType: "personal",
+              ownerUserId: "user-1",
+              householdId: null,
+              currency: "USD",
+              currentBalance: "999.00"
+            }
+          ]
+        });
+      }
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/asset-categories?")) {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/reports/account-balances?")) {
+        return jsonResponse({
+          data: {
+            assetCategoryGroups: [],
+            investmentsByCurrency: [],
+            totalsByCurrency: [{ currency: "USD", netWorthTotal: "999.0000" }]
+          }
+        });
+      }
+      if (path.startsWith("/api/v1/reports/summary?")) {
+        const params = new URLSearchParams(path.split("?")[1]);
+        return jsonResponse({
+          data: {
+            reportMode: params.get("reportMode"),
+            currency: "USD",
+            totalsByCurrency: [
+              {
+                currency: "USD",
+                incomeTotal: "0.0000",
+                expenseTotal: "0.0000",
+                netTotal: "0.0000",
+                investmentsTotal: "40.0000"
+              }
+            ]
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot();
+    const personalReport = snapshot.reports.find((report) => report.mode === "personal");
+
+    expect(snapshot.investmentsTotal).toMatchObject({ value: 999, currency: "USD" });
+    expect(personalReport?.investmentsTotal).toMatchObject({ value: 40, currency: "USD" });
+  });
+
+  it("fetches personal summary and account balances without householdId when viewer has no household", async () => {
+    const summaryUrls: string[] = [];
+    const balanceUrls: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      expect(init?.credentials).toBe("include");
+
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({
+          actor: {
+            userId: "user-1",
+            sessionId: "session-1",
+            memberships: []
+          }
+        });
+      }
+      if (path.startsWith("/api/v1/accounts?")) {
+        return jsonResponse({
+          items: [
+            {
+              id: "account-1",
+              name: "Personal Card",
+              accountType: "card",
+              ownershipType: "personal",
+              ownerUserId: "user-1",
+              householdId: null,
+              currency: "RUB",
+              currentBalance: "100.00"
+            }
+          ]
+        });
+      }
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/asset-categories?")) {
+        return jsonResponse({ items: [] });
+      }
+      if (path.startsWith("/api/v1/reports/account-balances?")) {
+        balanceUrls.push(path);
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("householdId")).toBeNull();
+        return jsonResponse({
+          data: {
+            assetCategoryGroups: [],
+            investmentsByCurrency: [],
+            totalsByCurrency: []
+          }
+        });
+      }
+      if (path.startsWith("/api/v1/reports/summary?")) {
+        summaryUrls.push(path);
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("householdId")).toBeNull();
+        return jsonResponse({
+          data: {
+            reportMode: "personal",
+            currency: "RUB",
+            incomeTotal: "10.0000",
+            expenseTotal: "3.0000",
+            netTotal: "7.0000"
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot();
+
+    expect(summaryUrls).toHaveLength(1);
+    expect(balanceUrls).toHaveLength(1);
+    expect(snapshot.session.householdId).toBeNull();
+    expect(snapshot.reports).toHaveLength(1);
+    expect(snapshot.reports[0]).toMatchObject({
+      mode: "personal",
+      income: { value: 10, currency: "RUB" },
+      expense: { value: 3, currency: "RUB" }
     });
   });
 
@@ -585,7 +801,7 @@ describe("LiveFinanceApiClient", () => {
       if (path === "/api/v1/sessions/current") {
         return jsonResponse({ actor: actor() });
       }
-      if (path === "/api/v1/accounts") {
+      if (path.startsWith("/api/v1/accounts?")) {
         return jsonResponse({
           items: [
             {
@@ -602,7 +818,7 @@ describe("LiveFinanceApiClient", () => {
           ]
         });
       }
-      if (path === "/api/v1/categories" || path === "/api/v1/transactions") {
+      if (path.startsWith("/api/v1/categories?") || path.startsWith("/api/v1/transactions?")) {
         return jsonResponse({ items: [] });
       }
       if (path.startsWith("/api/v1/reports/summary?")) {
@@ -633,7 +849,199 @@ describe("LiveFinanceApiClient", () => {
       endDate: "2026-06-30"
     });
 
-    expect(reportUrls).toHaveLength(2);
+    expect(reportUrls).toHaveLength(1);
+  });
+
+  it("loads every personal page, deduplicates it, and drops shared-first transactions", async () => {
+    const personalAccounts = Array.from({ length: 205 }, (_, index) => ({
+      id: `account-${index}`,
+      name: `Account ${index}`,
+      accountType: "card",
+      ownershipType: "personal",
+      ownerUserId: "user-1",
+      householdId: null,
+      currency: "RUB",
+      currentBalance: "1.00"
+    }));
+    const personalCategories = Array.from({ length: 205 }, (_, index) => ({
+      id: `category-${index}`,
+      name: `Category ${index}`,
+      type: "expense",
+      scope: "personal",
+      ownerUserId: "user-1",
+      householdId: null
+    }));
+    const personalAssets = Array.from({ length: 205 }, (_, index) => ({
+      id: `asset-${index}`,
+      name: `Asset ${index}`,
+      scopeType: "personal",
+      ownerUserId: "user-1",
+      householdId: null,
+      currency: "RUB",
+      manualAmount: "0",
+      isInvestment: false,
+      assetType: "other",
+      recordStatus: "active"
+    }));
+    const sharedTransactions = Array.from({ length: 100 }, (_, index) => ({
+      id: `shared-transaction-${index}`,
+      transactionType: "expense",
+      accountId: "shared-account",
+      counterpartyAccountId: null,
+      categoryId: "shared-category",
+      amount: "9999.00",
+      currency: "RUB",
+      occurredAt: "2026-06-30T23:59:59Z",
+      description: `SHARED SECRET ${index}`
+    }));
+    const personalTransactions = Array.from({ length: 205 }, (_, index) => ({
+      id: `transaction-${index}`,
+      transactionType: "expense",
+      accountId: `account-${index}`,
+      counterpartyAccountId: null,
+      categoryId: `category-${index}`,
+      amount: "1.00",
+      currency: "RUB",
+      occurredAt: new Date(Date.UTC(2026, 5, 1, 0, 0, index)).toISOString(),
+      description: `Personal ${index}`
+    }));
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url).replace("http://api.test", "");
+      if (path === "/api/v1/sessions/current") {
+        return jsonResponse({ actor: actor() });
+      }
+      const [pathname, queryString = ""] = path.split("?");
+      const params = new URLSearchParams(queryString);
+      const paged = (items: unknown[]) => {
+        const cursor = Number(params.get("cursor") ?? 0);
+        const pageItems = items.slice(cursor, cursor + 100);
+        const next = cursor + pageItems.length;
+        return jsonResponse({
+          items: pageItems,
+          page: {
+            limit: 100,
+            nextCursor: next < items.length ? String(next) : null,
+            hasMore: next < items.length
+          }
+        });
+      };
+      if (pathname === "/api/v1/accounts") {
+        expect(params.get("ownershipType")).toBe("personal");
+        return paged([
+          { ...personalAccounts[0], id: "shared-account", ownershipType: "shared", householdId: "h-1" },
+          ...personalAccounts,
+          personalAccounts[204]
+        ]);
+      }
+      if (pathname === "/api/v1/categories") {
+        expect(params.get("scope")).toBe("personal");
+        return paged([
+          { ...personalCategories[0], id: "shared-category", scope: "household", householdId: "h-1" },
+          ...personalCategories,
+          personalCategories[204]
+        ]);
+      }
+      if (pathname === "/api/v1/asset-categories") {
+        expect(params.get("scopeType")).toBe("personal");
+        return paged([
+          { ...personalAssets[0], id: "shared-asset", scopeType: "household", householdId: "h-1" },
+          ...personalAssets,
+          personalAssets[204]
+        ]);
+      }
+      if (pathname === "/api/v1/transactions") {
+        expect(params.get("ownershipType")).toBe("personal");
+        expect(params.get("sort")).toBe("-occurredAt");
+        expect(params.get("startDate")).toBe("2026-06-01");
+        expect(params.get("endDate")).toBe("2026-06-30");
+        return paged([...sharedTransactions, ...personalTransactions, personalTransactions[204]]);
+      }
+      if (pathname === "/api/v1/reports/account-balances") {
+        return jsonResponse({ data: { assetCategoryGroups: [], investmentsByCurrency: [], totalsByCurrency: [] } });
+      }
+      if (pathname === "/api/v1/reports/summary") {
+        return jsonResponse({
+          data: { reportMode: "personal", currency: "RUB", incomeTotal: 0, expenseTotal: 205, netTotal: -205 }
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const snapshot = await client.getDashboardSnapshot({
+      startDate: "2026-06-01",
+      endDate: "2026-06-30"
+    });
+
+    expect(snapshot.accounts).toHaveLength(205);
+    expect(snapshot.categories).toHaveLength(205);
+    expect(snapshot.assetCategories).toHaveLength(205);
+    expect(snapshot.operations).toHaveLength(205);
+    expect(snapshot.operations[0].id).toBe("transaction-204");
+    expect(JSON.stringify(snapshot)).not.toContain("SHARED SECRET");
+  });
+
+  it("retrieves category breakdown expenses sorted by amount", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url).replace("http://api.test", "");
+      expect(init?.credentials).toBe("include");
+
+      if (path.startsWith("/api/v1/reports/category-breakdown?")) {
+        const params = new URLSearchParams(path.split("?")[1]);
+        expect(params.get("reportMode")).toBe("personal");
+        expect(params.get("startDate")).toBe("2026-06-01");
+        expect(params.get("endDate")).toBe("2026-06-30");
+        return jsonResponse({
+          data: {
+            items: [],
+            expensesByCategory: [
+              {
+                categoryId: "cat-small",
+                categoryName: "Транспорт",
+                categoryType: "expense",
+                categoryScope: "personal",
+                currency: "RUB",
+                amount: "15.0000",
+                transactionCount: 1,
+                shareOfVisibleTotal: "0.176"
+              },
+              {
+                categoryId: "cat-big",
+                categoryName: "Продукты",
+                categoryType: "expense",
+                categoryScope: "personal",
+                currency: "RUB",
+                amount: "70.0000",
+                transactionCount: 2,
+                shareOfVisibleTotal: "0.824"
+              }
+            ]
+          }
+        });
+      }
+
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    const breakdown = await client.getCategoryBreakdown({
+      reportMode: "personal",
+      currency: "RUB",
+      startDate: "2026-06-01",
+      endDate: "2026-06-30"
+    });
+
+    expect(breakdown.map((item) => item.categoryName)).toEqual(["Продукты", "Транспорт"]);
+    expect(breakdown[0]).toMatchObject({
+      amount: { value: 70, currency: "RUB" },
+      transactionCount: 2
+    });
   });
 
   it("adds the CSRF header to unsafe cookie-authenticated requests", async () => {
@@ -951,6 +1359,18 @@ describe("LiveFinanceApiClient", () => {
         method: "DELETE"
       })
     );
+    expect(document.cookie).not.toContain("finance_csrf=");
+  });
+
+  it("clears csrf state but surfaces a failed server-side session revocation", async () => {
+    document.cookie = "finance_csrf=csrf-stale; path=/";
+    const fetcher = vi.fn(async () => jsonResponse({ error: { code: "FAILED" } }, 503));
+    const client = new LiveFinanceApiClient({
+      baseUrl: "http://api.test",
+      fetcher: fetcher as unknown as typeof fetch
+    });
+
+    await expect(client.logout()).rejects.toThrow("failed: 503");
     expect(document.cookie).not.toContain("finance_csrf=");
   });
 
@@ -1365,6 +1785,12 @@ describe("LiveFinanceApiClient", () => {
       }
 
       if (path === "/api/v1/planning/income-sources/is-1" && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body));
+        expect(parsed).toEqual({
+          amount: "55000.0000",
+          description: "Updated salary"
+        });
+        expect(parsed).not.toHaveProperty("effectiveDate");
         return jsonResponse({
           data: {
             id: "is-1",
@@ -1499,7 +1925,8 @@ describe("LiveFinanceApiClient", () => {
     const updatedIncome = await client.updatePlanningIncomeSource({
       incomeSourceId: "is-1",
       amount: 55000,
-      description: "Updated salary"
+      description: "Updated salary",
+      effectiveDate: "2026-07-05"
     });
     expect(updatedIncome.amount.value).toBe(55000);
 
