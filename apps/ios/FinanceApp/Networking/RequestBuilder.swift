@@ -1,6 +1,6 @@
 import Foundation
 
-struct RequestBuilder {
+struct RequestBuilder: Sendable {
     let baseURL: URL
 
     init(baseURL: String) {

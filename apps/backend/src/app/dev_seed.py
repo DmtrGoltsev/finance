@@ -144,7 +144,8 @@ def seed_dev_surface() -> AuthSessionService:
             secret=b"dev-only-token-hash-secret-32-bytes-minimum"
         ),
         token_factory=DeterministicDevTokenFactory(),
-        bearer_session_ttl=timedelta(hours=12),
+        bearer_access_ttl=timedelta(minutes=15),
+        bearer_session_ttl=timedelta(days=30),
     )
 
     seed_accounts_for_tests(

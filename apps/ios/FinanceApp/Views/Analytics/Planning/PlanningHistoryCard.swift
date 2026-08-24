@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct PlanningHistoryCard: View {
-    let history: [PlanningPlan]
+    let history: [PlanningPlanHistoryItem]
     let currentMonth: String
     let isLoading: Bool
-    let onCopy: (PlanningPlan) async -> Void
+    let onCopy: (PlanningPlanHistoryItem) async -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -28,7 +28,7 @@ struct PlanningHistoryCard: View {
                                 Text(localizedPlanningMonth(plan.month))
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                Text("\(localizedPlanningScope(plan.scope)) • \(plan.currency.rawValue)")
+                                Text(plan.currency.rawValue)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

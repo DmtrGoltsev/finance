@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -36,7 +36,11 @@ class AuthHarness:
     former_household_id: UUID
 
 
-def _auth_harness() -> AuthHarness:
+def _auth_harness(
+    *,
+    bearer_access_ttl: timedelta = timedelta(minutes=15),
+    bearer_session_ttl: timedelta = timedelta(hours=1),
+) -> AuthHarness:
     password = "correct horse battery staple"
     user_id = uuid4()
     active_household_id = uuid4()
@@ -77,7 +81,8 @@ def _auth_harness() -> AuthHarness:
         password_hasher=password_hasher,
         token_hashing=HmacSha256TokenHashingBackend(secret=b"x" * 32),
         token_factory=RandomTokenFactory(),
-        bearer_session_ttl=timedelta(hours=1),
+        bearer_access_ttl=bearer_access_ttl,
+        bearer_session_ttl=bearer_session_ttl,
         pwa_session_ttl=timedelta(hours=1),
     )
     return AuthHarness(
@@ -103,18 +108,28 @@ def _client(
 
 
 def _login(client: TestClient, harness: AuthHarness) -> str:
+    response = _login_response(client, harness)
+    return str(response["accessToken"])
+
+
+def _login_response(
+    client: TestClient,
+    harness: AuthHarness,
+    *,
+    transport: str = "android_bearer",
+) -> dict[str, object]:
     response = client.post(
         "/api/v1/sessions",
         json={
             "email": "OWNER@EXAMPLE.TEST",
             "password": harness.password,
-            "transport": "android_bearer",
+            "transport": transport,
         },
     )
     assert response.status_code == 201
     assert "__Host-finance_session" not in response.headers.get("set-cookie", "")
     assert "finance_csrf" not in response.headers.get("set-cookie", "")
-    return str(response.json()["accessToken"])
+    return dict(response.json())
 
 
 def _pwa_login(client: TestClient, harness: AuthHarness):
@@ -230,6 +245,314 @@ def test_authenticated_bearer_session_returns_canonical_uuid_actor_context() -> 
     assert stored[0].session_token_hash is not None
     assert access_token not in repr(stored[0])
     assert stored[0].session_version == 7
+
+
+def test_android_bearer_login_returns_refresh_token_and_stores_only_hash() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        body = _login_response(client, harness)
+
+    refresh_token = str(body["refreshToken"])
+    access_token = str(body["accessToken"])
+    assert body["tokenType"] == "Bearer"
+    assert access_token
+    assert refresh_token
+    assert refresh_token != access_token
+
+    stored = harness.sessions.records_for_tests()
+    assert len(stored) == 1
+    assert stored[0].refresh_token_hash is not None
+    assert stored[0].session_token_hash != access_token
+    assert stored[0].refresh_token_hash != refresh_token
+    assert access_token not in repr(stored[0])
+    assert refresh_token not in repr(stored[0])
+
+
+def test_ios_bearer_login_returns_hash_only_tokens_and_authenticates_current_session() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        body = _login_response(client, harness, transport="ios_bearer")
+        access_token = str(body["accessToken"])
+        refresh_token = str(body["refreshToken"])
+        current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    assert body["tokenType"] == "Bearer"
+    assert current.status_code == 200
+    assert current.json()["actor"]["sessionId"] == body["actor"]["sessionId"]
+
+    stored = harness.sessions.records_for_tests()
+    assert len(stored) == 1
+    assert stored[0].client_kind == AuthClientKind.IOS
+    assert stored[0].session_token_hash is not None
+    assert stored[0].refresh_token_hash is not None
+    assert access_token not in repr(stored[0])
+    assert refresh_token not in repr(stored[0])
+
+
+def test_refresh_rotates_android_access_and_refresh_token() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness)
+        old_access_token = str(login_body["accessToken"])
+        old_refresh_token = str(login_body["refreshToken"])
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        old_access_current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {old_access_token}"},
+        )
+
+    assert refreshed.status_code == 200
+    refreshed_body = refreshed.json()
+    assert refreshed_body["tokenType"] == "Bearer"
+    assert refreshed_body["accessToken"]
+    assert refreshed_body["refreshToken"]
+    assert refreshed_body["accessToken"] != old_access_token
+    assert refreshed_body["refreshToken"] != old_refresh_token
+    assert refreshed_body["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert replay.status_code == 401
+    assert old_access_current.status_code == 401
+    assert old_refresh_token not in replay.text
+
+    stored = harness.sessions.records_for_tests()
+    assert len(stored) == 1
+    assert stored[0].refresh_token_hash is not None
+    assert refreshed_body["refreshToken"] not in repr(stored[0])
+
+
+def test_refresh_rotates_ios_tokens_once_and_invalidates_old_access() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness, transport="ios_bearer")
+        old_access_token = str(login_body["accessToken"])
+        old_refresh_token = str(login_body["refreshToken"])
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": old_refresh_token},
+        )
+        old_access_current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {old_access_token}"},
+        )
+
+    assert refreshed.status_code == 200
+    refreshed_body = refreshed.json()
+    assert refreshed_body["accessToken"] != old_access_token
+    assert refreshed_body["refreshToken"] != old_refresh_token
+    assert refreshed_body["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert replay.status_code == 401
+    assert old_access_current.status_code == 401
+    assert old_refresh_token not in replay.text
+
+
+def test_expired_ios_access_refreshes_active_session_then_retry_succeeds() -> None:
+    harness = _auth_harness(
+        bearer_access_ttl=timedelta(minutes=15),
+        bearer_session_ttl=timedelta(hours=12),
+    )
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness, transport="ios_bearer")
+        access_token = str(login_body["accessToken"])
+        refresh_token = str(login_body["refreshToken"])
+        record = harness.sessions.records_for_tests()[0]
+        harness.sessions._records[record.id] = replace(
+            record,
+            access_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+        expired_access = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        before_refresh = datetime.now(UTC)
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+        refreshed_body = refreshed.json()
+        retried = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {refreshed_body['accessToken']}"},
+        )
+        replay = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert expired_access.status_code == 401
+    assert refreshed.status_code == 200
+    access_expiry = datetime.fromisoformat(refreshed_body["accessExpiresAt"])
+    refresh_expiry = datetime.fromisoformat(refreshed_body["refreshExpiresAt"])
+    assert refreshed_body["expiresAt"] == refreshed_body["refreshExpiresAt"]
+    assert access_expiry >= before_refresh + timedelta(minutes=14, seconds=59)
+    assert refresh_expiry >= before_refresh + timedelta(hours=11, minutes=59)
+    stored = harness.sessions.records_for_tests()[0]
+    assert stored.access_expires_at == access_expiry
+    assert stored.expires_at == refresh_expiry
+    assert retried.status_code == 200
+    assert retried.json()["actor"]["sessionId"] == login_body["actor"]["sessionId"]
+    assert replay.status_code == 401
+
+
+def test_session_bound_revoke_survives_committed_refresh_rotation() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness, transport="ios_bearer")
+        original_revoke_token = str(login_body["revokeToken"])
+        session_id = str(login_body["actor"]["sessionId"])
+        refreshed = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": login_body["refreshToken"]},
+        )
+        assert refreshed.status_code == 200
+        refreshed_body = refreshed.json()
+        assert refreshed_body["revokeToken"] == original_revoke_token
+
+        logout = client.post(
+            "/api/v1/sessions/revoke",
+            json={"sessionId": session_id, "revokeToken": original_revoke_token},
+        )
+        current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {refreshed_body['accessToken']}"},
+        )
+        refresh_after_logout = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refreshed_body["refreshToken"]},
+        )
+
+    assert logout.status_code == 204
+    assert current.status_code == 401
+    assert refresh_after_logout.status_code == 401
+    assert harness.sessions.records_for_tests()[0].status == TokenRecordStatus.REVOKED
+
+
+def test_invalid_session_bound_revoke_is_idempotent_and_does_not_revoke() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness, transport="ios_bearer")
+        response = client.post(
+            "/api/v1/sessions/revoke",
+            json={
+                "sessionId": login_body["actor"]["sessionId"],
+                "revokeToken": "invalid-revoke-proof",
+            },
+        )
+        current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {login_body['accessToken']}"},
+        )
+
+    assert response.status_code == 204
+    assert current.status_code == 200
+
+
+def test_ios_logout_revokes_access_and_refresh_tokens() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        login_body = _login_response(client, harness, transport="ios_bearer")
+        access_token = str(login_body["accessToken"])
+        refresh_token = str(login_body["refreshToken"])
+        logout = client.delete(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        current = client.get(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        refresh = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert logout.status_code == 204
+    assert current.status_code == 401
+    assert refresh.status_code == 401
+    assert harness.sessions.records_for_tests()[0].status == TokenRecordStatus.REVOKED
+
+
+def test_unknown_auth_transport_is_rejected_without_creating_session() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        response = client.post(
+            "/api/v1/sessions",
+            json={
+                "email": "OWNER@EXAMPLE.TEST",
+                "password": harness.password,
+                "transport": "windows_bearer",
+            },
+        )
+
+    assert response.status_code == 422
+    assert harness.sessions.records_for_tests() == ()
+
+
+def test_refresh_with_invalid_expired_or_revoked_token_is_rejected() -> None:
+    harness = _auth_harness()
+
+    with _client(harness) as client:
+        invalid = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": "invalid-refresh-token"},
+        )
+        login_body = _login_response(client, harness)
+        refresh_token = str(login_body["refreshToken"])
+
+        record = harness.sessions.records_for_tests()[0]
+        harness.sessions._records[record.id] = replace(
+            record,
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        expired = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert invalid.status_code == 401
+    assert expired.status_code == 401
+    assert refresh_token not in expired.text
+
+    revoked_harness = _auth_harness()
+    with _client(revoked_harness) as client:
+        login_body = _login_response(client, revoked_harness)
+        access_token = str(login_body["accessToken"])
+        refresh_token = str(login_body["refreshToken"])
+        logout = client.delete(
+            "/api/v1/sessions/current",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        revoked = client.post(
+            "/api/v1/sessions/refresh",
+            json={"refreshToken": refresh_token},
+        )
+
+    assert logout.status_code == 204
+    assert revoked.status_code == 401
+    assert refresh_token not in revoked.text
 
 
 def test_pwa_login_sets_httponly_session_cookie_and_readable_csrf_cookie() -> None:

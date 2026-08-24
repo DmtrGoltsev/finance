@@ -103,7 +103,13 @@ from .schemas import (
     SyncPushResponse,
 )
 
-SYNC_TRANSACTION_TYPES = frozenset({"income", "expense", "transfer"})
+SYNC_CATEGORY_REQUIRED_TRANSACTION_TYPES = frozenset({"income", "expense"})
+SYNC_CATEGORYLESS_TRANSACTION_TYPES = frozenset(
+    {"transfer", "brokerage", "asset_buy", "asset_sell", "interest", "dividend", "adjustment"}
+)
+SYNC_TRANSACTION_TYPES = (
+    SYNC_CATEGORY_REQUIRED_TRANSACTION_TYPES | SYNC_CATEGORYLESS_TRANSACTION_TYPES
+)
 SYNC_TRANSACTION_OPERATIONS = frozenset({"create", "update", "delete", "restore"})
 SYNC_DOMAIN_OPERATIONS = frozenset({"create", "update", "archive", "restore", "delete"})
 SYNC_PLANNING_PLAN_OPERATIONS = frozenset({"create"})
@@ -1360,6 +1366,7 @@ class SyncService:
             actor_id=actor_id,
             mutation=mutation,
             record=record,
+            changed_account_ids=_transfer_account_ids(record),
         )
 
     def _update_transaction(
@@ -1415,6 +1422,7 @@ class SyncService:
             actor_id=actor_id,
             mutation=mutation,
             record=record,
+            changed_account_ids=_transfer_account_ids(existing, record),
         )
 
     def _delete_transaction(
@@ -1453,6 +1461,7 @@ class SyncService:
             actor_id=actor_id,
             mutation=mutation,
             record=deleted,
+            changed_account_ids=_transfer_account_ids(existing, deleted),
         )
 
     def _restore_transaction(
@@ -1478,6 +1487,7 @@ class SyncService:
             actor_id=actor_id,
             mutation=mutation,
             record=restored,
+            changed_account_ids=_transfer_account_ids(restored),
         )
 
     def _applied_transaction_result(
@@ -1486,11 +1496,13 @@ class SyncService:
         actor_id: UUID,
         mutation: SyncMutationRequest,
         record: TransactionRecord,
+        changed_account_ids: tuple[str, ...] = (),
     ) -> SyncMutationResult:
         change = self._write_transaction_change(
             actor_id=actor_id,
             mutation=mutation,
             record=record,
+            changed_account_ids=changed_account_ids,
         )
         return SyncMutationResult(
             client_mutation_id=mutation.client_mutation_id,
@@ -1657,18 +1669,34 @@ class SyncService:
         actor_id: UUID,
         mutation: SyncMutationRequest,
         record: TransactionRecord,
+        changed_account_ids: tuple[str, ...] = (),
     ) -> SyncChange:
         account = self._accounts.get(record.account_id)
         if account is None:
             raise ValueError("transaction account is unavailable")
 
-        return self._sync_changes.record_transaction_change(
+        change = self._sync_changes.record_transaction_change(
             actor_user_id=actor_id,
             operation=mutation.operation,
             record=record,
             account=account,
             client_mutation_id=mutation.client_mutation_id,
         )
+        if record.transaction_type != "transfer":
+            return change
+        if record.counterparty_account_id is None:
+            raise ValueError("transfer counterparty account is unavailable")
+        for account_id in changed_account_ids or _transfer_account_ids(record):
+            changed_account = self._accounts.get(account_id)
+            if changed_account is None:
+                raise ValueError("transfer account is unavailable")
+            change = self._sync_changes.record_account_change(
+                actor_user_id=actor_id,
+                operation="update",
+                record=changed_account,
+                client_mutation_id=mutation.client_mutation_id,
+            )
+        return change
 
     def _planning_plan_for_child(self, plan_id: str) -> PlanningPlanRecord:
         plan = self._planning.get_plan(plan_id)
@@ -1894,6 +1922,20 @@ def _actor_uuid(actor: Actor) -> UUID:
             "VALIDATION_FAILED",
             "Authenticated actor must use a canonical UUID for sync.",
         ) from exc
+
+
+def _transfer_account_ids(*records: TransactionRecord) -> tuple[str, ...]:
+    account_ids: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if record.transaction_type != "transfer":
+            continue
+        for account_id in (record.account_id, record.counterparty_account_id):
+            if account_id is None or account_id in seen:
+                continue
+            account_ids.append(account_id)
+            seen.add(account_id)
+    return tuple(account_ids)
 
 
 def _change_dto(row: SyncChange) -> SyncChangeDto:

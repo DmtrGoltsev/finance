@@ -59,3 +59,28 @@ struct AccountUpdateRequest: Codable, Sendable {
         try c.encode(assetCategoryId, forKey: .assetCategoryId)
     }
 }
+
+struct AccountOfflineUpdateRequest: Codable, Sendable {
+    let name: String?
+    let currency: CurrencyCode?
+    let accountType: AccountType?
+    let assetCategoryId: String?
+    let isPaymentAccount: Bool?
+
+    init(_ request: AccountUpdateRequest) {
+        name = request.name
+        currency = request.currency
+        accountType = request.accountType
+        assetCategoryId = request.assetCategoryId
+        isPaymentAccount = request.isPaymentAccount
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(currency, forKey: .currency)
+        try container.encodeIfPresent(accountType, forKey: .accountType)
+        try container.encode(assetCategoryId, forKey: .assetCategoryId)
+        try container.encodeIfPresent(isPaymentAccount, forKey: .isPaymentAccount)
+    }
+}

@@ -385,7 +385,12 @@ class TransactionService:
                 record.amount,
                 posting=False,
             )
-            self._record_sync_change(actor=actor, operation="delete", record=saved)
+            self._record_sync_change(
+                actor=actor,
+                operation="delete",
+                record=saved,
+                changed_account_ids=(source.id, counterparty.id),
+            )
             return
 
         deleted = self._transactions.save(
@@ -446,7 +451,12 @@ class TransactionService:
             )
             saved = self._transactions.save(restored)
             self._apply_transfer_balance_delta(source, counterparty, record.amount, posting=True)
-            self._record_sync_change(actor=actor, operation="restore", record=saved)
+            self._record_sync_change(
+                actor=actor,
+                operation="restore",
+                record=saved,
+                changed_account_ids=(source.id, counterparty.id),
+            )
             return saved
 
         account = self._accounts.get(record.account_id)
@@ -536,7 +546,12 @@ class TransactionService:
             created_by_user_id=actor.user_id,
         )
         self._apply_transfer_balance_delta(source, counterparty, amount, posting=True)
-        self._record_sync_change(actor=actor, operation="create", record=record)
+        self._record_sync_change(
+            actor=actor,
+            operation="create",
+            record=record,
+            changed_account_ids=(source.id, counterparty.id),
+        )
         return record
 
     def _update_transfer(
@@ -613,7 +628,17 @@ class TransactionService:
         fresh_source = self._require_visible_account(actor, source.id)
         fresh_counterparty = self._require_visible_account(actor, counterparty.id)
         self._apply_transfer_balance_delta(fresh_source, fresh_counterparty, amount, posting=True)
-        self._record_sync_change(actor=actor, operation="update", record=saved)
+        self._record_sync_change(
+            actor=actor,
+            operation="update",
+            record=saved,
+            changed_account_ids=(
+                old_source.id,
+                old_counterparty.id,
+                source.id,
+                counterparty.id,
+            ),
+        )
         return saved
 
     def _visible_accounts(
@@ -822,6 +847,7 @@ class TransactionService:
         actor: Actor,
         operation: str,
         record: TransactionRecord,
+        changed_account_ids: tuple[str, ...] | None = None,
     ) -> None:
         if self._sync_change_recorder is None:
             return
@@ -834,6 +860,25 @@ class TransactionService:
             record=record,
             account=account,
         )
+        if record.transaction_type != "transfer":
+            return
+        account_ids = changed_account_ids or (
+            record.account_id,
+            record.counterparty_account_id,
+        )
+        seen_account_ids: set[str] = set()
+        for account_id in account_ids:
+            if account_id is None or account_id in seen_account_ids:
+                continue
+            changed_account = self._accounts.get(account_id)
+            if changed_account is None:
+                raise TransactionValidationError(DenialReason.VALIDATION_FAILED)
+            seen_account_ids.add(account_id)
+            self._sync_change_recorder.record_account_change(
+                actor_user_id=actor.user_id,
+                operation="update",
+                record=changed_account,
+            )
 
 
 def _authz_account(record: AccountRecord) -> AuthzAccount:

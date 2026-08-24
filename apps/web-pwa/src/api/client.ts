@@ -14,6 +14,7 @@ import type {
   CaptureDraftCreateInput,
   CaptureDraftSummary,
   CaptureDraftUpdateInput,
+  CategoryBreakdownItem,
   CategoryDirection,
   CategoryScope,
   CategorySummary,
@@ -89,6 +90,7 @@ type CategoryDto = {
   color?: string | null;
   scope?: "personal" | "household";
   householdId?: string | null;
+  ownerUserId?: string | null;
   status?: "active" | "archived" | "deleted";
   version?: number;
 };
@@ -119,12 +121,25 @@ type TransactionDto = {
   version?: number;
 };
 
+type ReportSummaryCurrencyTotalDto = {
+  currency: string;
+  incomeTotal?: string | number;
+  expenseTotal?: string | number;
+  netTotal?: string | number;
+  investmentsTotal?: string | number;
+  investmentTotal?: string | number;
+  investmentsAmount?: string | number;
+};
+
 type ReportSummaryDto = {
   reportMode?: ReportMode;
   currency?: string;
   incomeTotal?: string | number;
   expenseTotal?: string | number;
   netTotal?: string | number;
+  investmentsTotal?: string | number | MoneyAmountDto | null;
+  investmentTotal?: string | number | MoneyAmountDto | null;
+  investmentsAmount?: string | number | MoneyAmountDto | null;
   totalIncome?: string | number;
   totalExpense?: string | number;
   balanceDelta?: string | number;
@@ -132,12 +147,29 @@ type ReportSummaryDto = {
   scope?: {
     reportMode?: ReportMode;
   };
-  totalsByCurrency?: Array<{
-    currency: string;
-    incomeTotal?: string | number;
-    expenseTotal?: string | number;
-    netTotal?: string | number;
-  }>;
+  totalsByCurrency?: ReportSummaryCurrencyTotalDto[];
+};
+
+type MoneyAmountDto = {
+  value?: string | number;
+  amount?: string | number;
+  currency?: string;
+};
+
+type CategoryBreakdownItemDto = {
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryType?: "income" | "expense" | null;
+  categoryScope?: "personal" | "household" | null;
+  currency: string;
+  amount: string | number;
+  transactionCount: number;
+  shareOfVisibleTotal: string | number;
+};
+
+type ReportCategoryBreakdownDto = {
+  items: CategoryBreakdownItemDto[];
+  expensesByCategory?: CategoryBreakdownItemDto[];
 };
 
 type CaptureDraftDto = {
@@ -281,6 +313,11 @@ type ReportAccountBalancesDto = {
 
 type PageEnvelope<T> = {
   items: T[];
+  page?: {
+    limit: number;
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
 };
 
 type DataEnvelope<T> = {
@@ -356,6 +393,7 @@ type TransferCreateInput = {
   toAccountId: string;
   currency: CurrencyCode;
   amount?: number;
+  transactionDate?: string;
   occurredAt?: string;
   description?: string | null;
 };
@@ -413,6 +451,9 @@ export interface FinanceApiClient {
     transactionId: string;
     amount?: number;
     description?: string | null;
+    fromAccountId?: string;
+    toAccountId?: string | null;
+    occurredDate?: string | null;
     version?: number;
   }): Promise<TransferSummary>;
   archiveTransfer(transactionId: string): Promise<void>;
@@ -465,8 +506,14 @@ export interface FinanceApiClient {
   copyPlanningPlan(input: PlanningPlanCopyInput): Promise<PlanningPlan>;
   getAccountBalancesReport(input?: ReportPeriodInput & {
     reportMode?: ReportMode;
+    householdId?: string | null;
     currency?: CurrencyCode;
   }): Promise<AccountBalancesReport>;
+  getCategoryBreakdown(input?: ReportPeriodInput & {
+    reportMode?: ReportMode;
+    householdId?: string | null;
+    currency?: CurrencyCode;
+  }): Promise<CategoryBreakdownItem[]>;
 }
 
 export type LiveFinanceApiClientOptions = {
@@ -534,50 +581,92 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   }
 
   async logout(): Promise<void> {
-    await this.request<void>(
-      "/api/v1/sessions/current",
-      { method: "DELETE" },
-      { empty: true }
-    );
-    this.csrfToken = null;
-    clearCookie(CSRF_COOKIE_NAME);
+    try {
+      await this.request<void>(
+        "/api/v1/sessions/current",
+        { method: "DELETE" },
+        { empty: true }
+      );
+    } finally {
+      this.csrfToken = null;
+      clearCookie(CSRF_COOKIE_NAME);
+    }
   }
 
   async getDashboardSnapshot(input: ReportPeriodInput = {}): Promise<DashboardSnapshot> {
     const session = await this.get<SessionResponseDto>("/api/v1/sessions/current");
-    const [accountsEnvelope, categoriesEnvelope, transactionsEnvelope, assetCategoriesEnvelope] =
+    const transactionQuery: Record<string, string> = {
+      ownershipType: "personal",
+      sort: "-occurredAt"
+    };
+    if (input.startDate) {
+      transactionQuery.startDate = input.startDate;
+    }
+    if (input.endDate) {
+      transactionQuery.endDate = input.endDate;
+    }
+
+    const [accountDtos, categoryDtos, transactionDtos, assetCategoryDtos] =
       await Promise.all([
-        this.get<PageEnvelope<AccountDto>>("/api/v1/accounts"),
-        this.get<PageEnvelope<CategoryDto>>("/api/v1/categories"),
-        this.get<PageEnvelope<TransactionDto>>("/api/v1/transactions"),
-        this.get<PageEnvelope<AssetCategoryDto>>("/api/v1/asset-categories").catch(
-          () => ({ items: [] } as PageEnvelope<AssetCategoryDto>)
-        )
+        this.getAllPages<AccountDto>("/api/v1/accounts", { ownershipType: "personal" }),
+        this.getAllPages<CategoryDto>("/api/v1/categories", { scope: "personal" }),
+        this.getAllPages<TransactionDto>("/api/v1/transactions", transactionQuery),
+        this.getAllPages<AssetCategoryDto>("/api/v1/asset-categories", {
+          scopeType: "personal"
+        }).catch(() => [] as AssetCategoryDto[])
       ]);
 
-    const accounts = accountsEnvelope.items.map(mapAccount);
-    const categories = categoriesEnvelope.items.map(mapCategory);
-    const operations = transactionsEnvelope.items
+    const actorUserId = session.actor.userId;
+    const accounts = accountDtos
+      .filter(
+        (account) =>
+          account.ownershipType === "personal" &&
+          account.householdId == null &&
+          (account.ownerUserId == null || account.ownerUserId === actorUserId)
+      )
+      .map(mapAccount)
+      .filter((account) => account.ownershipType === "personal");
+    const categories = categoryDtos
+      .filter(
+        (category) =>
+          category.scope !== "household" &&
+          category.householdId == null &&
+          (category.ownerUserId == null || category.ownerUserId === actorUserId)
+      )
+      .map(mapCategory)
+      .filter((category) => category.scope !== "household");
+    const personalAccountIds = new Set(accounts.map((account) => account.id));
+    const personalCategoryIds = new Set(categories.map((category) => category.id));
+    const personalTransactions = transactionDtos
+      .filter((transaction) => isStrictlyPersonalTransaction(
+        transaction,
+        personalAccountIds,
+        personalCategoryIds
+      ))
+      .sort(compareTransactionsNewestFirst);
+    const operations = personalTransactions
       .filter((transaction) => transaction.transactionType !== "transfer")
       .map((transaction) => mapOperation(transaction, accounts, categories));
-    const transfers = transactionsEnvelope.items
+    const transfers = personalTransactions
       .filter((transaction) => transaction.transactionType === "transfer")
       .map((transaction) => mapTransfer(transaction, accounts));
-    const householdId = pickHouseholdId(session.actor);
     const currency = accounts[0]?.balance.currency ?? "RUB";
-    const assetCategories = (assetCategoriesEnvelope as PageEnvelope<AssetCategoryDto>).items.map(
-      mapAssetCategory
-    );
+    const assetCategories = assetCategoryDtos
+      .filter(
+        (category) =>
+          category.scopeType === "personal" &&
+          category.householdId == null &&
+          (category.ownerUserId == null || category.ownerUserId === actorUserId)
+      )
+      .map(mapAssetCategory)
+      .filter((category) => category.scopeType === "personal");
 
     let accountBalancesData: ReportAccountBalancesDto | null = null;
     try {
       const params = new URLSearchParams({
-        reportMode: householdId ? "combined_viewer_overview" : "personal",
+        reportMode: "personal",
         currency
       });
-      if (householdId) {
-        params.set("householdId", householdId);
-      }
       if (input.startDate) {
         params.set("startDate", input.startDate);
       }
@@ -600,14 +689,14 @@ export class LiveFinanceApiClient implements FinanceApiClient {
       ? money(accountBalancesData.totalsByCurrency[0].netWorthTotal, currency)
       : null;
 
-    const reports = await this.getReports(householdId, currency, input);
+    const reports = await this.getPersonalReports(currency, input);
 
     return {
       session: {
         viewerName: "Владелец",
-        householdName: householdId ? "Общие финансы" : "Личный режим",
+        householdName: "Финансы",
         accessLabel: "Вход выполнен",
-        householdId
+        householdId: null
       },
       accounts,
       categories,
@@ -630,8 +719,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           name: input.name?.trim() || `Новый актив ${uniqueSuffix()}`,
           accountType: accountTypeFromKind(input.kind ?? "cash"),
           isPaymentAccount: input.isPaymentAccount ?? true,
-          ownershipType: input.ownershipType ?? "personal",
-          householdId: input.ownershipType === "shared" ? input.householdId : null,
+          ownershipType: "personal",
+          householdId: null,
           currency: input.currency ?? "RUB",
           initialBalance: String(input.initialBalance ?? 0),
           ...(input.assetCategoryId ? { assetCategoryId: input.assetCategoryId } : {})
@@ -705,8 +794,8 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         body: JSON.stringify({
           name: input.name.trim(),
           type: input.direction,
-          scope: input.scope,
-          householdId: input.scope === "household" ? input.householdId : null,
+          scope: "personal",
+          householdId: null,
           iconKey: input.iconKey,
           color: input.color
         })
@@ -848,7 +937,9 @@ export class LiveFinanceApiClient implements FinanceApiClient {
           counterpartyAccountId: input.toAccountId,
           amount: amount.toFixed(4),
           currency: input.currency,
-          occurredAt: input.occurredAt ?? new Date().toISOString(),
+          transactionDate:
+            input.transactionDate ?? dateOnlyFromValue(input.occurredAt) ?? todayDateOnly(),
+          ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
           description: input.description?.trim() || "Перевод",
           sourceType: "manual"
         })
@@ -862,11 +953,17 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     transactionId: string;
     amount?: number;
     description?: string | null;
+    fromAccountId?: string;
+    toAccountId?: string | null;
+    occurredDate?: string | null;
     version?: number;
   }): Promise<TransferSummary> {
     const body: Record<string, unknown> = {};
     if (input.amount !== undefined) body.amount = input.amount.toFixed(4);
     if (input.description !== undefined) body.description = input.description;
+    if (input.fromAccountId !== undefined) body.accountId = input.fromAccountId;
+    if (input.toAccountId !== undefined) body.counterpartyAccountId = input.toAccountId;
+    if (input.occurredDate !== undefined) body.transactionDate = input.occurredDate;
     if (input.version !== undefined) body.version = input.version;
     const envelope = await this.request<DataEnvelope<TransactionDto>>(
       `/api/v1/transactions/${input.transactionId}`,
@@ -1058,11 +1155,12 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     if (input?.isInvestment !== undefined) {
       params.set("isInvestment", String(input.isInvestment));
     }
-    const envelope = await this.get<PageEnvelope<AssetCategoryDto>>(
-      `/api/v1/asset-categories?${params.toString()}`
+    const items = await this.getAllPages<AssetCategoryDto>(
+      "/api/v1/asset-categories",
+      Object.fromEntries(params.entries())
     );
 
-    return envelope.items.map(mapAssetCategory);
+    return items.map(mapAssetCategory);
   }
 
   async createAssetCategory(input: AssetCategoryCreateInput): Promise<AssetCategory> {
@@ -1072,8 +1170,7 @@ export class LiveFinanceApiClient implements FinanceApiClient {
         method: "POST",
         body: JSON.stringify({
           name: input.name.trim(),
-          scopeType: input.scopeType,
-          ...(input.householdId ? { householdId: input.householdId } : {}),
+          scopeType: "personal",
           currency: input.currency,
           ...(input.manualAmount !== undefined ? { manualAmount: input.manualAmount.toFixed(4) } : {}),
           ...(input.isInvestment !== undefined ? { isInvestment: input.isInvestment } : {}),
@@ -1215,7 +1312,6 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     if (input.source !== undefined) body.source = input.source;
     if (input.description !== undefined) body.description = input.description;
     if (input.dayOfMonth !== undefined) body.dayOfMonth = input.dayOfMonth;
-    if (input.effectiveDate !== undefined) body.effectiveDate = input.effectiveDate;
     if (input.version !== undefined) body.version = input.version;
     const envelope = await this.request<DataEnvelope<PlanningIncomeSourceDto>>(
       `/api/v1/planning/income-sources/${input.incomeSourceId}`,
@@ -1320,13 +1416,20 @@ export class LiveFinanceApiClient implements FinanceApiClient {
   }
 
   async getAccountBalancesReport(
-    input: ReportPeriodInput & { reportMode?: ReportMode; currency?: CurrencyCode } = {}
+    input: ReportPeriodInput & {
+      reportMode?: ReportMode;
+      householdId?: string | null;
+      currency?: CurrencyCode;
+    } = {}
   ): Promise<AccountBalancesReport> {
     const params = new URLSearchParams({
       reportMode: input.reportMode ?? "personal"
     });
     if (input.currency) {
       params.set("currency", input.currency);
+    }
+    if (input.householdId) {
+      params.set("householdId", input.householdId);
     }
     if (input.startDate) {
       params.set("startDate", input.startDate);
@@ -1350,44 +1453,100 @@ export class LiveFinanceApiClient implements FinanceApiClient {
     };
   }
 
-  private async getReports(
-    householdId: string | null,
+  async getCategoryBreakdown(
+    input: ReportPeriodInput & {
+      reportMode?: ReportMode;
+      householdId?: string | null;
+      currency?: CurrencyCode;
+    } = {}
+  ): Promise<CategoryBreakdownItem[]> {
+    const params = new URLSearchParams({
+      reportMode: input.reportMode ?? "personal"
+    });
+    if (input.householdId) {
+      params.set("householdId", input.householdId);
+    }
+    if (input.currency) {
+      params.set("currency", input.currency);
+    }
+    if (input.startDate) {
+      params.set("startDate", input.startDate);
+    }
+    if (input.endDate) {
+      params.set("endDate", input.endDate);
+    }
+
+    const envelope = await this.get<DataEnvelope<ReportCategoryBreakdownDto>>(
+      `/api/v1/reports/category-breakdown?${params.toString()}`
+    );
+
+    const expenseItems =
+      envelope.data.expensesByCategory ??
+      (envelope.data.items ?? []).filter((item) => item.categoryType !== "income");
+
+    return expenseItems
+      .filter((item) => item.categoryScope === "personal" || item.categoryId == null)
+      .map(mapCategoryBreakdownItem)
+      .sort((left, right) => right.amount.value - left.amount.value);
+  }
+
+  private async getPersonalReports(
     currency: CurrencyCode,
     period: ReportPeriodInput = {}
   ): Promise<ReportSummary[]> {
-    const modes: ReportMode[] = [
-      "shared_family_report",
-      "combined_viewer_overview"
-    ];
-
-    if (!householdId) {
-      return modes.map((mode) => emptyReport(mode, currency));
+    const params = new URLSearchParams({
+      reportMode: "personal",
+      currency
+    });
+    if (period.startDate) {
+      params.set("startDate", period.startDate);
     }
-
-    return Promise.all(
-      modes.map(async (mode) => {
-        const params = new URLSearchParams({
-          reportMode: mode,
-          householdId,
-          currency
-        });
-        if (period.startDate) {
-          params.set("startDate", period.startDate);
-        }
-        if (period.endDate) {
-          params.set("endDate", period.endDate);
-        }
-        const envelope = await this.get<DataEnvelope<ReportSummaryDto>>(
-          `/api/v1/reports/summary?${params.toString()}`
-        );
-
-        return mapReport(envelope.data, currency, period);
-      })
+    if (period.endDate) {
+      params.set("endDate", period.endDate);
+    }
+    const envelope = await this.get<DataEnvelope<ReportSummaryDto>>(
+      `/api/v1/reports/summary?${params.toString()}`
     );
+
+    return [mapReport(envelope.data, currency, period)];
   }
 
   private get<T>(path: string): Promise<T> {
     return this.request<T>(path, { method: "GET" });
+  }
+
+  private async getAllPages<T extends { id: string }>(
+    path: string,
+    query: Record<string, string> = {}
+  ): Promise<T[]> {
+    const itemsById = new Map<string, T>();
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+
+    do {
+      const params = new URLSearchParams({ ...query, limit: "100" });
+      if (cursor) {
+        params.set("cursor", cursor);
+      }
+      const envelope = await this.get<PageEnvelope<T>>(`${path}?${params.toString()}`);
+      for (const item of envelope.items ?? []) {
+        if (item.id && !itemsById.has(item.id)) {
+          itemsById.set(item.id, item);
+        }
+      }
+
+      if (!envelope.page?.hasMore) {
+        break;
+      }
+      const nextCursor = envelope.page.nextCursor;
+      if (!nextCursor || seenCursors.has(nextCursor)) {
+        throw new Error(`Invalid pagination cursor for ${path}`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    } while (true);
+
+    return [...itemsById.values()];
   }
 
   private async request<T>(
@@ -1479,11 +1638,37 @@ export function isApiRequestError(error: unknown, status?: number): error is Api
   return error instanceof ApiRequestError && (status === undefined || error.status === status);
 }
 
+function isStrictlyPersonalTransaction(
+  transaction: TransactionDto,
+  personalAccountIds: Set<string>,
+  personalCategoryIds: Set<string>
+): boolean {
+  if (!personalAccountIds.has(transaction.accountId)) {
+    return false;
+  }
+  if (transaction.categoryId && !personalCategoryIds.has(transaction.categoryId)) {
+    return false;
+  }
+  if (
+    transaction.counterpartyAccountId &&
+    !personalAccountIds.has(transaction.counterpartyAccountId)
+  ) {
+    return false;
+  }
+  return transaction.transactionType !== "transfer" || Boolean(transaction.counterpartyAccountId);
+}
+
+function compareTransactionsNewestFirst(left: TransactionDto, right: TransactionDto): number {
+  const leftDate = left.occurredAt || left.transactionDate || "";
+  const rightDate = right.occurredAt || right.transactionDate || "";
+  return rightDate.localeCompare(leftDate);
+}
+
 function mapAccount(account: AccountDto): AccountSummary {
   return {
     id: account.id,
     name: userFacingSeedText(account.name),
-    ownerName: account.ownershipType === "shared" ? "Общее" : "Личное",
+    ownerName: "Владелец",
     kind: mapAccountKind(account.accountType),
     isPaymentAccount: account.isPaymentAccount ?? true,
     ownershipType: account.ownershipType,
@@ -1657,6 +1842,18 @@ function mapInvestmentTotal(dto: InvestmentTotalDto): InvestmentsByCurrency {
   };
 }
 
+function mapCategoryBreakdownItem(dto: CategoryBreakdownItemDto): CategoryBreakdownItem {
+  return {
+    categoryId: dto.categoryId ?? null,
+    categoryName: dto.categoryName ?? null,
+    categoryType: dto.categoryType ?? null,
+    categoryScope: dto.categoryScope ?? null,
+    amount: money(dto.amount, dto.currency),
+    transactionCount: dto.transactionCount,
+    shareOfVisibleTotal: Number(dto.shareOfVisibleTotal)
+  };
+}
+
 function mapPlanningPlan(dto: PlanningPlanDto): PlanningPlan {
   const currency = normalizeCurrency(dto.currency, "RUB");
   return {
@@ -1744,6 +1941,7 @@ function mapReport(
     report.netAmount ??
     total?.netTotal ??
     Number(income) - Number(expense);
+  const investmentsTotal = reportInvestmentsTotal(report, total, currency);
 
   return {
     mode: mode ?? "combined_viewer_overview",
@@ -1751,7 +1949,8 @@ function mapReport(
     periodLabel: reportPeriodLabel(period),
     income: money(income, currency),
     expense: money(expense, currency),
-    balanceDelta: money(delta, currency)
+    balanceDelta: money(delta, currency),
+    investmentsTotal
   };
 }
 
@@ -1762,8 +1961,31 @@ function emptyReport(mode: ReportMode, currency: CurrencyCode): ReportSummary {
     periodLabel: "Текущий месяц",
     income: money(0, currency),
     expense: money(0, currency),
-    balanceDelta: money(0, currency)
+    balanceDelta: money(0, currency),
+    investmentsTotal: money(0, currency)
   };
+}
+
+function reportInvestmentsTotal(
+  report: ReportSummaryDto,
+  total: ReportSummaryCurrencyTotalDto | undefined,
+  fallbackCurrency: CurrencyCode
+): MoneyAmount | null {
+  const raw =
+    report.investmentsTotal ??
+    report.investmentTotal ??
+    report.investmentsAmount ??
+    total?.investmentsTotal ??
+    total?.investmentTotal ??
+    total?.investmentsAmount;
+  if (raw == null) {
+    return null;
+  }
+  if (typeof raw === "object") {
+    return money(raw.amount ?? raw.value ?? 0, raw.currency ?? fallbackCurrency);
+  }
+
+  return money(raw, total?.currency ?? report.currency ?? fallbackCurrency);
 }
 
 function reportPeriodLabel(period: ReportPeriodInput): string {
@@ -1846,9 +2068,9 @@ function transactionTypeLabel(type: TransactionDto["transactionType"]): string {
 }
 
 const reportModeLabels: Record<ReportMode, string> = {
-  personal: "Личное",
-  shared_family_report: "Общее",
-  combined_viewer_overview: "Обзор"
+  personal: "Финансы",
+  shared_family_report: "Финансы",
+  combined_viewer_overview: "Финансы"
 };
 
 function userFacingSeedText(value: string | null | undefined): string {

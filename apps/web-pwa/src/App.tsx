@@ -18,14 +18,13 @@ import {
   Landmark,
   Layers3,
   LineChart,
-  Lock,
   LogOut,
   Pencil,
   Plus,
   ReceiptText,
   RotateCcw,
+  Search,
   Settings,
-  Shield,
   ShoppingCart,
   Tag,
   Target,
@@ -43,6 +42,7 @@ import {
   type FormEvent,
   type ReactNode
 } from "react";
+import { createPortal } from "react-dom";
 import { financeApiClient, isApiRequestError, type FinanceApiClient } from "./api/client";
 import type {
   AccountKind,
@@ -61,6 +61,7 @@ import type {
   CategorySummary,
   CurrencyCode,
   DashboardSnapshot,
+  CategoryBreakdownItem,
   MoneyAmount,
   OperationSummary,
   PlanningAllocation,
@@ -82,10 +83,9 @@ type SectionId =
   | "analytics"
   | "settings";
 
-type ViewMode = "personal" | "shared" | "overview";
+type ViewMode = "personal";
 type VisibilityMode = "personal" | "shared";
-type DraftVisibilityMode = VisibilityMode | "";
-type QuickKind = "expense" | "income" | "transfer" | "asset";
+type QuickKind = "expense" | "income" | "investment" | "transfer" | "asset";
 
 type QuickAddInput = {
   kind: QuickKind;
@@ -120,6 +120,13 @@ type AssetCategoryFormInput = {
   assetType: AssetCategoryType;
   iconKey: string;
   version?: number;
+};
+
+type CategoryTotal = {
+  name: string;
+  amount: MoneyAmount;
+  color: string;
+  transactionCount?: number;
 };
 
 type AccountEditFormInput = {
@@ -180,11 +187,6 @@ const mobileSections: Array<{
   { id: "categories", label: "Категории", icon: Tag },
   { id: "analytics", label: "Аналитика", icon: BarChart3 }
 ];
-
-const reportModeByView: Record<Exclude<ViewMode, "personal">, ReportMode> = {
-  shared: "shared_family_report",
-  overview: "combined_viewer_overview"
-};
 
 const accountKindLabels: Record<AccountKind, string> = {
   bank: "Банк",
@@ -349,13 +351,8 @@ function planningGoalMonthChoices(): Array<{ month: string; title: string }> {
   return results;
 }
 
-function planningScopeInfo(
-  viewMode: ViewMode,
-  householdId: string | null
-): { scope: PlanningScope; householdId: string | null } | null {
-  if (viewMode === "personal") return { scope: "personal", householdId: null };
-  if (viewMode === "shared" && householdId) return { scope: "household", householdId };
-  return null;
+function planningScopeInfo(): { scope: PlanningScope; householdId: null } {
+  return { scope: "personal", householdId: null };
 }
 
 function coercePlanningMonth(monthValue: string): string {
@@ -420,12 +417,12 @@ function planningTargetOptions(
 export function App({ client = financeApiClient }: { client?: FinanceApiClient }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">(
-    "checking"
-  );
+  const [authStatus, setAuthStatus] = useState<
+    "checking" | "authenticated" | "unauthenticated" | "logout-failed"
+  >("checking");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>("money");
-  const [viewMode, setViewMode] = useState<ViewMode>("personal");
+  const viewMode: ViewMode = "personal";
   const [isQuickAddOpen, setQuickAddOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string>("");
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
@@ -492,13 +489,18 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
   };
 
   const logout = async () => {
+    setLoginError(null);
     try {
       await client.logout();
+      setAuthStatus("unauthenticated");
+    } catch {
+      setAuthStatus("logout-failed");
+      setLoginError(
+        "Сервер не подтвердил выход. Сессия может оставаться активной; после обновления страница проверит ее заново."
+      );
     } finally {
       setSnapshot(null);
-      setAuthStatus("unauthenticated");
       setActiveSection("money");
-      setViewMode("personal");
       setQuickAddOpen(false);
       setSaveStatus("");
     }
@@ -524,8 +526,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     );
     const currency = sourceAccount?.balance.currency ?? "RUB";
     const transactionDate = input.date || todayInputValue();
-    const sharedHouseholdId = input.visibility === "shared" ? snapshot.session.householdId : null;
-    const expectedOwnership = input.visibility === "shared" ? "shared" : "personal";
+    const expectedOwnership = "personal";
 
     if (input.kind !== "asset") {
       if (!sourceAccount || accountOwnership(sourceAccount) !== expectedOwnership) {
@@ -534,13 +535,21 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       }
     }
 
-    if (input.kind === "transfer") {
+    if (input.kind === "transfer" || input.kind === "investment") {
       if (
         !destinationAccount ||
         accountOwnership(destinationAccount) !== expectedOwnership ||
+        destinationAccount.id === sourceAccount?.id ||
         destinationAccount.balance.currency !== currency
       ) {
         setSaveStatus("Для перевода нужны два совместимых счета одного scope и валюты");
+        return;
+      }
+      if (
+        input.kind === "investment" &&
+        !isInvestmentAccount(destinationAccount, snapshot.assetCategories)
+      ) {
+        setSaveStatus("Выберите инвестиционный счет для зачисления");
         return;
       }
     }
@@ -564,27 +573,23 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
 
     setSaveStatus("Сохраняем");
     if (input.kind === "asset") {
-      if (input.visibility === "shared" && !sharedHouseholdId) {
-        setSaveStatus("Нужен семейный доступ");
-        return;
-      }
       await client.createDemoAccount({
         name: input.comment.trim() || accountKindLabels[input.assetKind],
         kind: input.assetKind,
         isPaymentAccount: input.isPaymentAccount,
         currency,
         initialBalance: input.amount,
-        ownershipType: input.visibility === "shared" ? "shared" : "personal",
-        householdId: sharedHouseholdId
+        ownershipType: "personal",
+        householdId: null
       });
-    } else if (input.kind === "transfer") {
+    } else if (input.kind === "transfer" || input.kind === "investment") {
       await client.createDemoTransfer({
         fromAccountId: input.accountId,
         toAccountId: input.toAccountId,
         currency,
         amount: input.amount,
-        occurredAt: new Date(`${transactionDate}T12:00:00`).toISOString(),
-        description: input.comment || "Перевод"
+        transactionDate,
+        description: input.comment || (input.kind === "investment" ? "Инвестиция" : "Перевод")
       });
     } else {
       await client.createDemoOperation({
@@ -599,17 +604,13 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     }
 
     await loadSnapshot();
-    setSaveStatus(input.visibility === "shared" ? "Сохранено в общее" : "Сохранено в личное");
+    setSaveStatus("Сохранено");
     setQuickAddOpen(false);
   };
 
   const saveCategory = async (input: CategoryFormInput) => {
     if (!snapshot) {
       return;
-    }
-
-    if (input.scope === "household" && !snapshot.session.householdId) {
-      throw new Error("household access required");
     }
 
     if (input.categoryId) {
@@ -623,9 +624,9 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     } else {
       await client.createDemoCategory({
         name: input.name,
-        direction: input.direction,
-        scope: input.scope,
-        householdId: input.scope === "household" ? snapshot.session.householdId : null,
+        direction: "expense",
+        scope: "personal",
+        householdId: null,
         iconKey: input.iconKey || null,
         color: input.color || null
       });
@@ -648,6 +649,15 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
     );
   }
 
+  if (authStatus === "logout-failed") {
+    return (
+      <main className="loading" role="alert">
+        <h1>Не удалось завершить выход</h1>
+        <p>{loginError}</p>
+      </main>
+    );
+  }
+
   if (!snapshot || !activeReport) {
     return <main className="loading">Загружаем деньги...</main>;
   }
@@ -660,7 +670,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
             <WalletCards size={21} />
           </div>
           <div>
-            <p>{snapshot.session.householdName}</p>
+            <p>Личные финансы</p>
             <h1>Финансы</h1>
           </div>
         </div>
@@ -680,12 +690,9 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       <main className="content">
         <header className="topbar">
           <div className="titleGroup">
-            <p>{viewModeDescription(viewMode)}</p>
             <h2>{sectionTitle(activeSection)}</h2>
-            <ScopeBadge mode={viewMode} />
           </div>
           <div className="topActions">
-            <ViewSwitch value={viewMode} onChange={setViewMode} />
             <button className="primaryButton" type="button" onClick={() => setQuickAddOpen(true)}>
               <Plus size={18} aria-hidden="true" />
               Добавить
@@ -702,6 +709,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
             client={client}
             snapshot={snapshot}
             report={activeReport}
+            range={selectedMonthRange}
             viewMode={viewMode}
             onAdd={() => setQuickAddOpen(true)}
             onNavigateToPlanning={() => { setActiveSection("analytics"); setAnalyticsTab("planning"); }}
@@ -726,7 +734,6 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
         {activeSection === "categories" && (
           <CategoriesPage
             snapshot={snapshot}
-            viewMode={viewMode}
             onSave={saveCategory}
           />
         )}
@@ -743,7 +750,7 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
           />
         )}
         {activeSection === "settings" && (
-          <SettingsPage viewMode={viewMode} onViewModeChange={setViewMode} />
+          <SettingsPage />
         )}
       </main>
 
@@ -773,9 +780,8 @@ export function App({ client = financeApiClient }: { client?: FinanceApiClient }
       {isQuickAddOpen && (
         <QuickAdd
           allAccounts={snapshot.accounts.filter((account) => account.status !== "deleted")}
+          assetCategories={snapshot.assetCategories}
           categories={snapshot.categories.filter((category) => category.status !== "deleted")}
-          canUseShared={Boolean(snapshot.session.householdId)}
-          defaultVisibility={viewMode === "overview" ? "" : viewMode}
           onClose={() => setQuickAddOpen(false)}
           onSubmit={saveQuickAdd}
           saveStatus={saveStatus}
@@ -991,52 +997,11 @@ function NavButton({
   );
 }
 
-function ViewSwitch({
-  value,
-  onChange
-}: {
-  value: ViewMode;
-  onChange: (value: ViewMode) => void;
-}) {
-  return (
-    <div className="segmentedControl" role="group" aria-label="Режим просмотра">
-      <button
-        className={value === "personal" ? "selected" : ""}
-        type="button"
-        onClick={() => onChange("personal")}
-      >
-        <Lock size={16} aria-hidden="true" />
-        Личное
-      </button>
-      <button
-        className={value === "shared" ? "selected" : ""}
-        type="button"
-        onClick={() => onChange("shared")}
-      >
-        <Shield size={16} aria-hidden="true" />
-        Общее
-      </button>
-      <button
-        className={value === "overview" ? "selected" : ""}
-        type="button"
-        onClick={() => onChange("overview")}
-      >
-        <BarChart3 size={16} aria-hidden="true" />
-        Обзор
-      </button>
-    </div>
-  );
-}
-
-function ScopeBadge({ mode }: { mode: ViewMode | VisibilityMode }) {
-  const label = mode === "overview" ? "Мой обзор" : mode === "shared" ? "Общее" : "Личное";
-  return <span className={`scopeBadge ${mode}`}>{label}</span>;
-}
-
 function MoneyDashboard({
   client,
   snapshot,
   report,
+  range,
   viewMode,
   onAdd,
   onNavigateToPlanning
@@ -1044,6 +1009,7 @@ function MoneyDashboard({
   client: FinanceApiClient;
   snapshot: DashboardSnapshot;
   report: ReportSummary;
+  range: { startDate: string; endDate: string };
   viewMode: ViewMode;
   onAdd: () => void;
   onNavigateToPlanning: () => void;
@@ -1056,6 +1022,32 @@ function MoneyDashboard({
   const groups = groupAssets(accounts, currency);
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const recentItems = recentTimeline(operations, transfers, accounts).slice(0, 6);
+  const [allCategoriesOpen, setAllCategoriesOpen] = useState(false);
+  const [allCategories, setAllCategories] = useState<CategoryTotal[]>([]);
+  const [allCategoriesStatus, setAllCategoriesStatus] = useState<
+    "idle" | "loading" | "server" | "fallback"
+  >("idle");
+
+  const openAllCategories = async () => {
+    setAllCategoriesOpen(true);
+    setAllCategoriesStatus("loading");
+    try {
+      const reportMode = reportModeForView(viewMode);
+      const breakdown = await client.getCategoryBreakdown({
+        reportMode,
+        householdId: null,
+        currency,
+        startDate: range.startDate,
+        endDate: range.endDate
+      });
+      setAllCategories(categoryTotalsFromBreakdown(breakdown, snapshot.categories, currency));
+      setAllCategoriesStatus("server");
+    } catch {
+      const fallbackOperations = filterOperationsByDateRange(operations, range);
+      setAllCategories(categoryTotals(fallbackOperations, snapshot.categories, currency));
+      setAllCategoriesStatus("fallback");
+    }
+  };
 
   return (
     <section className="screenStack" aria-labelledby="money-title">
@@ -1066,8 +1058,6 @@ function MoneyDashboard({
           Операция
         </button>
       </div>
-      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
-
       <div className="metricGrid">
         <Metric label="Капитал" value={formatMoney({ value: capital, currency })} />
         <Metric label="Расходы месяца" value={formatMoney(report.expense)} tone="danger" />
@@ -1085,7 +1075,7 @@ function MoneyDashboard({
               <AssetGroupRow key={group.kind} group={group} />
             ))}
             {groups.length === 0 && (
-              <EmptyState text={scopeEmptyText(viewMode, "активов", "добавьте актив в выбранный scope или переключите режим")} />
+              <EmptyState text="Пока нет активов. Добавьте первый актив." />
             )}
           </div>
         </section>
@@ -1093,13 +1083,16 @@ function MoneyDashboard({
         <section className="plainSection" aria-labelledby="top-categories-title">
           <div className="sectionHead compact">
             <h3 id="top-categories-title">Топ категорий</h3>
+            <button className="ghostButton compact" type="button" onClick={() => void openAllCategories()}>
+              Все
+            </button>
           </div>
           <div className="listStack">
             {topCategories.map((category) => (
               <CategoryTotalRow key={category.name} category={category} />
             ))}
             {topCategories.length === 0 && (
-              <EmptyState text={scopeEmptyText(viewMode, "расходов", "добавьте расход или проверьте другой scope")} />
+              <EmptyState text="В этом месяце пока нет расходов." />
             )}
           </div>
         </section>
@@ -1107,8 +1100,6 @@ function MoneyDashboard({
 
       <PlanningMiniCard
         client={client}
-        viewMode={viewMode}
-        householdId={snapshot.session.householdId}
         onOpen={onNavigateToPlanning}
       />
 
@@ -1117,10 +1108,17 @@ function MoneyDashboard({
           <h3 id="latest-title">Последние операции</h3>
         </div>
         <TimelineList
-          emptyText={scopeEmptyText(viewMode, "записей", "добавьте операцию или выберите другой scope")}
+          emptyText="Пока нет операций. Добавьте первую запись."
           items={recentItems}
         />
       </section>
+      {allCategoriesOpen && (
+        <TopCategoriesDialog
+          categories={allCategories}
+          status={allCategoriesStatus}
+          onClose={() => setAllCategoriesOpen(false)}
+        />
+      )}
     </section>
   );
 }
@@ -1205,13 +1203,10 @@ function OperationsPage({
         <h3 id="operations-title">Операции</h3>
         <span>{timeline.length} записей</span>
       </div>
-      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       <ScreenshotOcrCapture
         accounts={paymentAccounts}
-        canUseHousehold={Boolean(snapshot.session.householdId)}
         categories={expenseCategories}
         client={client}
-        householdId={viewMode === "shared" ? snapshot.session.householdId : null}
         onSaved={refreshAfterDraftChange}
       />
       <PendingCaptureDraftsPanel
@@ -1268,13 +1263,7 @@ function OperationsPage({
           );
         })}
         {timeline.length === 0 && (
-          <EmptyState
-            text={scopeEmptyText(
-              viewMode,
-              "операций",
-              "добавьте расход, доход или выберите другой scope"
-            )}
-          />
+          <EmptyState text="Пока нет операций. Добавьте расход или доход." />
         )}
       </div>
 
@@ -1548,23 +1537,14 @@ function PendingCaptureDraftsPanel({
                     ))}
                   </select>
                 </label>
-                <label className="field compactField">
-                  <span>Категория</span>
-                  <select
-                    aria-label={`Категория ${draft.id}`}
-                    value={form.categoryId}
-                    onChange={(event) =>
-                      updateDraftForm(draft.id, { categoryId: event.target.value })
-                    }
-                  >
-                    <option value="">Выберите</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <CategoryPickerField
+                  ariaLabel={`Категория ${draft.id}`}
+                  categories={categories}
+                  onSelected={(nextCategoryId) =>
+                    updateDraftForm(draft.id, { categoryId: nextCategoryId })
+                  }
+                  selectedId={form.categoryId}
+                />
               </div>
 
               <div className="draftActions">
@@ -1651,17 +1631,13 @@ function draftOccurredDateFromInput(value: string): string | null {
 
 function ScreenshotOcrCapture({
   accounts,
-  canUseHousehold,
   categories,
   client,
-  householdId,
   onSaved
 }: {
   accounts: AccountSummary[];
-  canUseHousehold: boolean;
   categories: CategorySummary[];
   client: FinanceApiClient;
-  householdId: string | null;
   onSaved: () => Promise<DashboardSnapshot>;
 }) {
   const [accountId, setAccountId] = useState("");
@@ -1702,7 +1678,7 @@ function ScreenshotOcrCapture({
       const result = await client.uploadScreenshotOcr(
         file,
         nextCapturedAt,
-        canUseHousehold ? householdId : null
+        null
       );
       setWarnings(result.warnings.map((warning) => warning.message));
       setRows(
@@ -1759,7 +1735,7 @@ function ScreenshotOcrCapture({
         await client.saveCategoryMapping(
           row.candidate.externalLabel,
           row.categoryId,
-          canUseHousehold ? householdId : null
+          null
         );
         await client.createCaptureDraft({
           idempotencyKey: row.candidate.idempotencyKey,
@@ -1855,25 +1831,16 @@ function ScreenshotOcrCapture({
                 <strong>{formatMoney(row.candidate.amount)}</strong>
                 <span>{row.candidate.operationCount} операций</span>
               </div>
-              <label className="field compactField">
-                <span>Категория</span>
-                <select
-                  aria-label={`Категория для ${row.candidate.externalLabel}`}
-                  value={row.categoryId}
-                  onChange={(event) =>
-                    updateRow(row.candidate.idempotencyKey, {
-                      categoryId: event.target.value
-                    })
-                  }
-                >
-                  <option value="">Выберите</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <CategoryPickerField
+                ariaLabel={`Категория для ${row.candidate.externalLabel}`}
+                categories={categories}
+                onSelected={(nextCategoryId) =>
+                  updateRow(row.candidate.idempotencyKey, {
+                    categoryId: nextCategoryId
+                  })
+                }
+                selectedId={row.categoryId}
+              />
             </article>
           ))}
           <button className="submitButton" disabled={!canConfirm} type="button" onClick={confirmRows}>
@@ -1899,13 +1866,13 @@ function AssetsPage({
 }) {
   const accounts = visibleAccounts(snapshot.accounts, viewMode);
   const assetCategories = snapshot.assetCategories.filter(
-    (ac) => ac.recordStatus === "active"
+    (ac) => ac.recordStatus === "active" && ac.scopeType === "personal"
   );
   const archivedAccounts = snapshot.accounts.filter(
-    (a) => a.status === "archived"
+    (a) => a.status === "archived" && accountOwnership(a) === "personal"
   );
   const archivedAssetCategories = snapshot.assetCategories.filter(
-    (ac) => ac.recordStatus === "archived"
+    (ac) => ac.recordStatus === "archived" && ac.scopeType === "personal"
   );
 
   const [updatingAccountId, setUpdatingAccountId] = useState<string | null>(null);
@@ -1955,8 +1922,7 @@ function AssetsPage({
         isInvestment: input.isInvestment,
         assetType: input.assetType,
         iconKey: input.iconKey,
-        householdId:
-          input.scopeType === "household" ? snapshot.session.householdId : null
+        householdId: null
       });
     }
     await onChanged();
@@ -2023,7 +1989,6 @@ function AssetsPage({
         <h3 id="assets-title">Счета и активы</h3>
         <span>{accounts.length} активов</span>
       </div>
-      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
       {status && (
         <p className={status.startsWith("Не") ? "formError" : "formHint"}>
           {status}
@@ -2073,7 +2038,6 @@ function AssetsPage({
         {showCreateAssetCategory && (
           <AssetCategoryForm
             category={null}
-            householdId={snapshot.session.householdId}
             onCancel={() => setShowCreateAssetCategory(false)}
             onSave={async (input) => {
               await saveAssetCategory(input);
@@ -2084,7 +2048,6 @@ function AssetsPage({
         {editingAssetCategory && (
           <AssetCategoryForm
             category={editingAssetCategory}
-            householdId={snapshot.session.householdId}
             onCancel={() => setEditingAssetCategory(null)}
             onSave={async (input) => {
               await saveAssetCategory(input);
@@ -2130,7 +2093,7 @@ function AssetsPage({
                   <div className="assetCategoryInfo">
                     <strong>{cat.name}</strong>
                     <span>
-                      {cat.scopeType === "household" ? "Общее" : "Личное"} · {cat.currency}
+                      {cat.currency}
                       {cat.isInvestment ? " · Инвестиция" : ""}
                     </span>
                   </div>
@@ -2303,16 +2266,23 @@ function AssetsPage({
 
 function CategoriesPage({
   snapshot,
-  viewMode,
   onSave
 }: {
   snapshot: DashboardSnapshot;
-  viewMode: ViewMode;
   onSave: (input: CategoryFormInput) => Promise<void>;
 }) {
-  const categories = visibleCategories(snapshot.categories, viewMode);
+  const categories = snapshot.categories.filter(
+    (category) =>
+      category.status !== "deleted" &&
+      category.status !== "archived" &&
+      category.scope === "personal" &&
+      category.direction === "expense"
+  );
   const archivedCategories = snapshot.categories.filter(
-    (c) => c.status === "archived"
+    (category) =>
+      category.status === "archived" &&
+      category.scope === "personal" &&
+      category.direction === "expense"
   );
   const [editingCategory, setEditingCategory] = useState<CategorySummary | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -2320,24 +2290,17 @@ function CategoriesPage({
   return (
     <section className="screenStack" aria-labelledby="categories-title">
       <div className="sectionHead">
-        <h3 id="categories-title">Категории</h3>
+        <h3 id="categories-title">Категории расходов</h3>
         <span>{categories.length} категорий</span>
       </div>
-      <p className="scopeCopy">{scopeDescription(viewMode)}</p>
-      {viewMode === "overview" ? (
-        <EmptyState text="Обзор показывает видимые категории только для чтения. Для создания или редактирования выберите личное или общее." />
-      ) : (
-        <CategoryForm
-          category={editingCategory}
-          defaultScope={viewMode === "shared" ? "household" : "personal"}
-          householdId={snapshot.session.householdId}
-          onCancel={() => setEditingCategory(null)}
-          onSave={async (input) => {
-            await onSave(input);
-            setEditingCategory(null);
-          }}
-        />
-      )}
+      <CategoryForm
+        category={editingCategory}
+        onCancel={() => setEditingCategory(null)}
+        onSave={async (input) => {
+          await onSave(input);
+          setEditingCategory(null);
+        }}
+      />
       <div className="categoryGrid">
         {categories.map((category, index) => (
           <CategoryTile
@@ -2345,25 +2308,21 @@ function CategoriesPage({
             category={category}
             index={index}
             onEdit={() => setEditingCategory(category)}
-            onArchive={
-              viewMode !== "overview"
-                ? async () => {
-                    await financeApiClient.archiveCategory(category.id);
-                    await onSave({
-                      categoryId: category.id,
-                      name: category.name,
-                      direction: category.direction,
-                      scope: category.scope ?? "personal",
-                      iconKey: category.iconKey ?? "tag",
-                      color: category.color ?? "#2563eb"
-                    });
-                  }
-                : undefined
-            }
+            onArchive={async () => {
+              await financeApiClient.archiveCategory(category.id);
+              await onSave({
+                categoryId: category.id,
+                name: category.name,
+                direction: "expense",
+                scope: "personal",
+                iconKey: category.iconKey ?? "tag",
+                color: category.color ?? "#2563eb"
+              });
+            }}
           />
         ))}
         {categories.length === 0 && (
-          <EmptyState text={scopeEmptyText(viewMode, "категорий", "создайте категорию в личном или общем режиме")} />
+          <EmptyState text="Категорий расходов пока нет. Создайте первую категорию." />
         )}
       </div>
       {archivedCategories.length > 0 && (
@@ -2393,7 +2352,7 @@ function CategoriesPage({
                 <div>
                   <strong>{cat.name}</strong>
                   <span>
-                    {cat.direction === "income" ? "Доход" : "Расход"} · Архив
+                    Расход · Архив
                   </span>
                 </div>
                 <div className="assetCategoryActions">
@@ -2427,20 +2386,14 @@ function CategoriesPage({
 
 function CategoryForm({
   category,
-  defaultScope,
-  householdId,
   onCancel,
   onSave
 }: {
   category: CategorySummary | null;
-  defaultScope: CategoryScope;
-  householdId: string | null;
   onCancel: () => void;
   onSave: (input: CategoryFormInput) => Promise<void>;
 }) {
   const [name, setName] = useState(category?.name ?? "");
-  const [direction, setDirection] = useState<CategoryDirection>(category?.direction ?? "expense");
-  const [scope, setScope] = useState<CategoryScope>(category?.scope ?? defaultScope);
   const [iconKey, setIconKey] = useState(category?.iconKey ?? "tag");
   const [color, setColor] = useState(category?.color ?? "#2563EB");
   const [status, setStatus] = useState<string>("");
@@ -2448,15 +2401,12 @@ function CategoryForm({
 
   useEffect(() => {
     setName(category?.name ?? "");
-    setDirection(category?.direction ?? "expense");
-    setScope(category?.scope ?? defaultScope);
     setIconKey(category?.iconKey ?? "tag");
     setColor(category?.color ?? "#2563EB");
     setStatus("");
-  }, [category, defaultScope]);
+  }, [category]);
 
-  const isHouseholdBlocked = scope === "household" && !householdId;
-  const canSubmit = Boolean(name.trim()) && !isHouseholdBlocked && !isSaving;
+  const canSubmit = Boolean(name.trim()) && !isSaving;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2471,8 +2421,8 @@ function CategoryForm({
         categoryId: category?.id,
         version: category?.version,
         name,
-        direction,
-        scope,
+        direction: "expense",
+        scope: "personal",
         iconKey,
         color
       });
@@ -2502,28 +2452,6 @@ function CategoryForm({
           <input value={name} onChange={(event) => setName(event.target.value)} />
         </label>
         <label className="field">
-          <span>Тип</span>
-          <select
-            value={direction}
-            disabled={Boolean(category)}
-            onChange={(event) => setDirection(event.target.value as CategoryDirection)}
-          >
-            <option value="expense">Расход</option>
-            <option value="income">Доход</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Доступ</span>
-          <select
-            value={scope}
-            disabled={Boolean(category)}
-            onChange={(event) => setScope(event.target.value as CategoryScope)}
-          >
-            <option value="personal">Личное</option>
-            <option value="household">Общее</option>
-          </select>
-        </label>
-        <label className="field">
           <span>Иконка</span>
           <select value={iconKey} onChange={(event) => setIconKey(event.target.value)}>
             <option value="tag">Метка</option>
@@ -2538,9 +2466,6 @@ function CategoryForm({
           <input type="color" value={color} onChange={(event) => setColor(event.target.value)} />
         </label>
       </div>
-      {isHouseholdBlocked && (
-        <p className="formError">Для общей категории нужен семейный доступ.</p>
-      )}
       {status && <p className={status.startsWith("Не") ? "formError" : "formHint"}>{status}</p>}
       <button className="submitButton categorySubmit" type="submit" disabled={!canSubmit}>
         <Check size={18} aria-hidden="true" />
@@ -2576,11 +2501,10 @@ function AnalyticsPage({
     range
   );
   const currency = accounts[0]?.balance.currency ?? report.income.currency;
-  const analyticsReport =
-    viewMode === "personal" ? reportFromOperations("personal", operations, currency, range) : report;
+  const analyticsReport = report;
   const topCategories = categoryTotals(operations, snapshot.categories, currency);
   const groups = groupAssets(accounts, currency);
-  const investmentsTotal = snapshot.investmentsTotal ?? { value: 0, currency };
+  const investmentsTotal = analyticsReport.investmentsTotal ?? { value: 0, currency };
 
   return (
     <section className="screenStack" aria-labelledby="analytics-title">
@@ -2609,7 +2533,6 @@ function AnalyticsPage({
 
       {tab === "summary" ? (
         <>
-          <p className="scopeCopy">{scopeDescription(viewMode)}</p>
           <p className="scopeCopy">{analyticsReport.periodLabel}</p>
           <div className="metricGrid">
             <Metric label="Доходы" value={formatMoney(analyticsReport.income)} tone="success" />
@@ -2703,7 +2626,7 @@ function PlanningPage({
   snapshot: DashboardSnapshot;
   viewMode: ViewMode;
 }) {
-  const scopeInfo = planningScopeInfo(viewMode, snapshot.session.householdId);
+  const scopeInfo = planningScopeInfo();
   const currency = snapshot.accounts.find((a) => a.status === "active")?.balance.currency ?? "RUB";
   const [plan, setPlan] = useState<PlanningPlan | null>(null);
   const [history, setHistory] = useState<PlanningPlan[]>([]);
@@ -2715,7 +2638,6 @@ function PlanningPage({
 
   const loadPlanning = useCallback(
     async (successMsg?: string) => {
-      if (!scopeInfo) return;
       setLoading(true);
       setMessage(null);
       try {
@@ -2756,7 +2678,6 @@ function PlanningPage({
   }, [loadPlanning]);
 
   const createPlan = async () => {
-    if (!scopeInfo) return;
     setLoading(true);
     try {
       await client.createPlanningPlan({
@@ -2785,16 +2706,6 @@ function PlanningPage({
       setLoading(false);
     }
   };
-
-  if (!scopeInfo) {
-    return (
-      <div className="planningCard">
-        <p className="scopeCopy">
-          Обзор не создаёт единый план. Выберите личный или общий режим для планирования.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="screenStack">
@@ -2998,7 +2909,7 @@ function PlanningPlanCard({
           <strong>Текущий план</strong>
           <span>
             {plan
-              ? `${plan.scope === "household" ? "Общее" : "Личное"} · ${monthLabel(plan.month)} · ${plan.currency}`
+              ? `${monthLabel(plan.month)} · ${plan.currency}`
               : `План на ${monthLabel(month)} ещё не создан`}
           </span>
         </div>
@@ -3808,7 +3719,7 @@ function PlanningHistoryCard({
               <div>
                 <strong>{monthLabel(p.month)}</strong>
                 <span>
-                  {p.scope === "household" ? "Общее" : "Личное"} · {p.currency}
+                  {p.currency}
                 </span>
               </div>
               <button
@@ -3830,24 +3741,16 @@ function PlanningHistoryCard({
 
 function PlanningMiniCard({
   client,
-  viewMode,
-  householdId,
   onOpen
 }: {
   client: FinanceApiClient;
-  viewMode: ViewMode;
-  householdId: string | null;
   onOpen: () => void;
 }) {
-  const scopeInfo = planningScopeInfo(viewMode, householdId);
+  const scopeInfo = planningScopeInfo();
   const [plan, setPlan] = useState<PlanningPlan | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!scopeInfo) {
-      setLoaded(true);
-      return;
-    }
     let mounted = true;
     void client
       .listPlanningPlans(scopeInfo.scope, currentMonthValue(), scopeInfo.householdId)
@@ -3863,7 +3766,7 @@ function PlanningMiniCard({
     };
   }, [client, scopeInfo]);
 
-  if (!scopeInfo || !loaded) return null;
+  if (!loaded) return null;
 
   return (
     <div
@@ -3896,26 +3799,13 @@ function PlanningMiniCard({
   );
 }
 
-function SettingsPage({
-  viewMode,
-  onViewModeChange
-}: {
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
-}) {
+function SettingsPage() {
   return (
     <section className="screenStack" aria-labelledby="settings-title">
       <div className="sectionHead">
         <h3 id="settings-title">Настройки</h3>
       </div>
       <div className="settingsList">
-        <div className="settingRow">
-          <div>
-            <strong>Режим по умолчанию</strong>
-            <span>Личное остается приватным</span>
-          </div>
-          <ViewSwitch value={viewMode} onChange={onViewModeChange} />
-        </div>
         <div className="settingRow">
           <div>
             <strong>Валюта</strong>
@@ -3930,17 +3820,15 @@ function SettingsPage({
 
 function QuickAdd({
   allAccounts,
-  canUseShared,
+  assetCategories,
   categories,
-  defaultVisibility,
   onClose,
   onSubmit,
   saveStatus
 }: {
   allAccounts: AccountSummary[];
-  canUseShared: boolean;
+  assetCategories: AssetCategory[];
   categories: CategorySummary[];
-  defaultVisibility: DraftVisibilityMode;
   onClose: () => void;
   onSubmit: (input: QuickAddInput) => Promise<void>;
   saveStatus: string;
@@ -3954,17 +3842,20 @@ function QuickAdd({
   const [isPaymentAccountChecked, setPaymentAccountChecked] = useState(true);
   const [date, setDate] = useState(todayInputValue());
   const [comment, setComment] = useState("");
-  const [visibility, setVisibility] = useState<DraftVisibilityMode>(defaultVisibility);
+  const visibility: VisibilityMode = "personal";
   const [isSaving, setSaving] = useState(false);
 
   const writableAccounts = allAccounts.filter(
     (account) =>
-      visibility &&
       account.status !== "deleted" &&
       account.status !== "archived" &&
       accountOwnership(account) === visibility
   );
-  const operationAccounts = kind === "expense" ? writableAccounts.filter(isPaymentAccount) : writableAccounts;
+  const operationAccounts =
+    kind === "expense" ? writableAccounts.filter(isPaymentAccount) : writableAccounts;
+  const investmentSourceAccounts = writableAccounts
+    .filter(isPaymentAccount)
+    .filter((account) => !isInvestmentAccount(account, assetCategories));
   const sourceAccount = writableAccounts.find((account) => account.id === accountId);
   const transferTargets = writableAccounts.filter(
     (account) =>
@@ -3972,8 +3863,21 @@ function QuickAdd({
       Boolean(sourceAccount) &&
       account.balance.currency === sourceAccount?.balance.currency
   );
-  const accountOptions = kind === "transfer" ? writableAccounts : operationAccounts;
-  const selectedTransferTarget = transferTargets.find((account) => account.id === toAccountId);
+  const investmentTargets = writableAccounts.filter(
+    (account) =>
+      account.id !== accountId &&
+      Boolean(sourceAccount) &&
+      account.balance.currency === sourceAccount?.balance.currency &&
+      isInvestmentAccount(account, assetCategories)
+  );
+  const accountOptions =
+    kind === "transfer"
+      ? writableAccounts
+      : kind === "investment"
+        ? investmentSourceAccounts
+        : operationAccounts;
+  const targetOptions = kind === "investment" ? investmentTargets : transferTargets;
+  const selectedTransferTarget = targetOptions.find((account) => account.id === toAccountId);
 
   const filteredCategories = categories.filter((category) => {
     if (category.status === "deleted" || category.status === "archived") {
@@ -4002,20 +3906,17 @@ function QuickAdd({
     if (
       kind !== "asset" &&
       accountId &&
-      !operationAccounts.some((account) => account.id === accountId)
+      !accountOptions.some((account) => account.id === accountId)
     ) {
       setAccountId("");
       setToAccountId("");
     }
-  }, [accountId, kind, operationAccounts]);
+  }, [accountId, accountOptions, kind]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      return;
-    }
-    if (!visibility) {
       return;
     }
     if ((kind === "expense" || kind === "income") && !selectedCategory) {
@@ -4042,19 +3943,17 @@ function QuickAdd({
   };
 
   const hasAmount = amount.trim() !== "" && Number(amount) > 0;
-  const hasVisibility = visibility === "personal" || visibility === "shared";
-  const isSharedBlocked = visibility === "shared" && !canUseShared;
   const transferNeedsCompatibleTarget =
-    kind === "transfer" && Boolean(accountId) && transferTargets.length === 0;
+    (kind === "transfer" || kind === "investment") &&
+    Boolean(accountId) &&
+    targetOptions.length === 0;
   const hasValidOperationCategory =
     (kind !== "expense" && kind !== "income") || Boolean(selectedCategory);
   const canSubmit =
     hasAmount &&
-    hasVisibility &&
-    !isSharedBlocked &&
     hasValidOperationCategory &&
       (kind === "asset" ||
-      (kind === "transfer"
+      (kind === "transfer" || kind === "investment"
         ? Boolean(accountId) && Boolean(selectedTransferTarget) && !transferNeedsCompatibleTarget
         : Boolean(accountId)));
 
@@ -4077,6 +3976,10 @@ function QuickAdd({
             <ArrowDownLeft size={17} aria-hidden="true" />
             Доход
           </ChoiceButton>
+          <ChoiceButton active={kind === "investment"} onClick={() => setKind("investment")}>
+            <TrendingUp size={17} aria-hidden="true" />
+            Инвестиция
+          </ChoiceButton>
           <ChoiceButton active={kind === "transfer"} onClick={() => setKind("transfer")}>
             <ArrowLeftRight size={17} aria-hidden="true" />
             Перевод
@@ -4098,45 +4001,6 @@ function QuickAdd({
             onChange={(event) => setAmount(event.target.value)}
           />
         </label>
-
-        <fieldset className="visibilityGroup prominent">
-          <legend>Куда сохранить</legend>
-          <label>
-            <input
-              checked={visibility === "personal"}
-              name="visibility"
-              type="radio"
-              onChange={() => {
-                setVisibility("personal");
-                setAccountId("");
-                setToAccountId("");
-                setCategoryId("");
-              }}
-            />
-            Личное
-          </label>
-          <label>
-            <input
-              checked={visibility === "shared"}
-              disabled={!canUseShared}
-              name="visibility"
-              type="radio"
-              onChange={() => {
-                setVisibility("shared");
-                setAccountId("");
-                setToAccountId("");
-                setCategoryId("");
-              }}
-            />
-            Общее
-          </label>
-        </fieldset>
-        {!visibility && (
-          <p className="formError">Обзор только читает данные. Выберите личное или общее для записи.</p>
-        )}
-        {isSharedBlocked && (
-          <p className="formError">Для общего режима нужен семейный доступ.</p>
-        )}
 
         {kind === "asset" ? (
           <div className="assetCreateFields">
@@ -4164,7 +4028,7 @@ function QuickAdd({
           </div>
         ) : (
           <label className="field">
-            <span>{kind === "transfer" ? "Откуда" : "Счет"}</span>
+            <span>{kind === "transfer" || kind === "investment" ? "Откуда" : "Счет"}</span>
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
               <option value="">Выберите счет</option>
               {accountOptions.map((account) => (
@@ -4175,16 +4039,18 @@ function QuickAdd({
             </select>
           </label>
         )}
-        {hasVisibility && kind !== "asset" && accountOptions.length === 0 && (
-          <EmptyState text="В выбранном scope нет счета для записи. Сначала добавьте актив или выберите другой scope." />
+        {kind !== "asset" && accountOptions.length === 0 && (
+          <EmptyState text="Нет подходящего счета. Сначала добавьте актив." />
         )}
 
-        {kind === "transfer" && (
+        {(kind === "transfer" || kind === "investment") && (
           <label className="field">
-            <span>Куда</span>
+            <span>{kind === "investment" ? "Инвестсчет" : "Куда"}</span>
             <select value={toAccountId} onChange={(event) => setToAccountId(event.target.value)}>
-              <option value="">Выберите совместимый счет</option>
-              {transferTargets.map((account) => (
+              <option value="">
+                {kind === "investment" ? "Выберите инвестиционный счет" : "Выберите совместимый счет"}
+              </option>
+              {targetOptions.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -4194,22 +4060,18 @@ function QuickAdd({
         )}
         {transferNeedsCompatibleTarget && (
           <p className="formError">
-            Для перевода нужны два счета одного scope и валюты. Создайте совместимый счет или выберите другой.
+            {kind === "investment"
+              ? "Для инвестиции нужен инвестиционный счет того же scope и валюты. Привяжите счет к инвестиционной категории в Активы."
+              : "Для перевода нужны два счета одного scope и валюты. Создайте совместимый счет или выберите другой."}
           </p>
         )}
 
         {(kind === "expense" || kind === "income") && (
-          <label className="field">
-            <span>Категория</span>
-            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="">Без категории</option>
-              {filteredCategories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <CategoryPickerField
+            categories={filteredCategories}
+            onSelected={setCategoryId}
+            selectedId={categoryId}
+          />
         )}
 
         <details className="moreFields">
@@ -4260,6 +4122,140 @@ function ChoiceButton({
   );
 }
 
+function CategoryPickerField({
+  allowEmpty = false,
+  ariaLabel,
+  categories,
+  emptyLabel = "Выберите категорию",
+  label = "Категория",
+  onSelected,
+  selectedId
+}: {
+  allowEmpty?: boolean;
+  ariaLabel?: string;
+  categories: CategorySummary[];
+  emptyLabel?: string;
+  label?: string;
+  onSelected: (categoryId: string) => void;
+  selectedId: string;
+}) {
+  const [isOpen, setOpen] = useState(false);
+  const selectedCategory = categories.find((category) => category.id === selectedId);
+
+  return (
+    <div className="field compactField categoryPickerField">
+      <span>{label}</span>
+      <button
+        aria-haspopup="dialog"
+        aria-label={ariaLabel ?? label}
+        className="pickerButton"
+        type="button"
+        onClick={() => setOpen(true)}
+      >
+        <Tag size={17} aria-hidden="true" />
+        <span>{selectedCategory?.name ?? emptyLabel}</span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      {isOpen && (
+        <CategoryPickerDialog
+          allowEmpty={allowEmpty}
+          categories={categories}
+          onClose={() => setOpen(false)}
+          onSelected={(categoryId) => {
+            onSelected(categoryId);
+            setOpen(false);
+          }}
+          selectedId={selectedId}
+          title={ariaLabel ?? label}
+        />
+      )}
+    </div>
+  );
+}
+
+function CategoryPickerDialog({
+  allowEmpty = false,
+  categories,
+  onClose,
+  onSelected,
+  selectedId,
+  title
+}: {
+  allowEmpty?: boolean;
+  categories: CategorySummary[];
+  onClose: () => void;
+  onSelected: (categoryId: string) => void;
+  selectedId: string;
+  title: string;
+}) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = normalizeSearchText(query);
+  const filteredCategories = normalizedQuery
+    ? categories.filter((category) => normalizeSearchText(category.name).includes(normalizedQuery))
+    : categories;
+
+  return (
+    <div className="modalLayer categoryPickerLayer" role="presentation">
+      <section
+        className="quickSheet categoryPickerSheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="sheetHead">
+          <h3>{title}</h3>
+          <button type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={19} aria-hidden="true" />
+          </button>
+        </div>
+        <label className="field">
+          <span>Поиск</span>
+          <div className="searchInputWrap">
+            <Search size={17} aria-hidden="true" />
+            <input
+              aria-label="Поиск категории"
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+        </label>
+        <div className="categoryPickerList">
+          {allowEmpty && (
+            <button
+              className={!selectedId ? "categoryPickerOption selected" : "categoryPickerOption"}
+              type="button"
+              onClick={() => onSelected("")}
+            >
+              <span className="colorDot emptyDot" />
+              <span>Без категории</span>
+              {!selectedId && <Check size={17} aria-hidden="true" />}
+            </button>
+          )}
+          {filteredCategories.map((category) => {
+            const isSelected = category.id === selectedId;
+            return (
+              <button
+                className={isSelected ? "categoryPickerOption selected" : "categoryPickerOption"}
+                key={category.id}
+                type="button"
+                onClick={() => onSelected(category.id)}
+              >
+                <span className="colorDot" style={{ backgroundColor: category.color || "#2563eb" }} />
+                <span>{category.name}</span>
+                {isSelected && <Check size={17} aria-hidden="true" />}
+              </button>
+            );
+          })}
+          {filteredCategories.length === 0 && (
+            <EmptyState text="Категорий по этому поиску нет." />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AssetTile({
   account,
   isUpdating,
@@ -4285,7 +4281,6 @@ function AssetTile({
         <span>
           {accountKindLabels[account.kind]} · {account.ownerName}
         </span>
-        <ScopeBadge mode={accountOwnership(account)} />
         <label className="paymentToggle">
           <input
             checked={account.isPaymentAccount !== false}
@@ -4344,11 +4339,7 @@ function CategoryTile({
       </div>
       <div>
         <strong>{shortCategoryName(category.name)}</strong>
-        <span>
-          {category.direction === "income" ? "Доход" : "Расход"} ·{" "}
-          {category.scope === "household" ? "Общее" : "Личное"}
-        </span>
-        <ScopeBadge mode={categoryScopeVisibility(category)} />
+        <span>{category.direction === "income" ? "Доход" : "Расход"}</span>
       </div>
       <div className="categoryTileActions">
         <button className="tileAction" type="button" onClick={onEdit}>
@@ -4393,18 +4384,59 @@ function AssetGroupRow({
 function CategoryTotalRow({
   category
 }: {
-  category: { name: string; amount: MoneyAmount; color: string };
+  category: CategoryTotal;
 }) {
   return (
     <div className="listRow">
       <span className="colorDot" style={{ backgroundColor: category.color }} />
       <div>
         <strong>{shortCategoryName(category.name)}</strong>
-        <span>Расходы</span>
+        <span>
+          Расходы{category.transactionCount !== undefined ? ` · ${category.transactionCount}` : ""}
+        </span>
       </div>
       <b>{formatMoney(category.amount)}</b>
     </div>
   );
+}
+
+function TopCategoriesDialog({
+  categories,
+  status,
+  onClose
+}: {
+  categories: CategoryTotal[];
+  status: "idle" | "loading" | "server" | "fallback";
+  onClose: () => void;
+}) {
+  const dialog = (
+    <div className="modalLayer topCategoriesLayer" role="presentation">
+      <section className="quickSheet" role="dialog" aria-modal="true" aria-label="Все категории трат">
+        <div className="sheetHead">
+          <h3>Все категории трат</h3>
+          <button type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={19} aria-hidden="true" />
+          </button>
+        </div>
+        {status === "loading" && <p className="formHint">Загружаем разбивку с сервера...</p>}
+        {status === "fallback" && (
+          <p className="formError">
+            Серверная разбивка недоступна. Показаны только уже загруженные операции.
+          </p>
+        )}
+        <div className="listStack">
+          {categories.map((category) => (
+            <CategoryTotalRow key={category.name} category={category} />
+          ))}
+          {status !== "loading" && categories.length === 0 && (
+            <EmptyState text="В выбранном месяце нет расходов по категориям." />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 function BarRow({
@@ -4427,6 +4459,7 @@ type TimelineItem =
       type: "operation";
       id: string;
       date: string;
+      version?: number;
       title: string;
       subtitle: string;
       amount: MoneyAmount;
@@ -4435,6 +4468,7 @@ type TimelineItem =
       type: "transfer";
       id: string;
       date: string;
+      version?: number;
       title: string;
       subtitle: string;
       amount: MoneyAmount;
@@ -4480,19 +4514,14 @@ function EmptyState({ text }: { text: string }) {
 
 function AssetCategoryForm({
   category,
-  householdId,
   onCancel,
   onSave
 }: {
   category: AssetCategory | null;
-  householdId: string | null;
   onCancel: () => void;
   onSave: (input: AssetCategoryFormInput) => Promise<void>;
 }) {
   const [name, setName] = useState(category?.name ?? "");
-  const [scopeType, setScopeType] = useState<AssetCategoryScope>(
-    category?.scopeType ?? "personal"
-  );
   const [currency, setCurrency] = useState<CurrencyCode>(category?.currency ?? "RUB");
   const [manualAmount, setManualAmount] = useState(
     String(category?.manualAmount?.value ?? 0)
@@ -4507,7 +4536,6 @@ function AssetCategoryForm({
 
   useEffect(() => {
     setName(category?.name ?? "");
-    setScopeType(category?.scopeType ?? "personal");
     setCurrency(category?.currency ?? "RUB");
     setManualAmount(String(category?.manualAmount?.value ?? 0));
     setIsInvestment(category?.isInvestment ?? false);
@@ -4516,8 +4544,7 @@ function AssetCategoryForm({
     setStatus("");
   }, [category]);
 
-  const isHouseholdBlocked = scopeType === "household" && !householdId;
-  const canSubmit = Boolean(name.trim()) && !isHouseholdBlocked && !isSaving;
+  const canSubmit = Boolean(name.trim()) && !isSaving;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -4528,7 +4555,7 @@ function AssetCategoryForm({
       await onSave({
         assetCategoryId: category?.id,
         name,
-        scopeType,
+        scopeType: "personal",
         currency,
         manualAmount: Number(manualAmount) || 0,
         isInvestment,
@@ -4557,17 +4584,6 @@ function AssetCategoryForm({
         <label className="field">
           <span>Название</span>
           <input value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Доступ</span>
-          <select
-            value={scopeType}
-            disabled={Boolean(category)}
-            onChange={(e) => setScopeType(e.target.value as AssetCategoryScope)}
-          >
-            <option value="personal">Личное</option>
-            <option value="household">Общее</option>
-          </select>
         </label>
         <label className="field">
           <span>Валюта</span>
@@ -4619,9 +4635,6 @@ function AssetCategoryForm({
           <span>Инвестиция</span>
         </label>
       </div>
-      {isHouseholdBlocked && (
-        <p className="formError">Для общей категории нужен семейный доступ.</p>
-      )}
       {status && (
         <p className={status.startsWith("Не") ? "formError" : "formHint"}>
           {status}
@@ -4820,18 +4833,13 @@ function OperationEditModal({
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>Категория</span>
-          <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
-          >
-            <option value="">Без категории</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </label>
+        <CategoryPickerField
+          allowEmpty
+          categories={categories}
+          emptyLabel="Без категории"
+          onSelected={setCategoryId}
+          selectedId={categoryId}
+        />
         <label className="field">
           <span>Дата</span>
           <input
@@ -4866,22 +4874,26 @@ function isPaymentAccount(account: AccountSummary): boolean {
   );
 }
 
-function scopeLabelForAccount(account: AccountSummary | undefined): string {
-  if (!account) {
-    return "Личное";
+function isInvestmentAccount(
+  account: AccountSummary,
+  assetCategories: AssetCategory[]
+): boolean {
+  if (!account.assetCategoryId) {
+    return false;
   }
 
-  return accountOwnership(account) === "shared" ? "Общее" : "Личное";
+  return assetCategories.some(
+    (category) =>
+      category.id === account.assetCategoryId &&
+      category.recordStatus === "active" &&
+      category.isInvestment
+  );
 }
 
 function visibleAccounts(accounts: AccountSummary[], mode: ViewMode): AccountSummary[] {
   return accounts.filter((account) => {
     if (account.status === "deleted" || account.status === "archived") {
       return false;
-    }
-
-    if (mode === "overview") {
-      return true;
     }
 
     return accountOwnership(account) === mode;
@@ -4892,10 +4904,6 @@ function visibleCategories(categories: CategorySummary[], mode: ViewMode): Categ
   return categories.filter((category) => {
     if (category.status === "deleted" || category.status === "archived") {
       return false;
-    }
-
-    if (mode === "overview") {
-      return true;
     }
 
     return categoryScopeVisibility(category) === mode;
@@ -4954,7 +4962,7 @@ function categoryTotals(
   operations: OperationSummary[],
   categories: CategorySummary[],
   currency: CurrencyCode
-) {
+): CategoryTotal[] {
   const totals = new Map<string, { name: string; amount: MoneyAmount; color: string }>();
   for (const operation of operations) {
     if (operation.amount.value >= 0) {
@@ -4976,6 +4984,27 @@ function categoryTotals(
   return [...totals.values()].sort((left, right) => right.amount.value - left.amount.value);
 }
 
+function categoryTotalsFromBreakdown(
+  breakdown: CategoryBreakdownItem[],
+  categories: CategorySummary[],
+  currency: CurrencyCode
+): CategoryTotal[] {
+  return breakdown
+    .map((item, index) => {
+      const category = categories.find((candidate) => candidate.id === item.categoryId);
+      return {
+        name: item.categoryName || category?.name || "Без категории",
+        amount: {
+          value: Math.abs(item.amount.value),
+          currency: item.amount.currency || currency
+        },
+        color: category?.color || categoryPalette[index % categoryPalette.length],
+        transactionCount: item.transactionCount
+      };
+    })
+    .sort((left, right) => right.amount.value - left.amount.value);
+}
+
 function recentTimeline(
   operations: OperationSummary[],
   transfers: TransferSummary[],
@@ -4986,29 +5015,33 @@ function recentTimeline(
     type: "operation",
     id: operation.id,
     date: operation.date,
+    version: operation.version,
     title: operation.title,
-    subtitle: `${formatDate(operation.date)} · ${scopeLabelForAccount(accountById.get(operation.accountId))} · ${operation.categoryName} · ${operation.accountName}`,
+    subtitle: `${formatDate(operation.date)} · ${operation.categoryName} · ${operation.accountName}`,
     amount: operation.amount
   }));
   const transferItems: TimelineItem[] = transfers.map((transfer) => ({
     type: "transfer",
     id: transfer.id,
     date: transfer.date,
+    version: transfer.version,
     title: "Перевод между счетами",
-    subtitle: `${formatDate(transfer.date)} · ${scopeLabelForAccount(accountById.get(transfer.accountId))} · ${transfer.fromAccountName} → ${transfer.toAccountName}`,
+    subtitle: `${formatDate(transfer.date)} · ${transfer.fromAccountName} → ${transfer.toAccountName}`,
     amount: transfer.amount
   }));
 
-  return [...operationItems, ...transferItems].sort(
-    (left, right) => new Date(left.date).getTime() - new Date(right.date).getTime()
-  );
+  return [...operationItems, ...transferItems].sort((left, right) => {
+    const dateOrder = new Date(right.date).getTime() - new Date(left.date).getTime();
+    const versionOrder = (right.version ?? 0) - (left.version ?? 0);
+    return dateOrder || versionOrder || left.id.localeCompare(right.id);
+  });
 }
 
 function sectionTitle(section: SectionId): string {
   const titles: Record<SectionId, string> = {
     analytics: "Аналитика",
     assets: "Счета и активы",
-    categories: "Категории",
+    categories: "Категории расходов",
     money: "Деньги",
     operations: "Операции",
     settings: "Настройки"
@@ -5017,35 +5050,12 @@ function sectionTitle(section: SectionId): string {
   return titles[section];
 }
 
-function viewModeDescription(mode: ViewMode): string {
-  const descriptions: Record<ViewMode, string> = {
-    personal: "Личное видно только вам",
-    shared: "Общее для семьи",
-    overview: "Мой обзор: личное + общее, без личных данных других участников"
-  };
-
-  return descriptions[mode];
-}
-
-function scopeDescription(mode: ViewMode): string {
-  const descriptions: Record<ViewMode, string> = {
-    personal: "Scope: личное. Записи и счета видны только вам.",
-    shared: "Scope: общее. Данные доступны участникам семейного доступа.",
-    overview:
-      "Scope: мой обзор. Это read-only срез видимого вам личного и общего, без записи в скрытый scope."
-  };
-
-  return descriptions[mode];
-}
-
-function scopeEmptyText(mode: ViewMode, subject: string, nextAction: string): string {
-  const prefix =
-    mode === "overview" ? "В моем обзоре" : mode === "shared" ? "В общем scope" : "В личном scope";
-  return `${prefix} нет видимых ${subject}. Следующий шаг: ${nextAction}.`;
-}
-
 function shortCategoryName(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).join(" ");
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLocaleLowerCase("ru-RU");
 }
 
 function reportForView(
@@ -5056,6 +5066,10 @@ function reportForView(
   const currency = snapshot.accounts[0]?.balance.currency ?? "RUB";
 
   if (mode === "personal") {
+    const serverReport = snapshot.reports.find((report) => report.mode === "personal");
+    if (serverReport) {
+      return serverReport;
+    }
     const accounts = visibleAccounts(snapshot.accounts, "personal");
     const visiblePersonalOperations = visibleOperations(snapshot.operations, accounts);
     const operations = range
@@ -5064,8 +5078,11 @@ function reportForView(
     return reportFromOperations("personal", operations, currency, range);
   }
 
-  const reportMode = reportModeByView[mode];
-  return snapshot.reports.find((report) => report.mode === reportMode) ?? emptyReport(mode, currency);
+  return emptyReport(mode, currency);
+}
+
+function reportModeForView(mode: ViewMode): ReportMode {
+  return mode;
 }
 
 function reportFromOperations(
@@ -5098,19 +5115,14 @@ function reportFromOperations(
 }
 
 function emptyReport(mode: ViewMode, currency: CurrencyCode): ReportSummary {
-  const reportMode = mode === "shared" ? reportModeByView.shared : reportModeByView.overview;
-  const titles: Record<ViewMode, string> = {
-    personal: "Личное",
-    shared: "Общее",
-    overview: "Обзор"
-  };
-
+  const reportMode = reportModeForView(mode);
   return {
     mode: reportMode,
-    title: titles[mode],
+    title: "Финансы",
     periodLabel: "Текущий месяц",
     income: { value: 0, currency },
     expense: { value: 0, currency },
-    balanceDelta: { value: 0, currency }
+    balanceDelta: { value: 0, currency },
+    investmentsTotal: { value: 0, currency }
   };
 }

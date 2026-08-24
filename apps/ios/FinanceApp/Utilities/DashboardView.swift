@@ -1,10 +1,10 @@
 import Foundation
 import SwiftUI
 
+private let canonicalUncategorizedCategoryId = "uncategorized"
+
 extension FinanceDashboard {
     struct DashboardViewData {
-        let mode: FinanceMode
-        let scopeTitle: String
         let visibleAccounts: [Account]
         let visibleTransactions: [Transaction]
         let primaryCurrency: CurrencyCode
@@ -38,9 +38,25 @@ extension FinanceDashboard {
         let title: String
     }
 
-    func viewFor(_ mode: FinanceMode) -> DashboardViewData {
-        let visibleAccounts = accountsFor(mode)
-        let visibleTransactions = transactionsFor(mode)
+    struct MonthlyPendingOverlay {
+        let income: Decimal
+        let expenses: Decimal
+        let investments: Decimal
+        let expensesByCategory: [String: Decimal]
+        let investmentsByAssetCategory: [String: Decimal]
+
+        static let empty = MonthlyPendingOverlay(
+            income: .zero,
+            expenses: .zero,
+            investments: .zero,
+            expensesByCategory: [:],
+            investmentsByAssetCategory: [:]
+        )
+    }
+
+    func personalView() -> DashboardViewData {
+        let visibleAccounts = personalAccounts
+        let visibleTransactions = personalTransactions
         let currency = visibleAccounts.first?.currency ?? .RUB
 
         let capital = visibleAccounts
@@ -71,19 +87,15 @@ extension FinanceDashboard {
                 return sum + (Decimal(string: t.amount) ?? .zero)
             }
 
-        let topCategories = topCategorySpends(
+        let topCategories = serverCategorySpends(currency: currency) ?? topCategorySpends(
             transactions: visibleTransactions,
             allCategories: categories,
             currency: currency
         )
 
-        let recent = visibleTransactions
-            .sorted { sortDateKey($0) < sortDateKey($1) }
-            .suffix(4)
+        let recent = visibleTransactions.sorted(by: transactionComesBefore).prefix(4)
 
         return DashboardViewData(
-            mode: mode,
-            scopeTitle: mode.title,
             visibleAccounts: visibleAccounts,
             visibleTransactions: visibleTransactions,
             primaryCurrency: currency,
@@ -99,30 +111,168 @@ extension FinanceDashboard {
         )
     }
 
-    func accountsFor(_ mode: FinanceMode) -> [Account] {
-        switch mode {
-        case .personal:
-            return accounts.filter { $0.ownershipType == .personal && $0.status == .active }
-        case .shared:
-            let hhId = session.householdId
-            return accounts.filter { $0.ownershipType == .shared && $0.householdId == hhId && $0.status == .active }
-        case .overview:
-            return accounts.filter { $0.status == .active }
-        }
+    var personalAccounts: [Account] {
+        accounts.filter { $0.ownershipType == .personal && $0.status == .active }
     }
 
-    func transactionsFor(_ mode: FinanceMode) -> [Transaction] {
-        let visibleAccounts = accountsFor(mode)
-        let accountIds = Set(visibleAccounts.map(\.id))
+    var personalTransactions: [Transaction] {
+        let accountIds = Set(personalAccounts.map(\.id))
         return transactions.filter { accountIds.contains($0.accountId) }
     }
 
     func sortDateKey(_ transaction: Transaction) -> String {
-        transaction.transactionDate ?? String(transaction.occurredAt.prefix(10))
+        transaction.effectiveTransactionDate
+    }
+
+    func transactionComesBefore(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        Transaction.newestFirst(lhs, rhs)
+    }
+
+    func pendingMonthlyOverlay(yearMonth: String, currency: CurrencyCode) -> MonthlyPendingOverlay {
+        let accountIds = Set(personalAccounts.map(\.id))
+        let investmentCategoryIds = Set(assetCategories.filter {
+            $0.scopeType == .personal && $0.recordStatus == .active && $0.isInvestment
+        }.map(\.id))
+        let investmentAccountIds = Set(personalAccounts.compactMap { account in
+            account.assetCategoryId.map(investmentCategoryIds.contains) == true ? account.id : nil
+        })
+        let investmentCategoryByAccount: [String: String] = Dictionary(
+            uniqueKeysWithValues: personalAccounts.compactMap { account -> (String, String)? in
+            guard let categoryId = account.assetCategoryId,
+                  investmentCategoryIds.contains(categoryId) else { return nil }
+            return (account.id, categoryId)
+            }
+        )
+        var income = Decimal.zero
+        var expenses = Decimal.zero
+        var investments = Decimal.zero
+        var expensesByCategory: [String: Decimal] = [:]
+        var investmentsByAssetCategory: [String: Decimal] = [:]
+
+        let pendingByEntity = Dictionary(grouping: pendingMutations.filter {
+            $0.entityType == .transactions && $0.canPush
+        }, by: \.entityId)
+
+        for (entityId, mutations) in pendingByEntity {
+            let baseline = mutations.compactMap { mutation in
+                mutation.analyticsBasePayload.flatMap(decodeTransaction)
+            }.first
+            let latest = mutations.last
+            let current = latest?.operation == .delete
+                ? nil
+                : personalTransactions.first(where: { $0.id == entityId })
+            let baselineContribution = monthlyContribution(
+                baseline,
+                yearMonth: yearMonth,
+                currency: currency,
+                accountIds: accountIds,
+                investmentAccountIds: investmentAccountIds,
+                investmentCategoryByAccount: investmentCategoryByAccount
+            )
+            let currentContribution = monthlyContribution(
+                current,
+                yearMonth: yearMonth,
+                currency: currency,
+                accountIds: accountIds,
+                investmentAccountIds: investmentAccountIds,
+                investmentCategoryByAccount: investmentCategoryByAccount
+            )
+            income += currentContribution.income - baselineContribution.income
+            expenses += currentContribution.expenses - baselineContribution.expenses
+            investments += currentContribution.investments - baselineContribution.investments
+            let categoryIds = Set(baselineContribution.expensesByCategory.keys)
+                .union(currentContribution.expensesByCategory.keys)
+            for categoryId in categoryIds {
+                expensesByCategory[categoryId, default: .zero] +=
+                    currentContribution.expensesByCategory[categoryId, default: .zero] -
+                    baselineContribution.expensesByCategory[categoryId, default: .zero]
+            }
+            let investmentCategoryIds = Set(baselineContribution.investmentsByAssetCategory.keys)
+                .union(currentContribution.investmentsByAssetCategory.keys)
+            for categoryId in investmentCategoryIds {
+                investmentsByAssetCategory[categoryId, default: .zero] +=
+                    currentContribution.investmentsByAssetCategory[categoryId, default: .zero] -
+                    baselineContribution.investmentsByAssetCategory[categoryId, default: .zero]
+            }
+        }
+
+        return MonthlyPendingOverlay(
+            income: income,
+            expenses: expenses,
+            investments: investments,
+            expensesByCategory: expensesByCategory,
+            investmentsByAssetCategory: investmentsByAssetCategory
+        )
+    }
+
+    private func decodeTransaction(_ payload: [String: SyncJSONValue]) -> Transaction? {
+        guard let data = try? SyncJSONValue.data(from: payload) else { return nil }
+        return try? JSONDecoder().decode(Transaction.self, from: data)
+    }
+
+    private func monthlyContribution(
+        _ transaction: Transaction?,
+        yearMonth: String,
+        currency: CurrencyCode,
+        accountIds: Set<String>,
+        investmentAccountIds: Set<String>,
+        investmentCategoryByAccount: [String: String]
+    ) -> MonthlyPendingOverlay {
+        guard let transaction,
+              transaction.currency == currency,
+              transaction.belongs(toYearMonth: yearMonth),
+              accountIds.contains(transaction.accountId) else {
+            return .empty
+        }
+        let amount = Decimal(string: transaction.amount) ?? .zero
+        switch transaction.transactionType {
+        case .income:
+            return MonthlyPendingOverlay(income: amount, expenses: .zero, investments: .zero, expensesByCategory: [:], investmentsByAssetCategory: [:])
+        case .expense:
+            let categoryId = transaction.categoryId ?? canonicalUncategorizedCategoryId
+            let byCategory = [categoryId: amount]
+            return MonthlyPendingOverlay(income: .zero, expenses: amount, investments: .zero, expensesByCategory: byCategory, investmentsByAssetCategory: [:])
+        case .transfer:
+            let investment = transaction.transferStatus != .voided &&
+                transaction.counterpartyAccountId.map(investmentAccountIds.contains) == true
+                ? amount
+                : .zero
+            let byAssetCategory = transaction.counterpartyAccountId
+                .flatMap { investmentCategoryByAccount[$0] }
+                .map { [$0: investment] } ?? [:]
+            return MonthlyPendingOverlay(income: .zero, expenses: .zero, investments: investment, expensesByCategory: [:], investmentsByAssetCategory: byAssetCategory)
+        default:
+            return .empty
+        }
     }
 }
 
 private extension FinanceDashboard {
+    func serverCategorySpends(currency: CurrencyCode) -> [CategorySpend]? {
+        let matching = categoryBreakdown.filter {
+            $0.currency == currency &&
+            ($0.categoryType == .expense || $0.categoryType == nil) &&
+            $0.categoryScope != .household
+        }
+        guard !matching.isEmpty else { return nil }
+
+        return matching
+            .map { item in
+                let category = item.categoryId.flatMap { categoryId in
+                    categories.first { $0.id == categoryId }
+                }
+                return CategorySpend(
+                    categoryId: item.categoryId ?? "uncategorized",
+                    name: item.categoryName ?? "Без категории",
+                    amount: item.amount,
+                    currency: item.currency,
+                    sfSymbol: categoryIcon(category),
+                    color: categoryColor(category)
+                )
+            }
+            .sorted(by: categorySpendComesBefore)
+    }
+
     func topCategorySpends(
         transactions: [Transaction],
         allCategories: [Category],
@@ -131,7 +281,7 @@ private extension FinanceDashboard {
         let expenseTxs = transactions.filter { $0.transactionType == .expense && $0.currency == currency }
         var map: [String: Decimal] = [:]
         for tx in expenseTxs {
-            guard let catId = tx.categoryId else { continue }
+            let catId = tx.categoryId ?? canonicalUncategorizedCategoryId
             let amount = Decimal(string: tx.amount) ?? .zero
             map[catId, default: .zero] += amount
         }
@@ -147,9 +297,15 @@ private extension FinanceDashboard {
                     color: categoryColor(cat)
                 )
             }
-            .sorted { Decimal(string: $0.amount) ?? .zero > Decimal(string: $1.amount) ?? .zero }
-            .prefix(3)
-            .map { $0 }
+            .sorted(by: categorySpendComesBefore)
+    }
+
+    func categorySpendComesBefore(_ lhs: CategorySpend, _ rhs: CategorySpend) -> Bool {
+        let lhsAmount = Decimal(string: lhs.amount) ?? .zero
+        let rhsAmount = Decimal(string: rhs.amount) ?? .zero
+        if lhsAmount != rhsAmount { return lhsAmount > rhsAmount }
+        if lhs.name != rhs.name { return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending }
+        return lhs.categoryId < rhs.categoryId
     }
 
     func categoryIcon(_ category: Category?) -> String {

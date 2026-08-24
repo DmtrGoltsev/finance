@@ -20,22 +20,16 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>FINANCE_API_BASE_URL</key>
+	<string>$(FINANCE_API_BASE_URL)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>45.10.110.42</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<false/>
-			</dict>
-		</dict>
+		<key>NSAllowsLocalNetworking</key>
+		<false/>
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Finance использует фотобиблиотеку для выбора скриншотов чеков и отправки их на OCR.</string>

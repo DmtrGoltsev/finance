@@ -16,12 +16,15 @@ from enum import StrEnum
 class AuthClientKind(StrEnum):
     PWA = "pwa"
     ANDROID = "android"
+    IOS = "ios"
 
 
 class SessionTokenKind(StrEnum):
     PWA_COOKIE_SESSION = "pwa_cookie_session"
     ANDROID_ACCESS = "android_access"
     ANDROID_REFRESH = "android_refresh"
+    IOS_ACCESS = "ios_access"
+    IOS_REFRESH = "ios_refresh"
 
 
 class TokenRecordStatus(StrEnum):
@@ -57,6 +60,7 @@ class SessionStorageRecord:
     session_version: int
     issued_at: datetime
     expires_at: datetime
+    access_expires_at: datetime | None = None
     status: TokenRecordStatus = TokenRecordStatus.ACTIVE
     session_token_hash: str | None = None
     refresh_token_hash: str | None = None

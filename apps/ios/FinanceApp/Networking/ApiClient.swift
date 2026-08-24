@@ -1,10 +1,21 @@
 import Foundation
 
-protocol FinanceApiClient: Sendable {
+protocol FinanceSessionLeaseProvider: Sendable {
+    func currentSessionLease() async throws -> SessionLease
+    func validateSessionLease(_ lease: SessionLease) async throws
+    func persistedSessionStatus() async -> SessionStatus?
+}
+
+protocol FinanceSyncApiClient: Sendable {
+    func syncPush(_ request: SyncPushRequest) async throws -> SyncPushResponse
+    func syncPull(_ request: SyncPullRequest) async throws -> SyncPullResponse
+}
+
+protocol FinanceApiClient: FinanceSyncApiClient {
     func login(email: String, password: String) async throws -> SessionStatus
     func register(email: String, password: String, displayName: String?) async throws -> RegistrationResult
     func sessionStatus() async throws -> SessionStatus
-    func logout() async throws
+    func logout() async -> LogoutResult
 
     func listAccounts(limit: Int?, cursor: String?, ownershipType: OwnershipType?, householdId: String?, status: RecordStatus?, q: String?, sort: String?) async throws -> ([Account], PageInfo)
     func getAccount(accountId: String) async throws -> Account
@@ -54,7 +65,7 @@ protocol FinanceApiClient: Sendable {
     func getReportTransactions(reportMode: ReportMode, householdId: String?, startDate: String, endDate: String, timezone: String, accountIds: [String]?, categoryIds: [String]?, transactionTypes: [TransactionType]?, currency: CurrencyCode?, limit: Int?, cursor: String?, sort: String?) async throws -> ReportTransactionDrillDown
 
     func getPlanningPlan(scope: PlanningScope, month: String, householdId: String?) async throws -> PlanningPlan?
-    func listPlanningPlanHistory(scope: PlanningScope, householdId: String?) async throws -> [PlanningPlan]
+    func listPlanningPlanHistory(scope: PlanningScope, householdId: String?) async throws -> [PlanningPlanHistoryItem]
     func createPlanningPlan(_ request: PlanningPlanCreateRequest) async throws -> PlanningPlan
     func getPlanningPlan(planId: String) async throws -> PlanningPlan
     func copyPlanningPlan(planId: String, _ request: PlanningPlanCopyRequest) async throws -> PlanningPlan

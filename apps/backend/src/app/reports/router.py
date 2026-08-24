@@ -164,7 +164,7 @@ async def get_report_summary(
         )
         summary_totals = svc.summary_totals(context)
         summary_currencies = {row[0] for row in summary_totals}
-        investments_by_currency = dict(svc.investment_totals(context))
+        investments_by_currency = dict(svc.summary_investment_transfer_totals(context))
         return ReportSummaryEnvelope(
             data=ReportSummaryDto(
                 scope=_scope(context),

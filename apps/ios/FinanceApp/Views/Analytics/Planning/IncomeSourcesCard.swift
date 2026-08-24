@@ -53,8 +53,7 @@ struct IncomeSourcesCard: View {
                         amount: normAmt,
                         source: source.trimmingCharacters(in: .whitespaces),
                         description: nil,
-                        dayOfMonth: pDay,
-                        effectiveDate: nil
+                        dayOfMonth: pDay
                     )
                     Task { await onCreate(request) }
                     source = ""
@@ -163,7 +162,6 @@ private struct IncomeSourceRow: View {
                             source: editSource.trimmingCharacters(in: .whitespaces),
                             description: nil,
                             dayOfMonth: pDay,
-                            effectiveDate: nil,
                             version: source.version
                         )
                         Task { await onUpdate(source, request) }

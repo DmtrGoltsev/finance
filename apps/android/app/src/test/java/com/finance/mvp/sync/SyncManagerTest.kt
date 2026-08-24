@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.finance.mvp.api.AccountSummary
+import com.finance.mvp.api.ApiFailureKind
 import com.finance.mvp.api.ApiResult
 import com.finance.mvp.api.InvestmentMigrationCreateRequest
 import com.finance.mvp.api.PlanningAllocationCreateRequest
@@ -137,6 +138,40 @@ class SyncManagerTest {
         } catch (error: IllegalArgumentException) {
             assertTrue(error.message.orEmpty().contains("online-only"))
         }
+    }
+
+    @Test
+    fun sessionSwitchBetweenPushAndPullStopsBeforeSecondNetworkCallAndCrossUserWrite() = runTest {
+        manager.enqueueManualTransactionCreate(
+            userId = USER_ID,
+            transactionType = "expense",
+            amount = "12.34",
+            currency = "RUB",
+            accountId = "acc-a",
+            categoryId = "cat-a",
+            transactionDate = "2026-06-14",
+            note = "User A pending mutation",
+            localTransactionId = ENTITY_ID,
+        )
+        apiClient.pushHandler = { request ->
+            ApiResult.Success(
+                SyncPushResponse(
+                    deviceId = request.deviceId,
+                    serverTime = "2026-06-14T00:00:01Z",
+                    results = emptyList(),
+                ),
+            )
+        }
+        apiClient.switchUserAfterNextLeaseWrite = "user-b"
+
+        val summary = manager.syncOnce(USER_ID)
+
+        assertTrue(summary.sessionChanged)
+        assertEquals(1, apiClient.networkCallCount)
+        assertNotNull(apiClient.lastPushRequest)
+        assertNull(apiClient.lastPullRequest)
+        assertNull(database.localAccountDao().findByServerId(USER_ID, "account-from-user-b"))
+        assertTrue(database.pendingMutationDao().pendingForUser(USER_ID).all { it.userId == USER_ID })
     }
 
     @Test
@@ -1328,16 +1363,53 @@ class SyncManagerTest {
                 ),
             )
         }
+        var currentAuthenticatedUserId: String = USER_ID
+        var switchUserAfterNextLeaseWrite: String? = null
+        var networkCallCount: Int = 0
+            private set
+        private var boundUserId: String? = null
+
+        override suspend fun bindSession(userId: String): ApiResult<SyncApiClient> {
+            return if (currentAuthenticatedUserId == userId) {
+                boundUserId = userId
+                ApiResult.Success(this)
+            } else {
+                sessionChangedFailure()
+            }
+        }
 
         override suspend fun syncPush(request: SyncPushRequest): ApiResult<SyncPushResponse> {
+            if (!boundSessionIsCurrent()) return sessionChangedFailure()
+            networkCallCount += 1
             lastPushRequest = request
             return pushHandler(request)
         }
 
         override suspend fun syncPull(request: SyncPullRequest): ApiResult<SyncPullResponse> {
+            if (!boundSessionIsCurrent()) return sessionChangedFailure()
+            networkCallCount += 1
             lastPullRequest = request
             return pullHandler(request)
         }
+
+        override suspend fun <T> withSessionLease(block: suspend () -> T): ApiResult<T> {
+            if (!boundSessionIsCurrent()) return sessionChangedFailure()
+            val value = block()
+            switchUserAfterNextLeaseWrite?.let {
+                currentAuthenticatedUserId = it
+                switchUserAfterNextLeaseWrite = null
+            }
+            return ApiResult.Success(value)
+        }
+
+        private fun boundSessionIsCurrent(): Boolean {
+            return boundUserId == null || boundUserId == currentAuthenticatedUserId
+        }
+
+        private fun sessionChangedFailure(): ApiResult.Failure = ApiResult.Failure(
+            "session changed",
+            kind = ApiFailureKind.SESSION_CHANGED,
+        )
     }
 
     private companion object {

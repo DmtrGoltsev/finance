@@ -778,6 +778,19 @@ button {
   box-shadow: 0 22px 50px rgba(15, 23, 42, 0.24);
 }
 
+.topCategoriesLayer .quickSheet {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.topCategoriesLayer .listStack {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .sheetHead {
   display: flex;
   align-items: center;
@@ -793,7 +806,7 @@ button {
 
 .kindGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
 }
 
@@ -831,6 +844,97 @@ button {
   background: #ffffff;
   padding: 0 11px;
   color: var(--ink);
+}
+
+.pickerButton {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 11px;
+  text-align: left;
+  touch-action: manipulation;
+}
+
+.pickerButton span {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.categoryPickerLayer {
+  z-index: 1100;
+}
+
+.categoryPickerSheet {
+  width: min(460px, 100%);
+}
+
+.searchInputWrap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 11px;
+}
+
+.searchInputWrap input {
+  min-height: 40px;
+  border: 0;
+  padding: 0;
+  outline: 0;
+}
+
+.categoryPickerList {
+  display: grid;
+  gap: 6px;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+}
+
+.categoryPickerOption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 10px;
+  text-align: left;
+  touch-action: manipulation;
+}
+
+.categoryPickerOption span:not(.colorDot) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.categoryPickerOption.selected {
+  border-color: var(--accent);
+  background: #eaf2ff;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.emptyDot {
+  border: 1px dashed var(--border);
+  background: #ffffff;
 }
 
 .moreFields {
@@ -1008,6 +1112,10 @@ button {
     max-height: min(88vh, 720px);
     border-radius: 8px 8px 0 0;
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .topCategoriesLayer .quickSheet {
+    max-height: min(calc(100dvh - env(safe-area-inset-top) - 12px), 720px);
   }
 }
 

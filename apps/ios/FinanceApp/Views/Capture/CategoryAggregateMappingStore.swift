@@ -1,11 +1,17 @@
 import Foundation
-import Security
 import CryptoKit
 
 final class CategoryAggregateMappingStore: @unchecked Sendable {
     static let shared = CategoryAggregateMappingStore()
+    static let keychainAccessibility = DeviceBoundKeychain.accessibility
 
     private let servicePrefix = "com.finance.app.category-mapping"
+    private let indexedServicesKey = "finance.category-mapping.services"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     private func serviceKey(_ label: String) -> String {
         let hash = SHA256.hash(data: Data(label.utf8))
@@ -14,32 +20,32 @@ final class CategoryAggregateMappingStore: @unchecked Sendable {
 
     func save(label: String, categoryId: String) {
         let service = serviceKey(label)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "mapping",
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard let data = categoryId.data(using: .utf8) else { return }
-        let attributes: [String: Any] = query.merging([
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]) { _, new in new }
-        SecItemAdd(attributes as CFDictionary, nil)
+        rememberService(service)
+        DeviceBoundKeychain.saveString(categoryId, service: service, account: "mapping")
     }
 
     func get(label: String) -> String? {
-        let service = serviceKey(label)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "mapping",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        DeviceBoundKeychain.loadString(service: serviceKey(label), account: "mapping")
+    }
+
+    func clearAll() {
+        indexedServices().forEach(deleteService)
+        defaults.removeObject(forKey: indexedServicesKey)
+
+    }
+
+    private func rememberService(_ service: String) {
+        var services = indexedServices()
+        guard !services.contains(service) else { return }
+        services.append(service)
+        defaults.set(services, forKey: indexedServicesKey)
+    }
+
+    private func indexedServices() -> [String] {
+        defaults.stringArray(forKey: indexedServicesKey) ?? []
+    }
+
+    private func deleteService(_ service: String) {
+        DeviceBoundKeychain.delete(service: service, account: "mapping")
     }
 }

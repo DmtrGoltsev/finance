@@ -2,110 +2,123 @@ import SwiftUI
 
 struct PlanningView: View {
     let dashboard: FinanceDashboard?
-    let selectedMode: FinanceMode
-    let onModeSelected: (FinanceMode) -> Void
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
+    let onLocalSnapshotChanged: () async -> Void
 
     @State private var month = nextPlanningMonth()
     @State private var plan: PlanningPlan?
-    @State private var history: [PlanningPlan] = []
+    @State private var history: [PlanningPlanHistoryItem] = []
     @State private var isLoading = false
     @State private var message: String?
 
     private var boundedMonth: String { coercePlanningMonth(month) }
-    private var resolvedScope: PlanningScopeInfo? { selectedMode.toPlanningScope(dashboard?.session.householdId) }
-    private var currency: CurrencyCode { planningCurrency(dashboard, mode: selectedMode) }
+    private let planningScope: PlanningScope = .personal
+    private var currency: CurrencyCode { planningCurrency(dashboard) }
 
     var body: some View {
         VStack(spacing: 12) {
             PlanningScopeCard(
-                selectedMode: selectedMode,
-                hasHousehold: !(dashboard?.session.householdId?.isEmpty ?? true),
                 month: boundedMonth,
                 currency: currency,
-                onModeSelected: onModeSelected,
                 onMonthSelected: { month = coercePlanningMonth($0) }
             )
 
-            if selectedMode == .overview {
-                PlanningOverviewGate(onModeSelected: onModeSelected)
-            } else if resolvedScope == nil {
-                PlanningMessageCard(text: "Общее планирование недоступно без активного общего бюджета. Выберите Личное или подключите общий бюджет.")
-            } else {
-                if let msg = message, !msg.isEmpty {
-                    PlanningMessageCard(text: msg)
-                }
+            if let msg = message, !msg.isEmpty {
+                PlanningMessageCard(text: msg)
+            }
 
-                PlanningPlanCard(
-                    plan: plan,
-                    month: boundedMonth,
+            PlanningPlanCard(
+                plan: plan,
+                month: boundedMonth,
+                currency: currency,
+                isLoading: isLoading,
+                onRefresh: { await loadPlanningState() },
+                onCreatePlan: { await createPlan() }
+            )
+
+            if let currentPlan = plan {
+                IncomeSourcesCard(
+                    plan: currentPlan,
                     currency: currency,
                     isLoading: isLoading,
-                    onRefresh: { await loadPlanningState() },
-                    onCreatePlan: { await createPlan() }
+                    onCreate: { request in await createIncomeSource(planId: currentPlan.id, request: request) },
+                    onUpdate: { source, request in await updateIncomeSource(source: source, request: request) },
+                    onConfirm: { source in await confirmIncomeSource(source: source) },
+                    onDelete: { source in await deleteIncomeSource(source: source) }
                 )
 
-                if let currentPlan = plan {
-                    IncomeSourcesCard(
-                        plan: currentPlan,
-                        currency: currency,
-                        isLoading: isLoading,
-                        onCreate: { request in await createIncomeSource(planId: currentPlan.id, request: request) },
-                        onUpdate: { source, request in await updateIncomeSource(source: source, request: request) },
-                        onConfirm: { source in await confirmIncomeSource(source: source) },
-                        onDelete: { source in await deleteIncomeSource(source: source) }
-                    )
-
-                    AllocationsCard(
-                        plan: currentPlan,
-                        dashboard: dashboard,
-                        selectedMode: selectedMode,
-                        isLoading: isLoading,
-                        onCreate: { request in await createAllocation(planId: currentPlan.id, request: request) },
-                        onUpdate: { allocation, request in await updateAllocation(allocation: allocation, request: request) },
-                        onDelete: { allocation in await deleteAllocation(allocation: allocation) }
-                    )
-                }
-
-                PlanningHistoryCard(
-                    history: history,
-                    currentMonth: boundedMonth,
+                AllocationsCard(
+                    plan: currentPlan,
+                    dashboard: dashboard,
+                    pendingOverlay: dashboard?.pendingMonthlyOverlay(yearMonth: boundedMonth, currency: currency) ?? .empty,
                     isLoading: isLoading,
-                    onCopy: { historyPlan in await copyPlan(historyPlan) }
+                    onCreate: { request in await createAllocation(planId: currentPlan.id, request: request) },
+                    onUpdate: { allocation, request in await updateAllocation(allocation: allocation, request: request) },
+                    onDelete: { allocation in await deleteAllocation(allocation: allocation) }
                 )
             }
+
+            PlanningHistoryCard(
+                history: history,
+                currentMonth: boundedMonth,
+                isLoading: isLoading,
+                onCopy: { historyPlan in await copyPlan(historyPlan) }
+            )
         }
         .onChange(of: boundedMonth) { _, _ in Task { await loadPlanningState() } }
         .task { await loadPlanningState() }
     }
 
     private func loadPlanningState(successMessage: String? = nil) async {
-        guard let scope = resolvedScope else { return }
         isLoading = true
         message = nil
         do {
-            let fetched = try await apiClient.getPlanningPlan(scope: scope.apiScope, month: boundedMonth, householdId: scope.householdId)
+            let fetched = try await apiClient.getPlanningPlan(scope: planningScope, month: boundedMonth, householdId: nil)
             if let fetched = fetched {
                 plan = try await apiClient.getPlanningPlan(planId: fetched.id)
             } else {
                 plan = nil
             }
-            history = (try? await apiClient.listPlanningPlanHistory(scope: scope.apiScope, householdId: scope.householdId)) ?? []
+            history = (try? await apiClient.listPlanningPlanHistory(scope: planningScope, householdId: nil)) ?? []
             message = successMessage
         } catch {
-            message = planningErrorMessage(error)
-            plan = nil
+            if OfflineMutationFallback.canQueue(after: error) {
+                await loadLocalPlanningState(fallbackMessage: "Нет соединения. Показаны локальные изменения, если они есть.")
+            } else {
+                message = planningErrorMessage(error)
+                plan = nil
+            }
         }
         isLoading = false
     }
 
     private func createPlan() async {
-        guard let scope = resolvedScope else { return }
+        let request = PlanningPlanCreateRequest(scope: planningScope, month: boundedMonth, currency: currency, householdId: nil)
         isLoading = true
         do {
-            let request = PlanningPlanCreateRequest(scope: scope.apiScope, month: boundedMonth, currency: currency, householdId: scope.householdId)
             _ = try await apiClient.createPlanningPlan(request)
             await loadPlanningState(successMessage: "План создан")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let localPlan = localPlanningPlan(from: request)
+                try await enqueuePlanning(
+                    entityType: .planningPlans,
+                    entityId: localPlan.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: localPlan,
+                    planId: localPlan.id,
+                    baseVersion: nil
+                )
+                plan = localPlan
+                await onLocalSnapshotChanged()
+                message = "План создан локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -117,6 +130,25 @@ struct PlanningView: View {
         do {
             _ = try await apiClient.createPlanningIncomeSource(planId: planId, request)
             await loadPlanningState(successMessage: "Источник дохода добавлен")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let source = localIncomeSource(planId: planId, from: request)
+                try await enqueuePlanning(
+                    entityType: .planningIncomeSources,
+                    entityId: source.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: source,
+                    planId: planId,
+                    baseVersion: nil
+                )
+                upsertIncomeSource(source)
+                await onLocalSnapshotChanged()
+                message = "Источник дохода добавлен локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -128,6 +160,25 @@ struct PlanningView: View {
         do {
             _ = try await apiClient.updatePlanningIncomeSource(incomeSourceId: source.id, request)
             await loadPlanningState(successMessage: "Источник дохода обновлён")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let updated = updatedIncomeSource(source, request: request)
+                try await enqueuePlanning(
+                    entityType: .planningIncomeSources,
+                    entityId: updated.id,
+                    operation: .update,
+                    request: PlanningIncomeSourceOfflineUpdateRequest(request),
+                    optimisticEntity: updated,
+                    planId: updated.planId,
+                    baseVersion: source.version
+                )
+                upsertIncomeSource(updated)
+                await onLocalSnapshotChanged()
+                message = "Источник дохода обновлён локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -139,6 +190,24 @@ struct PlanningView: View {
         do {
             _ = try await apiClient.confirmPlanningIncomeSource(incomeSourceId: source.id)
             await loadPlanningState(successMessage: "Доход подтверждён")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let confirmed = confirmedIncomeSource(source)
+                try await enqueuePlanningAction(
+                    entityType: .planningIncomeSources,
+                    entityId: confirmed.id,
+                    operation: .confirm,
+                    optimisticEntity: confirmed,
+                    planId: confirmed.planId,
+                    baseVersion: source.version
+                )
+                upsertIncomeSource(confirmed)
+                await onLocalSnapshotChanged()
+                message = "Доход подтверждён локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -150,6 +219,22 @@ struct PlanningView: View {
         do {
             try await apiClient.deletePlanningIncomeSource(incomeSourceId: source.id)
             await loadPlanningState(successMessage: "Источник дохода удалён")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                try await enqueuePlanningDelete(
+                    entityType: .planningIncomeSources,
+                    entityId: source.id,
+                    optimisticEntity: source,
+                    planId: source.planId,
+                    baseVersion: source.version
+                )
+                removeIncomeSource(source.id)
+                await onLocalSnapshotChanged()
+                message = "Источник дохода удалён локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -161,6 +246,25 @@ struct PlanningView: View {
         do {
             _ = try await apiClient.createPlanningAllocation(planId: planId, request)
             await loadPlanningState(successMessage: "Распределение добавлено")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let allocation = localAllocation(planId: planId, from: request)
+                try await enqueuePlanning(
+                    entityType: .planningAllocations,
+                    entityId: allocation.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: allocation,
+                    planId: planId,
+                    baseVersion: nil
+                )
+                upsertAllocation(allocation)
+                await onLocalSnapshotChanged()
+                message = "Распределение добавлено локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -172,6 +276,25 @@ struct PlanningView: View {
         do {
             _ = try await apiClient.updatePlanningAllocation(allocationId: allocation.id, request)
             await loadPlanningState(successMessage: "Распределение обновлено")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let updated = updatedAllocation(allocation, request: request)
+                try await enqueuePlanning(
+                    entityType: .planningAllocations,
+                    entityId: updated.id,
+                    operation: .update,
+                    request: PlanningAllocationOfflineUpdateRequest(request),
+                    optimisticEntity: updated,
+                    planId: updated.planId,
+                    baseVersion: allocation.version
+                )
+                upsertAllocation(updated)
+                await onLocalSnapshotChanged()
+                message = "Распределение обновлено локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
@@ -183,43 +306,398 @@ struct PlanningView: View {
         do {
             try await apiClient.deletePlanningAllocation(allocationId: allocation.id)
             await loadPlanningState(successMessage: "Распределение удалено")
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                try await enqueuePlanningDelete(
+                    entityType: .planningAllocations,
+                    entityId: allocation.id,
+                    optimisticEntity: allocation,
+                    planId: allocation.planId,
+                    baseVersion: allocation.version
+                )
+                removeAllocation(allocation.id)
+                await onLocalSnapshotChanged()
+                message = "Распределение удалено локально, ожидает синхронизации"
+            } catch {
+                message = SyncSafeMessage.describe(error.localizedDescription)
+            }
+            isLoading = false
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
         }
     }
 
-    private func copyPlan(_ historyPlan: PlanningPlan) async {
+    private func copyPlan(_ historyPlan: PlanningPlanHistoryItem) async {
         isLoading = true
         do {
-            _ = try await apiClient.copyPlanningPlan(planId: historyPlan.id, PlanningPlanCopyRequest(targetMonth: boundedMonth))
+            let source = try await historyPlan.resolvedDetail { planId in
+                try await apiClient.getPlanningPlan(planId: planId)
+            }
+            _ = try await apiClient.copyPlanningPlan(planId: source.id, PlanningPlanCopyRequest(targetMonth: boundedMonth))
             await loadPlanningState(successMessage: "План \(localizedPlanningMonth(historyPlan.month)) скопирован на \(localizedPlanningMonth(boundedMonth))")
         } catch {
             message = planningErrorMessage(error)
             isLoading = false
         }
     }
-}
 
-private struct PlanningScopeInfo {
-    let apiScope: PlanningScope
-    let householdId: String?
-}
+    private func loadLocalPlanningState(fallbackMessage: String) async {
+        guard let localScope else {
+            message = fallbackMessage
+            return
+        }
+        do {
+            let snapshot = try await syncService.localSnapshot(scope: localScope)
+            if let localPlan = localPlanningPlan(from: snapshot) {
+                plan = localPlan
+            }
+            history = localPlanningHistory(from: snapshot)
+            message = fallbackMessage
+        } catch {
+            message = SyncSafeMessage.describe(error.localizedDescription)
+        }
+    }
 
-private extension FinanceMode {
-    func toPlanningScope(_ householdId: String?) -> PlanningScopeInfo? {
-        switch self {
-        case .personal: return PlanningScopeInfo(apiScope: .personal, householdId: nil)
-        case .shared:
-            guard let hhId = householdId, !hhId.isEmpty else { return nil }
-            return PlanningScopeInfo(apiScope: .household, householdId: hhId)
-        case .overview: return nil
+    private func enqueuePlanning<Request: Encodable, OptimisticEntity: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        request: Request,
+        optimisticEntity: OptimisticEntity,
+        planId: String?,
+        baseVersion: Int?
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticPlanningMutation(
+            scope: localScope,
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            request: request,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: planningOwnershipContext,
+            planId: planId,
+            month: plan?.month ?? boundedMonth,
+            planningScope: .personal
+        )
+    }
+
+    private func enqueuePlanningAction<OptimisticEntity: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        optimisticEntity: OptimisticEntity,
+        planId: String?,
+        baseVersion: Int?
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticPlanningMutation(
+            scope: localScope,
+            entityType: entityType,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: planningOwnershipContext,
+            planId: planId,
+            month: plan?.month ?? boundedMonth,
+            planningScope: .personal
+        )
+    }
+
+    private func enqueuePlanningDelete<OptimisticEntity: Encodable>(
+        entityType: SyncEntityType,
+        entityId: String,
+        optimisticEntity: OptimisticEntity,
+        planId: String?,
+        baseVersion: Int?
+    ) async throws {
+        try await enqueuePlanningAction(
+            entityType: entityType,
+            entityId: entityId,
+            operation: .delete,
+            optimisticEntity: optimisticEntity,
+            planId: planId,
+            baseVersion: baseVersion
+        )
+    }
+
+    private var planningOwnershipContext: PersonalOwnershipContext {
+        PersonalOwnershipContext(
+            viewerUserId: localScope?.viewerUserId,
+            accounts: dashboard?.accounts ?? [],
+            categories: dashboard?.categories ?? [],
+            assetCategories: dashboard?.assetCategories ?? [],
+            plans: plan.map { [$0] } ?? []
+        )
+    }
+
+    private func localPlanningPlan(from request: PlanningPlanCreateRequest) -> PlanningPlan {
+        PlanningPlan(
+            id: UUID().uuidString,
+            scope: request.scope,
+            ownerUserId: localScope?.viewerUserId,
+            month: request.month,
+            currency: request.currency,
+            householdId: nil,
+            summary: planningSummary(incomeSources: [], allocations: [], previousMonthSurplus: "0"),
+            incomeSources: [],
+            allocations: [],
+            version: nil
+        )
+    }
+
+    private func localIncomeSource(planId: String, from request: PlanningIncomeSourceCreateRequest) -> PlanningIncomeSource {
+        PlanningIncomeSource(
+            id: UUID().uuidString,
+            planId: planId,
+            amount: request.amount,
+            source: request.source,
+            description: request.description,
+            dayOfMonth: request.dayOfMonth,
+            effectiveDate: planningEffectiveDate(month: plan?.month ?? boundedMonth, day: request.dayOfMonth),
+            confirmationState: .planned,
+            confirmedAt: nil,
+            version: nil
+        )
+    }
+
+    private func updatedIncomeSource(_ source: PlanningIncomeSource, request: PlanningIncomeSourceUpdateRequest) -> PlanningIncomeSource {
+        PlanningIncomeSource(
+            id: source.id,
+            planId: source.planId,
+            amount: request.amount ?? source.amount,
+            source: request.source ?? source.source,
+            description: request.description ?? source.description,
+            dayOfMonth: request.dayOfMonth ?? source.dayOfMonth,
+            effectiveDate: planningEffectiveDate(
+                month: plan?.month ?? boundedMonth,
+                day: request.dayOfMonth ?? source.dayOfMonth
+            ),
+            confirmationState: source.confirmationState,
+            confirmedAt: source.confirmedAt,
+            version: source.version
+        )
+    }
+
+    private func confirmedIncomeSource(_ source: PlanningIncomeSource) -> PlanningIncomeSource {
+        PlanningIncomeSource(
+            id: source.id,
+            planId: source.planId,
+            amount: source.amount,
+            source: source.source,
+            description: source.description,
+            dayOfMonth: source.dayOfMonth,
+            effectiveDate: source.effectiveDate,
+            confirmationState: .confirmed,
+            confirmedAt: Date().ISO8601Format(),
+            version: source.version
+        )
+    }
+
+    private func localAllocation(planId: String, from request: PlanningAllocationCreateRequest) -> PlanningAllocation {
+        PlanningAllocation(
+            id: UUID().uuidString,
+            planId: planId,
+            targetType: request.targetType,
+            targetId: request.targetId,
+            targetSnapshot: targetSnapshot(type: request.targetType, id: request.targetId),
+            requiresAttention: false,
+            attentionReason: nil,
+            comment: request.comment,
+            allocationMode: request.allocationMode,
+            allocationValue: request.allocationValue,
+            recurrenceType: request.recurrenceType,
+            isSavingsGoal: request.isSavingsGoal ?? false,
+            goalTargetAmount: request.goalTargetAmount,
+            goalDueMonth: request.goalDueMonth,
+            goalMonthlyAmount: nil,
+            calculatedAmount: request.allocationMode == .amount ? request.allocationValue : "0",
+            actualAmount: nil,
+            varianceAmount: nil,
+            progressPercent: nil,
+            progressStatus: nil,
+            status: "planned",
+            version: nil
+        )
+    }
+
+    private func updatedAllocation(_ allocation: PlanningAllocation, request: PlanningAllocationUpdateRequest) -> PlanningAllocation {
+        let targetType = request.targetType ?? allocation.targetType
+        let targetId = request.targetId ?? allocation.targetId
+        let allocationMode = request.allocationMode ?? allocation.allocationMode
+        let allocationValue = request.allocationValue ?? allocation.allocationValue
+        return PlanningAllocation(
+            id: allocation.id,
+            planId: allocation.planId,
+            targetType: targetType,
+            targetId: targetId,
+            targetSnapshot: targetId.flatMap { targetSnapshot(type: targetType, id: $0) } ?? allocation.targetSnapshot,
+            requiresAttention: allocation.requiresAttention,
+            attentionReason: allocation.attentionReason,
+            comment: request.comment,
+            allocationMode: allocationMode,
+            allocationValue: allocationValue,
+            recurrenceType: request.recurrenceType ?? allocation.recurrenceType,
+            isSavingsGoal: request.isSavingsGoal ?? allocation.isSavingsGoal,
+            goalTargetAmount: request.goalTargetAmount ?? allocation.goalTargetAmount,
+            goalDueMonth: request.goalDueMonth ?? allocation.goalDueMonth,
+            goalMonthlyAmount: allocation.goalMonthlyAmount,
+            calculatedAmount: allocationMode == .amount ? allocationValue : allocation.calculatedAmount,
+            actualAmount: allocation.actualAmount,
+            varianceAmount: allocation.varianceAmount,
+            progressPercent: allocation.progressPercent,
+            progressStatus: allocation.progressStatus,
+            status: allocation.status,
+            version: allocation.version
+        )
+    }
+
+    private func upsertIncomeSource(_ source: PlanningIncomeSource) {
+        guard let current = plan else { return }
+        var sources = current.incomeSources
+        if let index = sources.firstIndex(where: { $0.id == source.id }) {
+            sources[index] = source
+        } else {
+            sources.append(source)
+        }
+        plan = planningPlan(current, incomeSources: sources, allocations: current.allocations)
+    }
+
+    private func removeIncomeSource(_ id: String) {
+        guard let current = plan else { return }
+        plan = planningPlan(current, incomeSources: current.incomeSources.filter { $0.id != id }, allocations: current.allocations)
+    }
+
+    private func upsertAllocation(_ allocation: PlanningAllocation) {
+        guard let current = plan else { return }
+        var allocations = current.allocations
+        if let index = allocations.firstIndex(where: { $0.id == allocation.id }) {
+            allocations[index] = allocation
+        } else {
+            allocations.append(allocation)
+        }
+        plan = planningPlan(current, incomeSources: current.incomeSources, allocations: allocations)
+    }
+
+    private func removeAllocation(_ id: String) {
+        guard let current = plan else { return }
+        plan = planningPlan(current, incomeSources: current.incomeSources, allocations: current.allocations.filter { $0.id != id })
+    }
+
+    private func localPlanningPlan(from snapshot: FinanceLocalSnapshot) -> PlanningPlan? {
+        let tombstonedPlans = tombstonedIds(in: snapshot, entityType: .planningPlans)
+        let localPlan = snapshot.planningPlans
+            .map(\.entity)
+            .first { $0.scope == planningScope && $0.month == boundedMonth && !tombstonedPlans.contains($0.id) }
+        guard let base = localPlan ?? plan else { return nil }
+        guard base.scope == planningScope && base.month == boundedMonth else { return nil }
+        let incomeTombstones = tombstonedIds(in: snapshot, entityType: .planningIncomeSources)
+        let allocationTombstones = tombstonedIds(in: snapshot, entityType: .planningAllocations)
+        var incomeSources = base.incomeSources.filter { !incomeTombstones.contains($0.id) }
+        var allocations = base.allocations.filter { !allocationTombstones.contains($0.id) }
+        for record in snapshot.planningIncomeSources where record.entity.planId == base.id && !incomeTombstones.contains(record.entity.id) {
+            upsert(record.entity, in: &incomeSources)
+        }
+        for record in snapshot.planningAllocations where record.entity.planId == base.id && !allocationTombstones.contains(record.entity.id) {
+            upsert(record.entity, in: &allocations)
+        }
+        return planningPlan(base, incomeSources: incomeSources, allocations: allocations)
+    }
+
+    private func localPlanningHistory(from snapshot: FinanceLocalSnapshot) -> [PlanningPlanHistoryItem] {
+        let tombstonedPlans = tombstonedIds(in: snapshot, entityType: .planningPlans)
+        let localPlans = snapshot.planningPlans
+            .map(\.entity)
+            .filter { $0.scope == planningScope && $0.month != boundedMonth && !tombstonedPlans.contains($0.id) }
+            .map(PlanningPlanHistoryItem.init(plan:))
+        var merged = history
+        for plan in localPlans {
+            upsert(plan, in: &merged)
+        }
+        return merged.sorted { $0.month > $1.month }
+    }
+
+    private func tombstonedIds(in snapshot: FinanceLocalSnapshot, entityType: SyncEntityType) -> Set<String> {
+        Set(snapshot.tombstones.filter { $0.entityType == entityType }.map(\.entityId))
+    }
+
+    private func upsert<Entity: Identifiable>(_ entity: Entity, in list: inout [Entity]) where Entity.ID == String {
+        if let index = list.firstIndex(where: { $0.id == entity.id }) {
+            list[index] = entity
+        } else {
+            list.append(entity)
+        }
+    }
+
+    private func planningPlan(
+        _ current: PlanningPlan,
+        incomeSources: [PlanningIncomeSource],
+        allocations: [PlanningAllocation]
+    ) -> PlanningPlan {
+        PlanningPlan(
+            id: current.id,
+            scope: current.scope,
+            ownerUserId: current.ownerUserId,
+            month: current.month,
+            currency: current.currency,
+            householdId: nil,
+            summary: planningSummary(
+                incomeSources: incomeSources,
+                allocations: allocations,
+                previousMonthSurplus: current.summary.previousMonthSurplus
+            ),
+            incomeSources: incomeSources,
+            allocations: allocations,
+            version: current.version
+        )
+    }
+
+    private func planningSummary(
+        incomeSources: [PlanningIncomeSource],
+        allocations: [PlanningAllocation],
+        previousMonthSurplus: String
+    ) -> PlanningSummary {
+        let totalIncome = incomeSources.reduce(Decimal.zero) { $0 + (Decimal(string: $1.amount) ?? .zero) }
+        let confirmedIncome = incomeSources
+            .filter { $0.confirmationState == .confirmed }
+            .reduce(Decimal.zero) { $0 + (Decimal(string: $1.amount) ?? .zero) }
+        let totalAllocated = allocations.reduce(Decimal.zero) { total, allocation in
+            if allocation.allocationMode == .percent, let percent = Decimal(string: allocation.allocationValue) {
+                return total + totalIncome * percent / Decimal(100)
+            }
+            return total + (Decimal(string: allocation.calculatedAmount) ?? Decimal(string: allocation.allocationValue) ?? .zero)
+        }
+        let unallocated = totalIncome - totalAllocated
+        return PlanningSummary(
+            totalPlannedIncome: MoneyHelpers.decimalToString(totalIncome),
+            totalConfirmedIncome: MoneyHelpers.decimalToString(confirmedIncome),
+            totalAllocatedAmount: MoneyHelpers.decimalToString(totalAllocated),
+            unallocatedAmount: MoneyHelpers.decimalToString(unallocated),
+            previousMonthSurplus: previousMonthSurplus,
+            underallocated: unallocated > .zero,
+            overallocated: unallocated < .zero
+        )
+    }
+
+    private func targetSnapshot(type: AllocationTargetType, id: String) -> [String: JSONValue]? {
+        switch type {
+        case .expense_category:
+            return (dashboard?.categories.first { $0.id == id }).map { ["name": .string($0.name)] }
+        case .investment_asset_category:
+            return (dashboard?.assetCategories.first { $0.id == id }).map { ["name": .string($0.name)] }
+        case .account:
+            return (dashboard?.accounts.first { $0.id == id }).map { ["name": .string($0.name)] }
+        case .asset:
+            return nil
         }
     }
 }
 
-private func planningCurrency(_ dashboard: FinanceDashboard?, mode: FinanceMode) -> CurrencyCode {
-    let accounts = dashboard?.viewFor(mode).visibleAccounts ?? []
+private func planningCurrency(_ dashboard: FinanceDashboard?) -> CurrencyCode {
+    let accounts = dashboard?.personalAccounts ?? []
     return accounts.first?.currency
         ?? dashboard?.totals.first?.currency
         ?? .RUB
@@ -248,11 +726,16 @@ func localizedPlanningMonth(_ ym: String) -> String {
     DateHelpers.displayMonth(ym)
 }
 
-func localizedPlanningScope(_ scope: PlanningScope) -> String {
-    switch scope {
-    case .personal: return "Личное"
-    case .household: return "Общее"
+private func planningEffectiveDate(month: String, day: Int) -> String? {
+    let parts = month.split(separator: "-")
+    guard parts.count == 2,
+          let year = Int(parts[0]),
+          let monthNumber = Int(parts[1]),
+          let firstDay = Calendar.current.date(from: DateComponents(year: year, month: monthNumber, day: 1)),
+          let dayRange = Calendar.current.range(of: .day, in: .month, for: firstDay) else {
+        return nil
     }
+    return String(format: "%04d-%02d-%02d", year, monthNumber, min(max(day, 1), dayRange.count))
 }
 
 func localizedTargetType(_ type: AllocationTargetType) -> String {
@@ -309,31 +792,6 @@ struct PlanningMessageCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(UIColor.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-struct PlanningOverviewGate: View {
-    let onModeSelected: (FinanceMode) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Обзор не создаёт единый план")
-                .font(.headline)
-            Text("Планирование работает в одном режиме. Выберите личный или общий план, чтобы не смешивать бюджеты.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            HStack(spacing: 8) {
-                Button("Личное") { onModeSelected(.personal) }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-                Button("Общее") { onModeSelected(.shared) }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(16)
-        .background(Color(UIColor.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

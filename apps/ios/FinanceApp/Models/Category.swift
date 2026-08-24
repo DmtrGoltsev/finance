@@ -21,6 +21,8 @@ struct Category: Codable, Identifiable, Sendable {
     let version: Int?
 }
 
+typealias FinanceCategory = Category
+
 struct CategoryCreateRequest: Codable, Sendable {
     let name: String
     let type: CategoryType
@@ -35,4 +37,16 @@ struct CategoryUpdateRequest: Codable, Sendable {
     let iconKey: String?
     let color: String?
     let version: Int?
+}
+
+struct CategoryOfflineUpdateRequest: Codable, Sendable {
+    let name: String?
+    let iconKey: String?
+    let color: String?
+
+    init(_ request: CategoryUpdateRequest) {
+        name = request.name
+        iconKey = request.iconKey
+        color = request.color
+    }
 }

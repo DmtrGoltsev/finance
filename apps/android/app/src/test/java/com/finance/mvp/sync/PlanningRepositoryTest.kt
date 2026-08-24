@@ -193,6 +193,7 @@ class PlanningRepositoryTest {
             source: AccountSummary,
             destination: AccountSummary,
             amount: String,
+            transactionDate: String,
         ): ApiResult<TransactionSummary> = ApiResult.Failure("unused")
 
         override suspend fun createPlanningPlan(request: PlanningPlanCreateRequest): ApiResult<PlanningPlan> {

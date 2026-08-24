@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct PlanningEntryCard: View {
-    let selectedMode: FinanceMode
     let onOpenPlanning: () -> Void
 
     var body: some View {
@@ -10,7 +9,7 @@ struct PlanningEntryCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("План месяца")
                     .font(.headline)
-                Text(subtitle)
+                Text("Доходы и распределения на месяц")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -26,12 +25,5 @@ struct PlanningEntryCard: View {
         .background(FinanceColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
-    }
-
-    private var subtitle: String {
-        if selectedMode == .overview {
-            return "Мой обзор read-only. Для плана выберите Личное или Общее."
-        }
-        return "\(selectedMode.title): доходы и распределения на месяц."
     }
 }

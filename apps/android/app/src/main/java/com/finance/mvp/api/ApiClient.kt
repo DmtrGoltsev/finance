@@ -1,6 +1,7 @@
 package com.finance.mvp.api
 
 import com.finance.mvp.session.SecureTokenStore
+import com.finance.mvp.session.StoredSessionTokens
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
@@ -9,7 +10,10 @@ import java.math.RoundingMode
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -88,6 +92,7 @@ interface FinanceApiClient {
         source: AccountSummary,
         destination: AccountSummary,
         amount: String = "1.00",
+        transactionDate: String = todayDate(),
     ): ApiResult<TransactionSummary>
     suspend fun createCaptureDraft(request: CaptureDraftCreateRequest): ApiResult<CaptureDraft> =
         ApiResult.Failure("Черновики операций не поддерживаются этим клиентом")
@@ -154,6 +159,13 @@ data class SessionStatus(
     val displayName: String?,
     val householdId: String?,
     val userId: String? = null,
+    val sessionId: String? = null,
+)
+
+internal data class AuthenticatedSessionLease(
+    val generation: Long,
+    val sessionIdentity: String,
+    val authenticatedUserId: String,
 )
 
 sealed interface RegistrationResult {
@@ -279,6 +291,7 @@ data class TransactionSummary(
     val sourceType: String = "manual",
     val version: Int? = null,
     val transactionDate: String = occurredAt.take(10),
+    val createdAt: String = occurredAt,
 )
 
 data class MoneyTotal(
@@ -537,6 +550,7 @@ enum class ApiFailureKind {
     HTTP,
     NETWORK,
     CONTRACT,
+    SESSION_CHANGED,
     UNKNOWN,
 }
 
@@ -580,9 +594,7 @@ class LiveFinanceApiClient(
             authorize = false,
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
         )
-        response.optString("accessToken").takeIf { it.isNotBlank() }?.let {
-            tokenStore.saveAccessToken(it)
-        }
+        persistBearerSession(response)
         parseSession(response)
     }
 
@@ -604,47 +616,65 @@ class LiveFinanceApiClient(
             expectedCodes = setOf(HttpURLConnection.HTTP_CREATED, HttpURLConnection.HTTP_ACCEPTED),
         )
         if (response.optBoolean("registrationAccepted", false)) {
-            tokenStore.clear()
+            clearSession()
             return@safeCall RegistrationResult.Accepted(
                 response.optString("message").takeIf { it.isNotBlank() }
                     ?: "Заявка на регистрацию принята",
             )
         }
-        response.optString("accessToken").takeIf { it.isNotBlank() }?.let {
-            tokenStore.saveAccessToken(it)
-        }
+        persistBearerSession(response)
         RegistrationResult.Authenticated(parseSession(response))
     }
 
-    override suspend fun sessionStatus(): ApiResult<SessionStatus> = safeCall {
-        parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
-    }
+    override suspend fun sessionStatus(): ApiResult<SessionStatus> = safeCall { currentSessionStatus() }
 
     override suspend fun dashboard(startDate: String?, endDate: String?): ApiResult<FinanceDashboard> = safeCall {
-        val session = parseSession(request(path = "/api/v1/sessions/current", method = "GET"))
-        val accounts = request(path = "/api/v1/accounts", method = "GET").items().map(::parseAccount)
-        val categories = request(path = "/api/v1/categories", method = "GET").items().map(::parseCategory)
+        val session = currentSessionStatus()
+        val accounts = requestAllPages(
+            path = "/api/v1/accounts",
+            query = mapOf("ownershipType" to "personal"),
+        )
+            .map(::parseAccount)
+            .filter { it.ownershipType == "personal" && it.householdId == null }
+        val categories = requestAllPages(
+            path = "/api/v1/categories",
+            query = mapOf("scope" to "personal"),
+        )
+            .map(::parseCategory)
+            .filter { it.scope != "household" && it.householdId == null }
         val assetCategories = runCatching {
-            request(path = "/api/v1/asset-categories", method = "GET").items().map(::parseAssetCategory)
+            requestAllPages(
+                path = "/api/v1/asset-categories",
+                query = mapOf("scopeType" to "personal"),
+            )
+                .map(::parseAssetCategory)
+                .filter { it.scopeType == "personal" && it.householdId == null }
         }.getOrDefault(emptyList())
         val dateQuery = reportDateQuery(startDate, endDate)
-        val transactions = request(
+        val personalAccountIds = accounts.map { it.id }.toSet()
+        val personalCategoryIds = categories.map { it.id }.toSet()
+        val transactions = requestAllPages(
             path = "/api/v1/transactions",
-            method = "GET",
-            query = dateQuery,
-        ).items().map(::parseTransaction)
+            query = mapOf(
+                "ownershipType" to "personal",
+                "sort" to "-occurredAt",
+            ) + dateQuery,
+        ).map(::parseTransaction)
+            .filter { transaction ->
+                transaction.accountId in personalAccountIds &&
+                    (transaction.categoryId == null || transaction.categoryId in personalCategoryIds) &&
+                    (
+                        transaction.counterpartyAccountId == null ||
+                            transaction.counterpartyAccountId in personalAccountIds
+                        ) &&
+                    (transaction.type != "transfer" || transaction.counterpartyAccountId != null)
+            }
+            .sortedWith(transactionNewestFirstComparator)
         val reportData = runCatching {
-            val householdId = session.householdId
             request(
                 path = "/api/v1/reports/summary",
                 method = "GET",
-                query = (
-                    if (householdId.isNullOrBlank()) {
-                        mapOf("reportMode" to "personal")
-                    } else {
-                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
-                    }
-                    ) + dateQuery,
+                query = mapOf("reportMode" to "personal") + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val totals = reportData
@@ -653,17 +683,10 @@ class LiveFinanceApiClient(
             ?.map(::parseMoneyTotal)
             ?: emptyList()
         val accountBalancesData = runCatching {
-            val householdId = session.householdId
             request(
                 path = "/api/v1/reports/account-balances",
                 method = "GET",
-                query = (
-                    if (householdId.isNullOrBlank()) {
-                        mapOf("reportMode" to "personal")
-                    } else {
-                        mapOf("reportMode" to "combined_viewer_overview", "householdId" to householdId)
-                    }
-                    ) + dateQuery,
+                query = mapOf("reportMode" to "personal") + dateQuery,
             ).optJSONObject("data")
         }.getOrNull()
         val assetCategoryGroups = accountBalancesData
@@ -671,30 +694,24 @@ class LiveFinanceApiClient(
             ?.toObjectList()
             ?.map(::parseAssetCategoryGroup)
             ?: emptyList()
-        val investmentsByCurrency = accountBalancesData
-            ?.optJSONArray("investmentsByCurrency")
-            ?.toObjectList()
-            ?.map(::parseMoneyAmount)
-            ?.ifEmpty { reportData?.investmentTotalsByCurrency().orEmpty() }
-            ?: reportData?.investmentTotalsByCurrency()
-            ?: emptyList()
-        val investmentsTotal = reportData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
-            ?: accountBalancesData?.optJSONObject("investmentsTotal")?.let(::parseMoneyAmount)
-        val reportTransferCount = session.householdId?.let { householdId ->
-            request(
+        val calculatedInvestmentsByCurrency = monthlyInvestmentTransfers(
+            transactions = transactions,
+            accounts = accounts,
+            assetCategories = assetCategories,
+        )
+        val reportedInvestmentsByCurrency = reportData?.investmentTotalsByCurrency().orEmpty()
+        val investmentsByCurrency = calculatedInvestmentsByCurrency.ifEmpty { reportedInvestmentsByCurrency }
+        val investmentsTotal = investmentsByCurrency.firstOrNull()
+        val reportTransferCount = runCatching {
+            requestAllPages(
                 path = "/api/v1/reports/transactions",
-                method = "GET",
                 query = mapOf(
-                    "reportMode" to "combined_viewer_overview",
-                    "householdId" to householdId,
+                    "reportMode" to "personal",
                     "currency" to (accounts.firstOrNull()?.currency ?: "USD"),
                     "transactionTypes" to "transfer",
                 ) + dateQuery,
-            ).optJSONObject("data")
-                ?.optJSONArray("items")
-                ?.length()
-                ?: 0
-        } ?: 0
+            ).size
+        }.getOrDefault(0)
 
         FinanceDashboard(
             session = session,
@@ -945,6 +962,7 @@ class LiveFinanceApiClient(
         source: AccountSummary,
         destination: AccountSummary,
         amount: String,
+        transactionDate: String,
     ): ApiResult<TransactionSummary> = safeCall {
         request(
             path = "/api/v1/transactions",
@@ -955,7 +973,7 @@ class LiveFinanceApiClient(
                 .put("counterpartyAccountId", destination.id)
                 .put("amount", amount)
                 .put("currency", source.currency)
-                .put("occurredAt", nowIso())
+                .put("transactionDate", transactionDate)
                 .put("description", "Между счетами")
                 .put("sourceType", "manual")
                 .toString(),
@@ -1014,6 +1032,23 @@ class LiveFinanceApiClient(
         capturedAt: String?,
         householdId: String?,
     ): ApiResult<ScreenshotOcrResponse> = safeCall {
+        screenshotOcrRequest(
+            imageBytes = imageBytes,
+            contentType = contentType,
+            capturedAt = capturedAt,
+            householdId = householdId,
+        )
+    }
+
+    private suspend fun screenshotOcrRequest(
+        imageBytes: ByteArray,
+        contentType: String,
+        capturedAt: String?,
+        householdId: String?,
+        allowRefreshRetry: Boolean = true,
+        requiredSession: SessionExpectation? = null,
+    ): ScreenshotOcrResponse {
+        val requestSession = authorizedSession(requiredSession)
         val boundary = "Boundary-${System.currentTimeMillis()}"
         val connection = (URL("${config.normalizedBaseUrl}/api/v1/capture-drafts/screenshot-ocr").openConnection() as HttpURLConnection)
         connection.requestMethod = "POST"
@@ -1022,7 +1057,7 @@ class LiveFinanceApiClient(
         connection.doOutput = true
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-        tokenStore.readAccessToken()?.let {
+        requestSession?.accessToken?.let {
             connection.setRequestProperty("Authorization", "Bearer $it")
         }
         connection.outputStream.use { stream ->
@@ -1045,10 +1080,33 @@ class LiveFinanceApiClient(
         }
         val code = connection.responseCode
         val text = connection.readText(code)
+        if (code == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            when (
+                if (allowRefreshRetry) refreshAccessToken(requestSession)
+                else RefreshAttempt.REJECTED
+            ) {
+                RefreshAttempt.SUCCEEDED -> return screenshotOcrRequest(
+                    imageBytes = imageBytes,
+                    contentType = contentType,
+                    capturedAt = capturedAt,
+                    householdId = householdId,
+                    allowRefreshRetry = false,
+                    requiredSession = requestSession?.expectation(),
+                )
+                RefreshAttempt.SESSION_CHANGED -> throw SessionChangedException()
+                RefreshAttempt.TRANSIENT_FAILURE -> throw IOException(
+                    "Session refresh is temporarily unavailable",
+                )
+                RefreshAttempt.NOT_AVAILABLE,
+                RefreshAttempt.REJECTED,
+                -> clearSessionIfMatches(requestSession)
+            }
+        }
         if (code !in setOf(HttpURLConnection.HTTP_OK)) {
             throw ApiException(parseError(text, code), code)
         }
-        parseScreenshotOcrResponse(JSONObject(text))
+        ensureSessionStillCurrent(requestSession)
+        return parseScreenshotOcrResponse(JSONObject(text))
     }
 
     override suspend fun listPlanningPlans(
@@ -1174,29 +1232,110 @@ class LiveFinanceApiClient(
         ).planningPlanObject().let(::parsePlanningPlan)
     }
 
-    override suspend fun syncPush(request: SyncPushRequest): ApiResult<SyncPushResponse> = safeCall {
+    override suspend fun syncPush(request: SyncPushRequest): ApiResult<SyncPushResponse> =
+        syncPushRequest(request, requiredSession = null)
+
+    internal suspend fun syncPushWithLease(
+        request: SyncPushRequest,
+        lease: AuthenticatedSessionLease,
+    ): ApiResult<SyncPushResponse> = syncPushRequest(request, lease.expectation())
+
+    private suspend fun syncPushRequest(
+        request: SyncPushRequest,
+        requiredSession: SessionExpectation?,
+    ): ApiResult<SyncPushResponse> = safeCall {
         this.request(
             path = "/api/v1/sync/push",
             method = "POST",
             body = request.toJsonForApi().toString(),
+            requiredSession = requiredSession,
         ).let(::parseSyncPushResponse)
     }
 
-    override suspend fun syncPull(request: SyncPullRequest): ApiResult<SyncPullResponse> = safeCall {
+    override suspend fun syncPull(request: SyncPullRequest): ApiResult<SyncPullResponse> =
+        syncPullRequest(request, requiredSession = null)
+
+    internal suspend fun syncPullWithLease(
+        request: SyncPullRequest,
+        lease: AuthenticatedSessionLease,
+    ): ApiResult<SyncPullResponse> = syncPullRequest(request, lease.expectation())
+
+    private suspend fun syncPullRequest(
+        request: SyncPullRequest,
+        requiredSession: SessionExpectation?,
+    ): ApiResult<SyncPullResponse> = safeCall {
         this.request(
             path = "/api/v1/sync/pull",
             method = "POST",
             body = request.toJsonForApi().toString(),
+            requiredSession = requiredSession,
         ).let(::parseSyncPullResponse)
     }
 
-    override suspend fun logout(): ApiResult<Unit> = safeCall {
-        request(
-            path = "/api/v1/sessions/current",
-            method = "DELETE",
-            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
-        )
-        tokenStore.clear()
+    internal suspend fun captureAuthenticatedSessionLease(
+        expectedUserId: String,
+    ): ApiResult<AuthenticatedSessionLease> = AndroidSessionRefreshCoordinator.mutex.withLock {
+        val current = tokenStore.readSession()
+        if (
+            current == null ||
+            current.authenticatedUserId != expectedUserId ||
+            current.sessionIdentity.isNullOrBlank()
+        ) {
+            ApiResult.Failure(
+                "Сессия синхронизации изменилась.",
+                SessionChangedException(),
+                kind = ApiFailureKind.SESSION_CHANGED,
+            )
+        } else {
+            ApiResult.Success(current.authenticatedLease())
+        }
+    }
+
+    internal suspend fun <T> withAuthenticatedSessionLease(
+        lease: AuthenticatedSessionLease,
+        block: suspend () -> T,
+    ): ApiResult<T> = AndroidSessionRefreshCoordinator.mutex.withLock {
+        if (tokenStore.readSession()?.expectation() != lease.expectation()) {
+            ApiResult.Failure(
+                "Сессия синхронизации изменилась.",
+                SessionChangedException(),
+                kind = ApiFailureKind.SESSION_CHANGED,
+            )
+        } else {
+            ApiResult.Success(block())
+        }
+    }
+
+    override suspend fun logout(): ApiResult<Unit> {
+        val logoutSession = AndroidSessionRefreshCoordinator.mutex.withLock {
+            tokenStore.readSession()
+        }
+        val remoteResult = safeCall {
+            request(
+                path = "/api/v1/sessions/current",
+                method = "DELETE",
+                expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+                requiredSession = logoutSession?.expectation(),
+            )
+            Unit
+        }
+        return try {
+            if (clearSessionIfExpectationMatches(logoutSession?.expectation())) {
+                remoteResult
+            } else {
+                ApiResult.Failure(
+                    "Сессия уже изменилась; новая авторизация сохранена.",
+                    SessionChangedException(),
+                    kind = ApiFailureKind.SESSION_CHANGED,
+                )
+            }
+        } catch (error: Exception) {
+            ApiResult.Failure(
+                "Не удалось очистить локальную сессию: ${error.message ?: error::class.java.simpleName}",
+                error,
+                kind = ApiFailureKind.UNKNOWN,
+            )
+        }
     }
 
     private inline fun <T> safeCall(block: () -> T): ApiResult<T> {
@@ -1204,6 +1343,12 @@ class LiveFinanceApiClient(
             ApiResult.Success(block())
         } catch (error: CancellationException) {
             throw error
+        } catch (error: SessionChangedException) {
+            ApiResult.Failure(
+                error.message ?: "Сессия изменилась. Повторите действие.",
+                error,
+                kind = ApiFailureKind.SESSION_CHANGED,
+            )
         } catch (error: ApiException) {
             ApiResult.Failure(error.message ?: "Ошибка API", error, error.statusCode, ApiFailureKind.HTTP)
         } catch (error: IOException) {
@@ -1246,6 +1391,8 @@ class LiveFinanceApiClient(
         body: String? = null,
         authorize: Boolean = true,
         expectedCodes: Set<Int> = setOf(HttpURLConnection.HTTP_OK),
+        allowRefreshRetry: Boolean = true,
+        requiredSession: SessionExpectation? = null,
     ): JSONObject {
         val queryString = query.entries.joinToString("&") {
             "${it.key.urlEncode()}=${it.value.urlEncode()}"
@@ -1255,10 +1402,9 @@ class LiveFinanceApiClient(
         connection.connectTimeout = 5_000
         connection.readTimeout = 5_000
         connection.setRequestProperty("Accept", "application/json")
-        if (authorize) {
-            tokenStore.readAccessToken()?.let {
-                connection.setRequestProperty("Authorization", "Bearer $it")
-            }
+        val requestSession = if (authorize) authorizedSession(requiredSession) else null
+        requestSession?.accessToken?.let {
+            connection.setRequestProperty("Authorization", "Bearer $it")
         }
         if (body != null) {
             connection.doOutput = true
@@ -1269,12 +1415,231 @@ class LiveFinanceApiClient(
         val code = connection.responseCode
         val text = connection.readText(code)
         if (code !in expectedCodes) {
-            if (authorize && code.isAuthenticationFailureStatus()) {
-                tokenStore.clear()
+            if (authorize && code == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                when (
+                    if (allowRefreshRetry) refreshAccessToken(requestSession)
+                    else RefreshAttempt.REJECTED
+                ) {
+                    RefreshAttempt.SUCCEEDED -> return request(
+                        path = path,
+                        method = method,
+                        query = query,
+                        body = body,
+                        authorize = true,
+                        expectedCodes = expectedCodes,
+                        allowRefreshRetry = false,
+                        requiredSession = requestSession?.expectation(),
+                    )
+                    RefreshAttempt.SESSION_CHANGED -> throw SessionChangedException()
+                    RefreshAttempt.TRANSIENT_FAILURE -> throw IOException(
+                        "Session refresh is temporarily unavailable",
+                    )
+                    RefreshAttempt.NOT_AVAILABLE,
+                    RefreshAttempt.REJECTED,
+                    -> clearSessionIfMatches(requestSession)
+                }
             }
             throw ApiException(parseError(text, code), code)
         }
+        if (authorize) {
+            ensureSessionStillCurrent(requestSession)
+        }
         return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
+
+    private suspend fun refreshAccessToken(failedSession: StoredSessionTokens?): RefreshAttempt =
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            val currentSession = tokenStore.readSession()
+            if (failedSession == null) {
+                return@withLock if (currentSession == null) {
+                    RefreshAttempt.NOT_AVAILABLE
+                } else {
+                    RefreshAttempt.SESSION_CHANGED
+                }
+            }
+            if (currentSession == null || !currentSession.hasSameIdentity(failedSession)) {
+                return@withLock RefreshAttempt.SESSION_CHANGED
+            }
+            if (currentSession.accessToken != failedSession.accessToken) {
+                return@withLock RefreshAttempt.SUCCEEDED
+            }
+            val refreshToken = currentSession.refreshToken ?: return@withLock RefreshAttempt.NOT_AVAILABLE
+            return@withLock try {
+                val response = request(
+                    path = "/api/v1/sessions/refresh",
+                    method = "POST",
+                    body = JSONObject().put("refreshToken", refreshToken).toString(),
+                    authorize = false,
+                    expectedCodes = setOf(HttpURLConnection.HTTP_OK),
+                    allowRefreshRetry = false,
+                )
+                val tokens = bearerSessionTokens(response)
+                if (
+                    tokens.sessionIdentity != currentSession.sessionIdentity ||
+                    tokens.authenticatedUserId != currentSession.authenticatedUserId
+                ) {
+                    throw JSONException("Refreshed bearer session identity changed")
+                }
+                if (
+                    tokenStore.rotateSessionTokens(
+                        expectedGeneration = currentSession.generation,
+                        expectedIdentity = currentSession.sessionIdentity,
+                        accessToken = tokens.accessToken,
+                        refreshToken = tokens.refreshToken,
+                    )
+                ) {
+                    RefreshAttempt.SUCCEEDED
+                } else {
+                    RefreshAttempt.SESSION_CHANGED
+                }
+            } catch (error: ApiException) {
+                if (error.statusCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                    val latestSession = tokenStore.readSession()
+                    if (latestSession == currentSession) {
+                        tokenStore.clear()
+                    }
+                    RefreshAttempt.REJECTED
+                } else {
+                    RefreshAttempt.TRANSIENT_FAILURE
+                }
+            } catch (_: IOException) {
+                RefreshAttempt.TRANSIENT_FAILURE
+            }
+        }
+
+    private enum class RefreshAttempt {
+        SUCCEEDED,
+        NOT_AVAILABLE,
+        REJECTED,
+        TRANSIENT_FAILURE,
+        SESSION_CHANGED,
+    }
+
+    private suspend fun persistBearerSession(response: JSONObject) {
+        val tokens = bearerSessionTokens(response)
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            tokenStore.saveSessionTokens(
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken,
+                sessionIdentity = tokens.sessionIdentity,
+                authenticatedUserId = tokens.authenticatedUserId,
+            )
+        }
+    }
+
+    private fun bearerSessionTokens(response: JSONObject): BearerSessionTokens {
+        val accessToken = response.optString("accessToken").takeIf { it.isNotBlank() }
+            ?: throw JSONException("Bearer session response is missing accessToken")
+        val refreshToken = response.optString("refreshToken").takeIf { it.isNotBlank() }
+            ?: throw JSONException("Bearer session response is missing refreshToken")
+        val actor = response.optJSONObject("actor")
+            ?: throw JSONException("Bearer session response is missing actor")
+        val authenticatedUserId = actor.optString("userId").takeIf { it.isNotBlank() }
+            ?: throw JSONException("Bearer session response is missing authenticated user ID")
+        val sessionIdentity = actor.optString("sessionId").takeIf { it.isNotBlank() }
+            ?: authenticatedUserId
+        return BearerSessionTokens(accessToken, refreshToken, sessionIdentity, authenticatedUserId)
+    }
+
+    private suspend fun clearSession() {
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            tokenStore.clear()
+        }
+    }
+
+    private suspend fun clearSessionIfMatches(expectedSession: StoredSessionTokens?): Boolean =
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            if (tokenStore.readSession() == expectedSession) {
+                tokenStore.clear()
+                true
+            } else {
+                false
+            }
+        }
+
+    private suspend fun clearSessionIfExpectationMatches(expectedSession: SessionExpectation?): Boolean =
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            if (tokenStore.readSession()?.expectation() == expectedSession) {
+                tokenStore.clear()
+                true
+            } else {
+                false
+            }
+        }
+
+    private suspend fun currentSessionStatus(): SessionStatus {
+        val expectedSession = tokenStore.readSession()
+        val response = request(
+            path = "/api/v1/sessions/current",
+            method = "GET",
+            requiredSession = expectedSession?.expectation(),
+        )
+        val status = parseSession(response)
+        bindLegacyForegroundSession(expectedSession, status)
+        return status
+    }
+
+    private suspend fun bindLegacyForegroundSession(
+        expectedSession: StoredSessionTokens?,
+        status: SessionStatus,
+    ) {
+        val legacySession = expectedSession?.takeIf { it.authenticatedUserId == null } ?: return
+        val userId = status.userId ?: return
+        val sessionIdentity = status.sessionId ?: userId
+        AndroidSessionRefreshCoordinator.mutex.withLock {
+            tokenStore.bindAuthenticatedUser(
+                expectedGeneration = legacySession.generation,
+                expectedIdentity = legacySession.sessionIdentity,
+                sessionIdentity = sessionIdentity,
+                authenticatedUserId = userId,
+            )
+        }
+    }
+
+    private suspend fun authorizedSession(requiredSession: SessionExpectation?): StoredSessionTokens? {
+        val session = tokenStore.readSession()
+        if (requiredSession != null && session?.expectation() != requiredSession) {
+            throw SessionChangedException()
+        }
+        return session
+    }
+
+    private suspend fun ensureSessionStillCurrent(requestSession: StoredSessionTokens?) {
+        if (requestSession != null && tokenStore.readSession()?.expectation() != requestSession.expectation()) {
+            throw SessionChangedException()
+        }
+    }
+
+    private suspend fun requestAllPages(
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): List<JSONObject> {
+        val itemsById = linkedMapOf<String, JSONObject>()
+        val seenCursors = mutableSetOf<String>()
+        var cursor: String? = null
+        var anonymousIndex = 0
+
+        while (true) {
+            val pageQuery = query + mapOf("limit" to "100") +
+                (cursor?.let { mapOf("cursor" to it) } ?: emptyMap())
+            val response = request(path = path, method = "GET", query = pageQuery)
+            val envelope = response.optJSONObject("data") ?: response
+            envelope.items().forEach { item ->
+                val id = item.optString("id").takeIf { it.isNotBlank() }
+                    ?: "__anonymous_${anonymousIndex++}"
+                itemsById.putIfAbsent(id, item)
+            }
+
+            val page = envelope.optJSONObject("page") ?: response.optJSONObject("page")
+            if (page?.optBoolean("hasMore", false) != true) break
+            val nextCursor = page.optNullableString("nextCursor")
+            if (nextCursor == null || !seenCursors.add(nextCursor)) {
+                throw ApiException("Invalid pagination cursor for $path")
+            }
+            cursor = nextCursor
+        }
+
+        return itemsById.values.toList()
     }
 
     private fun HttpURLConnection.readText(code: Int): String {
@@ -1298,14 +1663,45 @@ class LiveFinanceApiClient(
     }
 }
 
+private object AndroidSessionRefreshCoordinator {
+    val mutex = Mutex()
+}
+
+private data class BearerSessionTokens(
+    val accessToken: String,
+    val refreshToken: String,
+    val sessionIdentity: String,
+    val authenticatedUserId: String,
+)
+
+private data class SessionExpectation(
+    val generation: Long,
+    val sessionIdentity: String?,
+    val authenticatedUserId: String?,
+)
+
+private fun StoredSessionTokens.expectation(): SessionExpectation =
+    SessionExpectation(generation, sessionIdentity, authenticatedUserId)
+
+private fun AuthenticatedSessionLease.expectation(): SessionExpectation =
+    SessionExpectation(generation, sessionIdentity, authenticatedUserId)
+
+private fun StoredSessionTokens.authenticatedLease(): AuthenticatedSessionLease =
+    AuthenticatedSessionLease(
+        generation = generation,
+        sessionIdentity = requireNotNull(sessionIdentity),
+        authenticatedUserId = requireNotNull(authenticatedUserId),
+    )
+
+private fun StoredSessionTokens.hasSameIdentity(other: StoredSessionTokens): Boolean =
+    expectation() == other.expectation()
+
+private class SessionChangedException : Exception("Сессия изменилась. Повторите действие.")
+
 class ApiException(
     message: String,
     val statusCode: Int? = null,
 ) : Exception(message)
-
-private fun Int.isAuthenticationFailureStatus(): Boolean {
-    return this == HttpURLConnection.HTTP_UNAUTHORIZED || this == HttpURLConnection.HTTP_FORBIDDEN
-}
 
 private fun parseSession(json: JSONObject): SessionStatus {
     val actor = json.optJSONObject("actor")
@@ -1314,6 +1710,7 @@ private fun parseSession(json: JSONObject): SessionStatus {
         ?: json.optJSONObject("user")
     val userId = actor?.optString("userId")?.takeIf { it.isNotBlank() }
         ?: actor?.optString("id")?.takeIf { it.isNotBlank() }
+    val sessionId = actor?.optString("sessionId")?.takeIf { it.isNotBlank() }
     val householdId = actor?.optJSONArray("memberships")
         ?.toObjectList()
         ?.firstOrNull { it.optString("status") == "active" }
@@ -1325,6 +1722,7 @@ private fun parseSession(json: JSONObject): SessionStatus {
             ?: userId?.take(8)?.let { "Пользователь $it" },
         householdId = householdId,
         userId = userId,
+        sessionId = sessionId,
     )
 }
 
@@ -1460,7 +1858,43 @@ private fun parseTransaction(json: JSONObject): TransactionSummary {
         sourceType = json.optString("sourceType", "manual"),
         version = json.optIntOrNull("version"),
         transactionDate = json.optString("transactionDate").ifBlank { occurredAt.take(10) },
+        createdAt = json.optString("createdAt").ifBlank { occurredAt },
     )
+}
+
+private val transactionNewestFirstComparator =
+    compareByDescending<TransactionSummary> { it.transactionDate }
+        .thenByDescending { it.occurredAt }
+        .thenByDescending { it.createdAt }
+        .thenByDescending { it.id }
+
+private fun monthlyInvestmentTransfers(
+    transactions: List<TransactionSummary>,
+    accounts: List<AccountSummary>,
+    assetCategories: List<AssetCategory>,
+): List<MoneyAmount> {
+    val accountsById = accounts.associateBy { it.id }
+    val investmentCategoryIds = assetCategories
+        .filter { it.recordStatus == "active" && it.isInvestment }
+        .mapTo(mutableSetOf()) { it.id }
+    return transactions
+        .asSequence()
+        .filter { it.type == "transfer" && it.counterpartyAccountId != null }
+        .mapNotNull { transaction ->
+            val destination = accountsById[transaction.counterpartyAccountId] ?: return@mapNotNull null
+            val isInvestmentDestination = destination.assetCategoryId in investmentCategoryIds ||
+                destination.type.lowercase(Locale.US) in setOf("brokerage", "investment")
+            transaction.takeIf { isInvestmentDestination }
+        }
+        .groupBy { it.currency }
+        .map { (currency, items) ->
+            MoneyAmount(
+                currency = currency,
+                amount = items.fold(BigDecimal.ZERO) { total, item -> total + item.amount.toBigDecimal() }
+                    .toPlainString(),
+            )
+        }
+        .sortedBy { it.currency }
 }
 
 private fun parseMoneyTotal(json: JSONObject): MoneyTotal {
@@ -2051,7 +2485,5 @@ private fun parseScreenshotOcrResponse(json: JSONObject): ScreenshotOcrResponse 
     }
     return ScreenshotOcrResponse(items = items)
 }
-
-private fun nowIso(): String = java.time.Instant.now().toString()
 
 private fun todayDate(): String = java.time.LocalDate.now().toString()

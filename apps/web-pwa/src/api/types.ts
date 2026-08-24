@@ -152,6 +152,17 @@ export type ReportSummary = {
   income: MoneyAmount;
   expense: MoneyAmount;
   balanceDelta: MoneyAmount;
+  investmentsTotal?: MoneyAmount | null;
+};
+
+export type CategoryBreakdownItem = {
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryType?: CategoryDirection | null;
+  categoryScope?: CategoryScope | null;
+  amount: MoneyAmount;
+  transactionCount: number;
+  shareOfVisibleTotal: number;
 };
 
 export type SessionSnapshot = {

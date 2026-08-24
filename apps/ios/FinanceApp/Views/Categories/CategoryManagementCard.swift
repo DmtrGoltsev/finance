@@ -2,12 +2,12 @@ import SwiftUI
 
 struct CategoryManagementCard: View {
     let categories: [Category]
-    let hasHousehold: Bool
     let apiClient: FinanceApiClient
+    let syncService: FinanceSyncService
+    let localScope: LocalStoreScope?
     let onRefresh: () async -> Void
+    let onLocalSnapshotChanged: () async -> Void
 
-    @State private var selectedType: CategoryType = .expense
-    @State private var selectedScope: CategoryScope = .personal
     @State private var newCategoryName = ""
     @State private var showArchived = false
     @State private var message: String?
@@ -15,13 +15,13 @@ struct CategoryManagementCard: View {
 
     private var activeCategories: [Category] {
         categories
-            .filter { $0.type == selectedType && $0.status == .active }
+            .filter { $0.type == .expense && $0.scope == .personal && $0.status == .active }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var archivedCategories: [Category] {
         categories
-            .filter { $0.type == selectedType && $0.status == .archived }
+            .filter { $0.type == .expense && $0.scope == .personal && $0.status == .archived }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -30,68 +30,11 @@ struct CategoryManagementCard: View {
             HStack(spacing: 10) {
                 IconBubble(systemName: "tag", color: FinanceColors.analyticsAccent, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Категории")
+                    Text("Категории расходов")
                         .font(.headline)
                     Text("Добавление, список и быстрые правки")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Тип")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach([CategoryType.expense, .income], id: \.self) { type in
-                            Button {
-                                selectedType = type
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: type == .expense ? "minus.circle" : "plus.circle")
-                                        .font(.system(size: 12))
-                                    Text(type == .expense ? "Расходы" : "Доходы")
-                                        .font(.subheadline)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(selectedType == type ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                .foregroundColor(selectedType == type ? FinanceColors.onPrimary : FinanceColors.primary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Режим")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        let scopes: [CategoryScope] = hasHousehold ? [.personal, .household] : [.personal]
-                        ForEach(scopes, id: \.self) { scope in
-                            Button {
-                                selectedScope = scope
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: scope == .personal ? "person" : "person.2")
-                                        .font(.system(size: 12))
-                                    Text(scope == .personal ? "Личное" : "Общее")
-                                        .font(.subheadline)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(selectedScope == scope ? FinanceColors.primary : FinanceColors.primaryContainer)
-                                .foregroundColor(selectedScope == scope ? FinanceColors.onPrimary : FinanceColors.primary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
                 }
             }
 
@@ -173,18 +116,34 @@ struct CategoryManagementCard: View {
         let trimmed = newCategoryName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         isLoading = true
+        let request = CategoryCreateRequest(
+            name: trimmed,
+            type: .expense,
+            scope: .personal,
+            householdId: nil,
+            iconKey: nil,
+            color: nil
+        )
         do {
-            _ = try await apiClient.createCategory(CategoryCreateRequest(
-                name: trimmed,
-                type: selectedType,
-                scope: selectedScope,
-                householdId: selectedScope == .household ? nil : nil,
-                iconKey: nil,
-                color: nil
-            ))
+            _ = try await apiClient.createCategory(request)
             newCategoryName = ""
             await onRefresh()
             message = "Категория добавлена"
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let category = localCategory(from: request)
+                try await enqueueOptimistic(
+                    entityId: category.id,
+                    operation: .create,
+                    request: request,
+                    optimisticEntity: category
+                )
+                newCategoryName = ""
+                await onLocalSnapshotChanged()
+                message = "Категория добавлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -192,17 +151,41 @@ struct CategoryManagementCard: View {
     }
 
     private func updateCategory(_ category: Category, _ newName: String) async {
+        let request = CategoryUpdateRequest(
+            name: newName,
+            iconKey: category.iconKey,
+            color: category.color,
+            version: category.version
+        )
         do {
-            _ = try await apiClient.updateCategory(
-                categoryId: category.id,
-                CategoryUpdateRequest(
+            _ = try await apiClient.updateCategory(categoryId: category.id, request)
+            await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                let updated = Category(
+                    id: category.id,
                     name: newName,
+                    type: category.type,
+                    scope: .personal,
+                    ownerUserId: category.ownerUserId,
+                    householdId: nil,
                     iconKey: category.iconKey,
                     color: category.color,
+                    status: category.status,
                     version: category.version
                 )
-            )
-            await onRefresh()
+                try await enqueueOptimistic(
+                    entityId: category.id,
+                    operation: .update,
+                    baseVersion: category.version,
+                    request: CategoryOfflineUpdateRequest(request),
+                    optimisticEntity: updated
+                )
+                await onLocalSnapshotChanged()
+                message = "Категория обновлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -212,6 +195,20 @@ struct CategoryManagementCard: View {
         do {
             _ = try await apiClient.archiveCategory(categoryId: id)
             await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let category = categories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                try await enqueueOptimistic(
+                    entityId: id,
+                    operation: .archive,
+                    baseVersion: category.version,
+                    optimisticEntity: category
+                )
+                await onLocalSnapshotChanged()
+                message = "Категория архивирована локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -221,12 +218,96 @@ struct CategoryManagementCard: View {
         do {
             _ = try await apiClient.restoreCategory(categoryId: id)
             await onRefresh()
+        } catch where OfflineMutationFallback.canQueue(after: error) {
+            do {
+                guard let category = categories.first(where: { $0.id == id }) else { throw LocalOptimisticError.missingCurrentEntity }
+                let restored = Category(
+                    id: category.id,
+                    name: category.name,
+                    type: category.type,
+                    scope: .personal,
+                    ownerUserId: category.ownerUserId,
+                    householdId: nil,
+                    iconKey: category.iconKey,
+                    color: category.color,
+                    status: .active,
+                    version: category.version
+                )
+                try await enqueueOptimistic(
+                    entityId: id,
+                    operation: .restore,
+                    baseVersion: category.version,
+                    optimisticEntity: restored
+                )
+                await onLocalSnapshotChanged()
+                message = "Категория восстановлена локально, ожидает синхронизации"
+            } catch {
+                message = error.localizedDescription
+            }
         } catch {
             message = error.localizedDescription
         }
     }
-}
 
+    private func enqueueOptimistic<Request: Encodable, OptimisticEntity: Encodable>(
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        request: Request,
+        optimisticEntity: OptimisticEntity
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: .categories,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            request: request,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: PersonalOwnershipContext(
+                viewerUserId: localScope.viewerUserId,
+                categories: categories
+            )
+        )
+    }
+
+    private func enqueueOptimistic<OptimisticEntity: Encodable>(
+        entityId: String,
+        operation: SyncOperation,
+        baseVersion: Int? = nil,
+        optimisticEntity: OptimisticEntity
+    ) async throws {
+        guard let localScope else { throw LocalOptimisticError.missingLocalScope }
+        try await syncService.enqueueOptimisticMutation(
+            scope: localScope,
+            entityType: .categories,
+            entityId: entityId,
+            operation: operation,
+            baseVersion: baseVersion,
+            optimisticEntity: optimisticEntity,
+            ownershipContext: PersonalOwnershipContext(
+                viewerUserId: localScope.viewerUserId,
+                categories: categories
+            )
+        )
+    }
+
+    private func localCategory(from request: CategoryCreateRequest) -> Category {
+        Category(
+            id: UUID().uuidString,
+            name: request.name,
+            type: request.type,
+            scope: request.scope,
+            ownerUserId: localScope?.viewerUserId,
+            householdId: nil,
+            iconKey: request.iconKey,
+            color: request.color,
+            status: .active,
+            version: nil
+        )
+    }
+}
 private struct CategoryManagementRow: View {
     let category: Category
     let onUpdate: (String) async -> Void

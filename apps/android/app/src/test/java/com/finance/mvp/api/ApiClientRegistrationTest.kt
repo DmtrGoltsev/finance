@@ -19,6 +19,7 @@ class ApiClientRegistrationTest {
             body = """
                 {
                   "accessToken": "registered-token",
+                  "refreshToken": "registered-refresh-token",
                   "tokenType": "Bearer",
                   "expiresAt": "2026-05-26T12:00:00Z",
                   "actor": {
@@ -52,6 +53,8 @@ class ApiClientRegistrationTest {
             assertTrue(session.isAuthenticated)
             assertEquals("household-1", session.householdId)
             assertEquals("registered-token", tokenStore.readAccessToken())
+            assertEquals("registered-refresh-token", tokenStore.readRefreshToken())
+            assertEquals("user-registered", tokenStore.readSession()?.authenticatedUserId)
 
             val request = capturedRequest.get()
             val requestLine = request.lineSequence().first()
@@ -72,6 +75,7 @@ class ApiClientRegistrationTest {
             body = """
                 {
                   "accessToken": "registered-token",
+                  "refreshToken": "registered-refresh-token",
                   "tokenType": "Bearer",
                   "expiresAt": "2026-05-26T12:00:00Z",
                   "actor": {"userId": "user-registered", "memberships": []}
@@ -119,6 +123,7 @@ class ApiClientRegistrationTest {
             assertTrue("Expected accepted result, got $registration", registration is RegistrationResult.Accepted)
             assertEquals("Registration request accepted", (registration as RegistrationResult.Accepted).message)
             assertNull(tokenStore.readAccessToken())
+            assertNull(tokenStore.readRefreshToken())
 
             val json = JSONObject(capturedRequest.get().substringAfter("\r\n\r\n"))
             assertEquals("existing.qa@local.test", json.getString("email"))
