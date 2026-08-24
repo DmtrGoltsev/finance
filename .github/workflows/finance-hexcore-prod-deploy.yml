@@ -163,14 +163,24 @@ jobs:
               exit 1
             fi
 
-            deploy_frontend="true"
-            deploy_backend="true"
-            run_migrations="true"
-            restart_backend="true"
-            expected_current_revision="auto"
-            target_revision="auto"
-            auto_db_backup="true"
-            deploy_mode="release_push"
+            if [[ "${GITHUB_REF_NAME}" == prod/release-security-incident-qa-rotation-* ]]; then
+              deploy_frontend="false"
+              deploy_backend="false"
+              run_migrations="false"
+              restart_backend="false"
+              expected_current_revision=""
+              target_revision=""
+              deploy_mode="security_incident_qa_rotation"
+            else
+              deploy_frontend="true"
+              deploy_backend="true"
+              run_migrations="true"
+              restart_backend="true"
+              expected_current_revision="auto"
+              target_revision="auto"
+              auto_db_backup="true"
+              deploy_mode="release_push"
+            fi
           elif [ "${event_name}" = "workflow_dispatch" ]; then
             deploy_frontend="${FINANCE_INPUT_DEPLOY_FRONTEND}"
             deploy_backend="${FINANCE_INPUT_DEPLOY_BACKEND}"
@@ -1366,7 +1376,11 @@ jobs:
           REMOTE
 
   rotate-production-qa-credential:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.rotate_production_qa_credential == 'true' }}
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.rotate_production_qa_credential == 'true') ||
+        (github.event_name == 'push' && startsWith(github.ref_name, 'prod/release-security-incident-qa-rotation-'))
+      }}
     runs-on: ubuntu-latest
     environment: production
 
@@ -1379,18 +1393,36 @@ jobs:
           FINANCE_DEPLOY_BACKEND: ${{ inputs.deploy_backend }}
           FINANCE_RUN_MIGRATIONS: ${{ inputs.run_migrations }}
           FINANCE_RESTART_BACKEND: ${{ inputs.restart_backend }}
+          FINANCE_EVENT_NAME: ${{ github.event_name }}
+          FINANCE_REF_NAME: ${{ github.ref_name }}
+          FINANCE_ACTOR: ${{ github.actor }}
+          FINANCE_REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          if [ "${FINANCE_CONFIRM_ROTATION}" != "rotate-production-qa-credential" ]; then
-            echo "::error::confirm_qa_credential_rotation must be rotate-production-qa-credential"
-            exit 1
-          fi
-          for flag in FINANCE_DEPLOY_FRONTEND FINANCE_DEPLOY_BACKEND FINANCE_RUN_MIGRATIONS FINANCE_RESTART_BACKEND; do
-            if [ "${!flag}" != "false" ]; then
-              echo "::error::Credential rotation requires all deploy, migration, and restart flags to be false"
+          if [ "${FINANCE_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ "${FINANCE_CONFIRM_ROTATION}" != "rotate-production-qa-credential" ]; then
+              echo "::error::confirm_qa_credential_rotation must be rotate-production-qa-credential"
               exit 1
             fi
-          done
+            for flag in FINANCE_DEPLOY_FRONTEND FINANCE_DEPLOY_BACKEND FINANCE_RUN_MIGRATIONS FINANCE_RESTART_BACKEND; do
+              if [ "${!flag}" != "false" ]; then
+                echo "::error::Credential rotation requires all deploy, migration, and restart flags to be false"
+                exit 1
+              fi
+            done
+          elif [ "${FINANCE_EVENT_NAME}" = "push" ]; then
+            if [[ "${FINANCE_REF_NAME}" != prod/release-security-incident-qa-rotation-* ]]; then
+              echo "::error::Incident rotation push requires the dedicated release branch prefix"
+              exit 1
+            fi
+            if [ "${FINANCE_ACTOR}" != "${FINANCE_REPOSITORY_OWNER}" ]; then
+              echo "::error::Incident rotation push must be initiated by the repository owner"
+              exit 1
+            fi
+          else
+            echo "::error::Unsupported incident rotation event"
+            exit 1
+          fi
 
       - name: Prepare pinned SSH trust
         shell: bash

@@ -63,6 +63,7 @@ def test_ci_only_dispatch_skips_production_environment_and_host_contact() -> Non
 
 def test_incident_qa_credential_rotation_is_isolated_and_fail_closed() -> None:
     workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    validation = _job(workflow, "validate-prod-inputs")
     rotation = _job(workflow, "rotate-production-qa-credential")
 
     assert "github.event_name == 'workflow_dispatch'" in rotation
@@ -70,6 +71,9 @@ def test_incident_qa_credential_rotation_is_isolated_and_fail_closed() -> None:
     assert "environment: production" in rotation
     assert "confirm_qa_credential_rotation must be" in rotation
     assert "all deploy, migration, and restart flags to be false" in rotation
+    assert "prod/release-security-incident-qa-rotation-" in rotation
+    assert "FINANCE_ACTOR" in rotation
+    assert "FINANCE_REPOSITORY_OWNER" in rotation
     assert "secrets.FINANCE_QA_EMAIL" in rotation
     assert "secrets.FINANCE_QA_PASSWORD" in rotation
     assert 'chmod 600 "${local_payload}"' in rotation
@@ -88,6 +92,16 @@ def test_incident_qa_credential_rotation_is_isolated_and_fail_closed() -> None:
         "FINANCE_QA_PASSWORD}'",
     ):
         assert forbidden not in rotation
+
+    assert "prod/release-security-incident-qa-rotation-" in validation
+    assert 'deploy_mode="security_incident_qa_rotation"' in validation
+    for assignment in (
+        'deploy_frontend="false"',
+        'deploy_backend="false"',
+        'run_migrations="false"',
+        'restart_backend="false"',
+    ):
+        assert assignment in validation
 
 
 def test_host_preflight_contract_is_read_only_and_complete() -> None:
