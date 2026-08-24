@@ -59,6 +59,18 @@ on:
         description: "Required when restart_backend=true. Enter finance-backend.service."
         required: false
         type: string
+      rotate_production_qa_credential:
+        description: "Security incident only: rotate the persistent production QA credential and revoke its sessions."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      confirm_qa_credential_rotation:
+        description: "Required when rotate_production_qa_credential=true. Enter rotate-production-qa-credential."
+        required: false
+        type: string
   push:
     branches:
       - "prod/release-*"
@@ -1352,3 +1364,174 @@ jobs:
             exit 1
           fi
           REMOTE
+
+  rotate-production-qa-credential:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.rotate_production_qa_credential == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Validate incident rotation authorization
+        shell: bash
+        env:
+          FINANCE_CONFIRM_ROTATION: ${{ inputs.confirm_qa_credential_rotation }}
+          FINANCE_DEPLOY_FRONTEND: ${{ inputs.deploy_frontend }}
+          FINANCE_DEPLOY_BACKEND: ${{ inputs.deploy_backend }}
+          FINANCE_RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+          FINANCE_RESTART_BACKEND: ${{ inputs.restart_backend }}
+        run: |
+          set -euo pipefail
+          if [ "${FINANCE_CONFIRM_ROTATION}" != "rotate-production-qa-credential" ]; then
+            echo "::error::confirm_qa_credential_rotation must be rotate-production-qa-credential"
+            exit 1
+          fi
+          for flag in FINANCE_DEPLOY_FRONTEND FINANCE_DEPLOY_BACKEND FINANCE_RUN_MIGRATIONS FINANCE_RESTART_BACKEND; do
+            if [ "${!flag}" != "false" ]; then
+              echo "::error::Credential rotation requires all deploy, migration, and restart flags to be false"
+              exit 1
+            fi
+          done
+
+      - name: Prepare pinned SSH trust
+        shell: bash
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Rotate credential and revoke all active sessions
+        shell: bash
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_QA_EMAIL: ${{ secrets.FINANCE_QA_EMAIL }}
+          FINANCE_QA_PASSWORD: ${{ secrets.FINANCE_QA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PORT}"
+          test -n "${FINANCE_QA_EMAIL}"
+          test -n "${FINANCE_QA_PASSWORD}"
+
+          ssh_key="${HOME}/.ssh/hexcore_prod_key"
+          known_hosts="${HOME}/.ssh/known_hosts"
+          remote_payload="/tmp/finance-qa-rotation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.bin"
+          local_payload="$(mktemp)"
+          cleanup() { rm -f "${local_payload}"; }
+          trap cleanup EXIT
+          chmod 600 "${local_payload}"
+          printf '%s\0%s\0' "${FINANCE_QA_EMAIL}" "${FINANCE_QA_PASSWORD}" > "${local_payload}"
+
+          scp -P "${HEXCORE_PROD_SSH_PORT}" \
+            -i "${ssh_key}" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="${known_hosts}" \
+            -o StrictHostKeyChecking=yes \
+            "${local_payload}" \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}:${remote_payload}"
+
+          rotation_result="$(ssh \
+            -p "${HEXCORE_PROD_SSH_PORT}" \
+            -i "${ssh_key}" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="${known_hosts}" \
+            -o StrictHostKeyChecking=yes \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_ROTATION_PAYLOAD='${remote_payload}' FINANCE_BACKEND_BASE='${FINANCE_BACKEND_BASE}' FINANCE_BACKEND_ENV_FILE='${FINANCE_BACKEND_ENV_FILE}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cleanup() { rm -f "${FINANCE_ROTATION_PAYLOAD}"; }
+          trap cleanup EXIT
+          test -f "${FINANCE_ROTATION_PAYLOAD}"
+          test "$(stat -c '%a' "${FINANCE_ROTATION_PAYLOAD}")" = "600"
+          test -L "${FINANCE_BACKEND_BASE}/current"
+          backend_release_dir="$(readlink -f "${FINANCE_BACKEND_BASE}/current")"
+          case "${backend_release_dir}" in
+            "${FINANCE_BACKEND_BASE}"/releases/*) ;;
+            *) echo "Current backend release is outside the release root" >&2; exit 1 ;;
+          esac
+          test -f "${FINANCE_BACKEND_ENV_FILE}"
+          test -x "${backend_release_dir}/venv/bin/python"
+          test -d "${backend_release_dir}/package/apps/backend"
+          set -a
+          . "${FINANCE_BACKEND_ENV_FILE}"
+          set +a
+          cd "${backend_release_dir}/package/apps/backend"
+          "${backend_release_dir}/venv/bin/python" - <<'PY'
+          import contextlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+
+          parts = Path(os.environ["FINANCE_ROTATION_PAYLOAD"]).read_bytes().split(b"\0")
+          if len(parts) != 3 or parts[2] != b"" or not parts[0] or not parts[1]:
+              raise SystemExit("Invalid credential rotation payload")
+          email = parts[0].decode("utf-8")
+          os.environ["FINANCE_BACKEND_PROVISION_PASSWORD"] = parts[1].decode("utf-8")
+
+          from app.ops.provision_initial_owner import main
+
+          captured = io.StringIO()
+          with contextlib.redirect_stdout(captured):
+              exit_code = main([
+                  "--email", email,
+                  "--display-name", "Finance Production QA Persistent Test Account - NEVER DELETE",
+                  "--household-name", "Finance QA Household",
+                  "--rotate-password",
+                  "--confirm-production",
+              ])
+          if exit_code != 0:
+              raise SystemExit("Credential rotation command failed")
+          result = json.loads(captured.getvalue())
+          if result.get("password_rotated") is not True:
+              raise SystemExit("Credential rotation did not update the password")
+          print(json.dumps({
+              "password_rotated": True,
+              "active_sessions_revoked": int(result.get("active_sessions_revoked", 0)),
+          }, sort_keys=True))
+          PY
+          REMOTE
+          )"
+
+          ROTATION_RESULT="${rotation_result}" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(os.environ["ROTATION_RESULT"])
+          if result.get("password_rotated") is not True:
+              raise SystemExit("Sanitized rotation result is invalid")
+          evidence = {
+              "commit_sha": os.environ["GITHUB_SHA"],
+              "source_ref": os.environ["GITHUB_REF_NAME"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "password_rotated": True,
+              "active_sessions_revoked": int(result.get("active_sessions_revoked", 0)),
+              "deploy_performed": False,
+              "migration_performed": False,
+              "backend_restart_performed": False,
+          }
+          Path("qa-credential-rotation-sanitized.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload sanitized rotation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-qa-credential-rotation-${{ github.run_id }}
+          path: qa-credential-rotation-sanitized.json
+          retention-days: 30
+          if-no-files-found: error

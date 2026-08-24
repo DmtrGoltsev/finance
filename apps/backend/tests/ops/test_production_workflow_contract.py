@@ -61,6 +61,35 @@ def test_ci_only_dispatch_skips_production_environment_and_host_contact() -> Non
     assert "environment: production" not in _job(workflow, "production-package-gate")
 
 
+def test_incident_qa_credential_rotation_is_isolated_and_fail_closed() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    rotation = _job(workflow, "rotate-production-qa-credential")
+
+    assert "github.event_name == 'workflow_dispatch'" in rotation
+    assert "inputs.rotate_production_qa_credential == 'true'" in rotation
+    assert "environment: production" in rotation
+    assert "confirm_qa_credential_rotation must be" in rotation
+    assert "all deploy, migration, and restart flags to be false" in rotation
+    assert "secrets.FINANCE_QA_EMAIL" in rotation
+    assert "secrets.FINANCE_QA_PASSWORD" in rotation
+    assert 'chmod 600 "${local_payload}"' in rotation
+    assert "--rotate-password" in rotation
+    assert "--confirm-production" in rotation
+    assert 'rm -f "${FINANCE_ROTATION_PAYLOAD}"' in rotation
+    assert '"deploy_performed": False' in rotation
+    assert '"migration_performed": False' in rotation
+    assert '"backend_restart_performed": False' in rotation
+
+    for forbidden in (
+        "deploy-backend:",
+        "deploy-frontend:",
+        "alembic upgrade",
+        "systemctl restart",
+        "FINANCE_QA_PASSWORD}'",
+    ):
+        assert forbidden not in rotation
+
+
 def test_host_preflight_contract_is_read_only_and_complete() -> None:
     host_preflight = _job(DEPLOY_WORKFLOW.read_text(encoding="utf-8"), "host-preflight")
 
