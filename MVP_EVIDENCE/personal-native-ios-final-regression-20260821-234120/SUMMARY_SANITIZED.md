@@ -1,9 +1,9 @@
 # Finance personal/native iOS final regression
 
-Run date: 2026-08-21 (Europe/Moscow)  
-Branch: `codex/ios-native-personal-parity-20260820`  
-Commit: `96aa58226ad8f80834ea333192ebace7885d69c2`  
-Worktree at start: clean and synchronized with `origin`  
+Run date: 2026-08-21 (Europe/Moscow)
+Branch: `codex/ios-native-personal-parity-20260820`
+Commit: `96aa58226ad8f80834ea333192ebace7885d69c2`
+Worktree at start: clean and synchronized with `origin`
 Result: **PASS with an external HTTPS release blocker**
 
 This report is sanitized. It contains no passwords, tokens, cookies, CSRF values,
@@ -80,4 +80,3 @@ The APK binaries are build outputs and are not stored in this evidence folder.
 The same evidence directory contains local generated text logs for backend,
 Android, PWA, iOS run metadata and the personal-only scan. They are intentionally
 ignored by git; only this curated sanitized summary is trackable.
-

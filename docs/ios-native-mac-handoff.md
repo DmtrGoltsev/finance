@@ -211,4 +211,3 @@ Use the paid developer team when stable long-lived installation is required.
   does not prove iPhone signing, installation or device behavior.
 - Backend/PWA compatibility types may still contain legacy household vocabulary;
   native product UI and reachable API behavior are personal-only.
-
