@@ -32,7 +32,7 @@ Android APK selection:
 
 - Local E2E must install `apps/android/app/build/outputs/apk/debug/app-debug.apk` built by `.\gradlew.bat :app:assembleDebug`; its default `BuildConfig.FINANCE_API_BASE_URL` is `http://10.0.2.2:8000`.
 - If the local backend uses another host port, rebuild debug with `-PlocalFinanceApiBaseUrl=http://10.0.2.2:<port>`.
-- Prod E2E must not reuse the local debug APK. Use an explicit production-config build, for example `.\gradlew.bat :app:assembleRelease -PfinanceApiBaseUrl=http://45.10.110.42/finance-api`, after local E2E passes and prod preflight is approved.
+- Prod E2E must not reuse the local debug APK. Use an explicit production-config build, for example `.\gradlew.bat :app:assembleRelease -PfinanceApiBaseUrl=https://<finance-production-api>/finance-api`, after local E2E passes and prod preflight is approved.
 
 Recommended evidence root per run: `MVP_EVIDENCE/offline-first-release-qa-<YYYYMMDD-HHMMSS>/`.
 
