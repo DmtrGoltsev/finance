@@ -1,6 +1,8 @@
 # Finance MVP Monorepo
 
-Closed MVP for a manual-entry personal and household finance product. The product tracks owner-only personal finance data and shared household finance data while preserving strict visibility boundaries between users.
+> **Current client status.** The user-facing client mode is personal-only. Android production is released; native iOS code and CI are approved, but physical-iPhone signing, installation, and login smoke have not been performed. `household`, `shared`, and `membership` remain legacy backend/domain/wire-compatibility vocabulary and are not a currently available user mode. This transition is documented in `docs/current-status.md` and `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md` at immutable documentation ref `201b78bf0f8a59681d187bf2925e956950abbada`; deployed production code remains `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`.
+
+The repository retains the original closed-MVP specification for a manual-entry personal and household finance product. That historical specification describes owner-only personal data and shared household data with strict visibility boundaries; it must not be read as the current client feature set.
 
 ## Chosen Stack
 
@@ -34,6 +36,7 @@ feature work must preserve the privacy invariants below.
 ## Privacy Invariants
 
 - Personal data is owner-only.
+- The shared-data rules below remain backend/API compatibility invariants; they do not expose a shared user mode in the current clients.
 - Shared data is visible only to active members of the same `Household`.
 - Reports, exports, search, autocomplete, pagination, caches, counts, and aggregates must filter visible rows before any aggregation or materialization.
 - `shared_family_report` includes only shared household rows.
