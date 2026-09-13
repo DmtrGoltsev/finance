@@ -27,6 +27,11 @@ Password rotation workflow only:
   The workflow uses `--require-existing-active`, so it fails atomically without
   creating a user, household, or membership when the fixed account is missing
   or does not have an active membership.
+  Run it only from a tag matching `prod/release-password-rotation-*`. The
+  workflow checks out only the audited provisioning script at a pinned action
+  revision, verifies its hardcoded SHA-256 before and after upload, executes it
+  from a per-run `/tmp` path with the current release virtual environment, and
+  removes it without changing the current release, service, symlinks, or schema.
 
 Do not store database passwords, `FINANCE_BACKEND_DATABASE_URL`, auth token hash
 secrets, cookie secrets, one-time operator passwords, backup encryption keys, or
