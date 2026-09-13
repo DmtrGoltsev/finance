@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import textwrap
@@ -9,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github/workflows/finance-hexcore-prod-deploy.yml"
 ROLLBACK_WORKFLOW = REPO_ROOT / ".github/workflows/finance-prod-rollback.yml"
 ROTATION_WORKFLOW = REPO_ROOT / ".github/workflows/finance-prod-rotate-password.yml"
+ROTATION_SCRIPT = REPO_ROOT / "apps/backend/src/app/ops/provision_initial_owner.py"
 RUNBOOK = REPO_ROOT / "docs/production/finance-cicd-runbook.md"
 PREFLIGHT = REPO_ROOT / "docs/production/finance-release-preflight-checklist.md"
 
@@ -142,6 +144,7 @@ def test_password_rotation_validates_unsanitized_result_only_on_runner() -> None
 
     assert "jq -e" not in remote_script
     assert 'rotation_json="$(' in workflow
+    assert "--rotate-password --require-existing-active --confirm-production" in workflow
     assert '.email_normalized == "bondarenko21-aa@yandex.ru"' in workflow
     assert ".user_created == false" in workflow
     assert ".household_created == false" in workflow
@@ -151,3 +154,10 @@ def test_password_rotation_validates_unsanitized_result_only_on_runner() -> None
         'echo "password_rotated=true active_sessions_revoked=${active_sessions_revoked}"'
         in workflow
     )
+
+
+def test_password_rotation_pins_the_exact_audited_script() -> None:
+    workflow = ROTATION_WORKFLOW.read_text(encoding="utf-8")
+    expected_sha256 = hashlib.sha256(ROTATION_SCRIPT.read_bytes()).hexdigest()
+
+    assert f"FINANCE_AUDITED_SCRIPT_SHA256: {expected_sha256}" in workflow
