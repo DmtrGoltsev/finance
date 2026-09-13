@@ -24,6 +24,9 @@ Password rotation workflow only:
   transfers it base64-encoded over SSH stdin, restores it into the process
   environment on the host, and never places it in dispatch inputs, command-line
   arguments, logs, or artifacts. Delete or replace the secret after the run.
+  The workflow uses `--require-existing-active`, so it fails atomically without
+  creating a user, household, or membership when the fixed account is missing
+  or does not have an active membership.
 
 Do not store database passwords, `FINANCE_BACKEND_DATABASE_URL`, auth token hash
 secrets, cookie secrets, one-time operator passwords, backup encryption keys, or
