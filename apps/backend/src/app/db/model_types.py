@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, text
+from sqlalchemy import DateTime, ForeignKey, Numeric, func, text
 from sqlalchemy.orm import MappedColumn, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -29,5 +29,5 @@ def updated_timestamp() -> MappedColumn[Any]:
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
-        onupdate=text("now()"),
+        onupdate=func.now(),
     )

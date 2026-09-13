@@ -4,8 +4,10 @@ Run date: 2026-08-22 (Europe/Moscow)
 
 Branch: `codex/ios-native-current-parity-20260822`
 
-Integrated deliverable: fetched remote head of
-`origin/codex/ios-native-current-parity-20260822`.
+Deployed code SHA: `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`.
+
+Immutable release branch:
+`prod/release-finance-ios-current-parity-20260823-db7ebdd`.
 
 Required ancestors:
 
@@ -13,13 +15,12 @@ Required ancestors:
 - production pipeline: `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c`;
 - iOS personal transport security: `744a422c5d012149f6c0051dcaf291623fd9a19c`.
 
-Resolve the exact deliverable SHA with
-`git fetch origin && git rev-parse origin/codex/ios-native-current-parity-20260822`
-and require all three `git merge-base --is-ancestor <sha> <head>` checks. This
-identity rule deliberately avoids recording a false self-referential SHA in the
-same commit that contains this report.
+Resolve the immutable release branch and require it to equal the deployed code
+SHA above, then require all three `git merge-base --is-ancestor <sha> <head>`
+checks. Documentation-only commits may follow on the integration branch and do
+not change the deployed code identity.
 
-Result: **CODE/CI APPROVE with external production and device blockers**
+Result: **CODE/CI/PRODUCTION APPROVE; physical iPhone NOT RUN**
 
 This report is sanitized. It contains no passwords, access/refresh tokens,
 cookies, session identifiers, Apple signing data, private keys, production
@@ -34,30 +35,37 @@ Worker GitHub Actions:
 - repeated iOS security proof:
   `https://github.com/DmtrGoltsev/finance/actions/runs/32602392746`.
 
-Final acceptance additionally requires a successful `iOS Build` run and a
-CI-only `Finance HexCore Production CI/CD` dispatch on the exact fetched target
-head. Their run IDs and artifact digests are recorded in the external delivery
-report; adding them here would create a new untested commit.
+Final exact-SHA runs:
+
+- iOS Build: `https://github.com/DmtrGoltsev/finance/actions/runs/32603535573`;
+- CI-only package proof:
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32604090062`;
+- production deploy:
+  `https://github.com/DmtrGoltsev/finance/actions/runs/32604838031`.
 
 | Gate | Result |
 | --- | --- |
-| Exact branch/ancestry | PASS when fetched target head contains all required ancestors above |
+| Exact release branch/SHA/ancestry | PASS: immutable release branch resolves to `db7ebdd...` and contains all required ancestors |
 | Pipeline worker CI-only | PASS: both packages and common gate; host/deploy skipped |
-| CI backend auth/migration tests | PASS: 63 |
+| CI backend auth/migration tests | PASS |
 | Backend Ruff | PASS |
 | Alembic heads | PASS: one head, `20260822_0019` |
 | XcodeGen | PASS |
 | iOS Debug build | PASS |
 | iOS Release build | PASS; ordinary Release remains HTTPS-only |
 | PersonalSideloadHTTP build and plist policy | PASS; separate identity/manual development signing/no archive/export |
-| XCTest | PASS: normal suite plus 10/10 dedicated personal transport tests |
+| XCTest | PASS: normal model 87/0 plus 10/0 dedicated personal transport tests |
 | Launch UI test | PASS: 1/1 |
 | Physical signing/install | NOT RUN |
 
-Latest repeated security worker artifact: `ios-build-test-evidence-32602392746`,
-id `9483356517`, digest
-`sha256:088b7f69e2702cecb729e7e4931356943d87c315d37ec88f1366f43fbacb0181`.
-The artifact is retained by GitHub Actions and was not copied into the repository.
+Final iOS artifact: `ios-build-test-evidence-32603535573`, id `9483613408`,
+digest
+`sha256:52d98838dd947420e0093c308c58286ab3f5db831017030c4f64be61f6c7bc43`.
+CI-only artifacts: frontend `9483667044`, digest
+`sha256:0e430fdb2cfca47dcac29d18cec1351b45e17807fb2524800337c78a1db28bed`;
+backend `9483674722`, digest
+`sha256:d38af135dab7b04ca1ce5c72c920f9e3f5b542eb73284964465d60fe3b522864`.
+Artifacts are retained by GitHub Actions and were not committed.
 
 ## Closed review findings
 
@@ -90,9 +98,9 @@ reviewed by 2026-11-22, and does not reduce the accepted plaintext risk.
 - personal-only UI/API contracts and OCR online-only boundary;
 - payment-account filtering and compact month switching.
 
-## Production deploy preflight
+## Production deploy
 
-Result: **BLOCKED / NOT DEPLOYED**.
+Result: **PASS**.
 
 - GitHub environment `production`: no Required reviewer under the solo-owner
   waiver; custom deployment branch policy permits only `prod/release-*`.
@@ -101,14 +109,31 @@ Result: **BLOCKED / NOT DEPLOYED**.
   deployment. Backend precedes frontend.
 - A CI-only dispatch with all production actions false does not request the
   production environment, host access or deployment.
-- No release branch was pushed for this evidence update.
-- Production database revision: last documented as `20260618_0017`; no fresh
-  host preflight was claimed by this evidence update.
-- Public health: HTTP 200.
+- Owner push to the immutable release branch triggered run `32604838031` once;
+  no duplicate dispatch occurred.
+- Old backend: `finance-personal-backend-20260822-12a1b91f`; old frontend:
+  `20260726T220603Z-55f4ac53`.
+- New backend and frontend release ID: `20260822T231803Z-db7ebdd4`.
+- Backend path: `/opt/finance/releases/20260822T231803Z-db7ebdd4`;
+  frontend path: `/var/www/finance/releases/20260822T231803Z-db7ebdd4`.
+- `finance-backend.service` is active and wired through `/opt/finance/current`.
+- Database migration PASS:
+  `20260618_0017 -> 20260822_0018 -> 20260822_0019`.
+- Backup before the first upgrade:
+  `/opt/finance/backups/postgres/finance_prod-20260822T232027Z-20260822T231803Z-db7ebdd4-20260618_0017-to-20260822_0019.dump`;
+  SHA-256
+  `238d8d441b5bacca2a5f0ddba728cdf4066c34bd0e32a6c1a589f13cfcd57142`;
+  sibling evidence file suffix `.dump.evidence.txt`.
+- Smoke PASS: health `200`; OpenAPI `200`, 42 routes; frontend shell,
+  manifest, JS, CSS, icon and service worker `200`; scope `/finance/`; hard
+  reload current; login `201`; refresh `200` and rotated; logout `204`;
+  post-logout `401`; personal read-only endpoints `200`.
+- No rollback was required. Release branch is retained for the rollback window.
 - Trusted HTTPS/FQDN: absent.
-- Alembic head `20260822_0019` is not applied to production.
 
-No direct SSH/SCP deploy was performed and production data was not mutated.
+Deployment used GitHub Actions only. No direct manual SSH/SCP deploy was
+performed. Sanitized downloaded workflow evidence is stored outside Git at
+`C:\Users\style\Documents\Codex\Finance-release-evidence\32604838031`.
 
 ## Explicit non-results and blockers
 

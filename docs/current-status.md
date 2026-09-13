@@ -38,9 +38,9 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   `32540824773` at source `12a1b91f20c2ce3f48bcae6919b76eb976b12c3f`.
   Release path: `/opt/finance/releases/finance-personal-backend-20260822-12a1b91f`.
   Health, OpenAPI, login and refresh PASS; frontend deploy skipped.
-- Backend and schema were unchanged from the deployed baseline. Migrations and
-  backup were intentionally skipped, DB stayed unchanged, last confirmed
-  revision is `20260618_0017`. Rollback candidate:
+- For that historical Android-only backend release, backend/schema were
+  unchanged. Migrations and backup were intentionally skipped; the then-current
+  revision was `20260618_0017`. Rollback candidate at that time:
   `/opt/finance/releases/20260726T220603Z-55f4ac53`.
 - Residual coverage: full UI offline create/reconnect/sync was not rerun on the
   final APK; OCR was not exercised with a real image; Android 17 Espresso has a
@@ -52,10 +52,12 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
 ## Native iOS current parity (2026-08-22)
 
 - Integrated branch: `codex/ios-native-current-parity-20260822`.
-- Deliverable identity is the fetched remote branch head, not a SHA written into
-  the same commit as this status file. Verify it with
-  `git fetch origin && git rev-parse origin/codex/ios-native-current-parity-20260822`.
-  The fetched head must contain all three required ancestors:
+- Deployed code SHA: `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`.
+  Later commits on the integration branch may contain documentation only; use
+  the immutable release branch
+  `prod/release-finance-ios-current-parity-20260823-db7ebdd` when reproducing
+  the deployed source.
+- The deployed SHA contains all three required ancestors:
   `4e1ef36724f804d648f2ea385da5259688915325` (solo-owner governance),
   `6d3f4e3cdb1ed7b333879603789d1ca9a1bb080c` (production pipeline gates), and
   `744a422c5d012149f6c0051dcaf291623fd9a19c` (personal HTTP isolation).
@@ -70,11 +72,16 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   the dedicated personal transport tests all PASS. The built-plist check is
   fail-closed and verifies target identity, ATS, manual Apple Development
   signing settings and the no-archive/no-export policy.
-- Acceptance of the current fetched integration head additionally requires a
-  successful `iOS Build` run and a CI-only production workflow dispatch on that
-  exact head. Run IDs and artifact digests belong in the external delivery
-  report because adding them here would create a new, untested self-referential
-  commit.
+- Final iOS CI run `32603535573` on the exact deployed SHA is successful:
+  Debug, ordinary Release and PersonalSideloadHTTP builds PASS; normal XCTest/UI
+  model `87/0`; personal transport XCTest `10/0`. Artifact `9483613408`, digest
+  `sha256:52d98838dd947420e0093c308c58286ab3f5db831017030c4f64be61f6c7bc43`.
+- CI-only production workflow run `32604090062` is successful: both package
+  lanes and common package gate PASS; host preflight and deploy jobs SKIPPED.
+  Frontend artifact `9483667044`, digest
+  `sha256:0e430fdb2cfca47dcac29d18cec1351b45e17807fb2524800337c78a1db28bed`;
+  backend artifact `9483674722`, digest
+  `sha256:d38af135dab7b04ca1ce5c72c920f9e3f5b542eb73284964465d60fe3b522864`.
 - Integrated behavior includes secure persistent session without password
   storage, single-flight refresh, safe `403`, offline logout, account-isolated
   SwiftData/sync, JSON migration/recovery, transactional/stale-response guards,
@@ -82,8 +89,8 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   selected-month pending investments, personal-only behavior, online-only OCR,
   payment-account filtering and compact month switching.
 - Worker evidence: secure session run `32554005096`, SwiftData/sync run
-  `32554343934`, UX parity run `32552813248`. Integrated status is based on
-  final run `32563222674`, not on worker runs alone.
+  `32554343934`, UX parity run `32552813248`. Final integration status is based
+  on run `32603535573` at exact SHA `db7ebdd...`, not on worker runs alone.
 - Review cycle 1 findings are closed: the 72-hour offline restore cap is
   enforced on the real Keychain restore path; refresh extends the server
   session atomically; offline edit/delete affects analytics before sync; and
@@ -99,18 +106,34 @@ Production MVP получил **functional GO** на 2026-05-19 для iPhone/br
   cannot be archived/exported, and is restricted to the exact waived HTTP
   endpoint. The owner waiver must be reviewed by 2026-11-22; broad ATS
   exceptions remain prohibited.
-- **PRODUCTION NOT DEPLOYED:** the production workflow now enforces both package
-  lanes -> common gate -> host preflight -> backend -> frontend. A CI-only run
-  requests no production environment or host access. No `prod/release-*` branch
-  was created or pushed for this integration; no host preflight, backup,
-  migration, restart or deployment is claimed. Production DB remains last
-  documented at `20260618_0017`; migrations `20260822_0018` and
-  `20260822_0019` remain unapplied until a separately authorized release.
+- **PRODUCTION DEPLOYED:** owner push to release branch above triggered GitHub
+  Actions run `32604838031`, which completed successfully in the required order:
+  packages -> common gate -> host preflight -> backend -> frontend. Both current
+  symlinks now point to release `20260822T231803Z-db7ebdd4`; backend service is
+  active through `/opt/finance/current`.
+- Production DB migrated `20260618_0017 -> 20260822_0018 -> 20260822_0019`.
+  Pre-upgrade backup:
+  `/opt/finance/backups/postgres/finance_prod-20260822T232027Z-20260822T231803Z-db7ebdd4-20260618_0017-to-20260822_0019.dump`,
+  SHA-256 `238d8d441b5bacca2a5f0ddba728cdf4066c34bd0e32a6c1a589f13cfcd57142`;
+  sibling evidence file uses suffix `.dump.evidence.txt`.
+- Production smoke PASS: health `200`, OpenAPI `200` with 42 routes, frontend
+  shell/manifest/JS/CSS/icon/service worker `200`, scope `/finance/`, hard reload
+  current; login `201`, refresh `200` with rotation, logout `204`, post-logout
+  request `401`, personal read-only endpoints `200`. No rollback was required.
 - QA model: `docs/testing/ios-native-parity-qa-test-model.md`.
 - Sanitized evidence:
   `MVP_EVIDENCE/native-ios-current-parity-20260822/SUMMARY_SANITIZED.md`.
 
 ## Production
+
+- Current production source/release (2026-08-23): deployed code
+  `db7ebdd41a35018ae59e1fc4f5c5e38f0ed37de6`, release ID
+  `20260822T231803Z-db7ebdd4`, GitHub Actions run `32604838031`, database
+  revision `20260822_0019`.
+- Previous backend `finance-personal-backend-20260822-12a1b91f` and frontend
+  `20260726T220603Z-55f4ac53` are retained rollback candidates. The older
+  entries below are historical release records, not the current production
+  pointers.
 
 - Backend commit: `26b487d61b7d2d6de704f0a632bcb08ff7f240f7` / short `26b487d` (deployed 2026-06-12).
 - PWA commit: `8b0447a` / short `8b0447a` (deployed 2026-06-12, includes registration + all 18 Android-PWA gap closures).
