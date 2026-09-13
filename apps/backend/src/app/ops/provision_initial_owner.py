@@ -51,6 +51,7 @@ def provision_initial_owner(
     display_name: str,
     household_name: str,
     rotate_password: bool = False,
+    require_existing_active: bool = False,
     confirm_production: bool = False,
     now: datetime | None = None,
 ) -> ProvisionInitialOwnerResult:
@@ -61,6 +62,9 @@ def provision_initial_owner(
     """
 
     _validate_runtime_guards(settings, confirm_production=confirm_production)
+
+    if require_existing_active and not rotate_password:
+        raise ProvisioningError("--require-existing-active requires --rotate-password")
 
     normalized_email = normalize_email(email)
     if not normalized_email:
@@ -79,6 +83,21 @@ def provision_initial_owner(
                 User.record_status != "deleted",
             )
         ).scalar_one_or_none()
+
+        active_membership = None
+        if require_existing_active:
+            if user is None:
+                raise ProvisioningError("required existing active user was not found")
+            if user.auth_status != "active" or user.record_status != "active":
+                raise ProvisioningError("required existing user is not active")
+            active_membership = session.execute(
+                select(Membership).where(
+                    Membership.user_id == user.id,
+                    Membership.membership_status == "active",
+                )
+            ).scalar_one_or_none()
+            if active_membership is None:
+                raise ProvisioningError("required existing active membership was not found")
 
         user_created = user is None
         password_rotated = False
@@ -113,12 +132,13 @@ def provision_initial_owner(
                 password_rotated = True
                 revoked_sessions = _revoke_active_sessions(session, user.id, current_time)
 
-        active_membership = session.execute(
-            select(Membership).where(
-                Membership.user_id == user.id,
-                Membership.membership_status == "active",
-            )
-        ).scalar_one_or_none()
+        if active_membership is None:
+            active_membership = session.execute(
+                select(Membership).where(
+                    Membership.user_id == user.id,
+                    Membership.membership_status == "active",
+                )
+            ).scalar_one_or_none()
 
         household_created = False
         membership_created = False
@@ -212,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--display-name", default="Finance QA Owner")
     parser.add_argument("--household-name", default="Finance QA Household")
     parser.add_argument("--rotate-password", action="store_true")
+    parser.add_argument("--require-existing-active", action="store_true")
     parser.add_argument("--confirm-production", action="store_true")
     args = parser.parse_args(argv)
 
@@ -223,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             display_name=args.display_name,
             household_name=args.household_name,
             rotate_password=args.rotate_password,
+            require_existing_active=args.require_existing_active,
             confirm_production=args.confirm_production,
         )
     except ProvisioningError as exc:
