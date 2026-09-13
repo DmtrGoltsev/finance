@@ -77,7 +77,9 @@ def test_provision_initial_owner_is_auth_only_and_idempotent(
         assert connection.execute(select(Session)).all() == []
 
 
-def test_rotate_password_revokes_existing_sessions(sqlite_settings: Settings) -> None:
+def test_guarded_rotation_without_memberships_rotates_and_revokes_only(
+    sqlite_settings: Settings,
+) -> None:
     created = provision_initial_owner(
         settings=sqlite_settings,
         email="owner@example.test",
@@ -89,6 +91,10 @@ def test_rotate_password_revokes_existing_sessions(sqlite_settings: Settings) ->
 
     engine = sync_engine_for_url(sqlite_settings.database_url)
     with engine.begin() as connection:
+        connection.execute(
+            Membership.__table__.delete().where(Membership.user_id == UUID(created.user_id))
+        )
+        connection.execute(Household.__table__.delete())
         connection.execute(
             Session.__table__.insert().values(
                 id=uuid4(),
@@ -122,10 +128,17 @@ def test_rotate_password_revokes_existing_sessions(sqlite_settings: Settings) ->
 
     assert rotated.password_rotated is True
     assert rotated.active_sessions_revoked == 1
+    assert rotated.user_created is False
+    assert rotated.household_created is False
+    assert rotated.membership_created is False
+    assert rotated.household_id is None
+    assert rotated.membership_id is None
 
     with OrmSession(engine, expire_on_commit=False, future=True) as db_session:
         user = db_session.execute(select(User)).scalar_one()
         session = db_session.execute(select(Session)).scalar_one()
+        assert db_session.execute(select(Household)).all() == []
+        assert db_session.execute(select(Membership)).all() == []
 
     assert user.session_version == 2
     assert Pbkdf2Sha256PasswordHashingBackend().verify_password(
@@ -158,7 +171,7 @@ def test_require_existing_active_refuses_missing_user_without_creating_rows(
         assert connection.execute(select(Membership)).all() == []
 
 
-def test_require_existing_active_refuses_inactive_membership_without_mutation(
+def test_require_existing_active_refuses_inactive_user_without_mutation(
     sqlite_settings: Settings,
 ) -> None:
     created = provision_initial_owner(
@@ -172,12 +185,12 @@ def test_require_existing_active_refuses_inactive_membership_without_mutation(
     engine = sync_engine_for_url(sqlite_settings.database_url)
     with engine.begin() as connection:
         connection.execute(
-            Membership.__table__.update()
-            .where(Membership.user_id == UUID(created.user_id))
-            .values(membership_status="revoked", updated_at=BASE_TIME)
+            User.__table__.update()
+            .where(User.id == UUID(created.user_id))
+            .values(auth_status="deactivated", updated_at=BASE_TIME)
         )
 
-    with pytest.raises(ProvisioningError, match="active membership"):
+    with pytest.raises(ProvisioningError, match="user is not active"):
         provision_initial_owner(
             settings=sqlite_settings,
             email="owner@example.test",
@@ -196,11 +209,11 @@ def test_require_existing_active_refuses_inactive_membership_without_mutation(
     assert user.session_version == 1
     assert Pbkdf2Sha256PasswordHashingBackend().verify_password(PASSWORD, user.password_hash)
     assert len(memberships) == 1
-    assert memberships[0].membership_status == "revoked"
+    assert memberships[0].membership_status == "active"
     assert len(households) == 1
 
 
-def test_require_existing_active_refuses_missing_membership_without_creating_one(
+def test_require_existing_active_leaves_existing_membership_untouched(
     sqlite_settings: Settings,
 ) -> None:
     created = provision_initial_owner(
@@ -212,30 +225,28 @@ def test_require_existing_active_refuses_missing_membership_without_creating_one
         now=BASE_TIME,
     )
     engine = sync_engine_for_url(sqlite_settings.database_url)
-    with engine.begin() as connection:
-        connection.execute(
-            Membership.__table__.delete().where(Membership.user_id == UUID(created.user_id))
-        )
-        connection.execute(Household.__table__.delete())
-
-    with pytest.raises(ProvisioningError, match="active membership"):
-        provision_initial_owner(
-            settings=sqlite_settings,
-            email="owner@example.test",
-            password="new correct horse battery staple",
-            display_name="Owner",
-            household_name="Replacement Household",
-            rotate_password=True,
-            require_existing_active=True,
-            now=BASE_TIME + timedelta(minutes=5),
-        )
+    rotated = provision_initial_owner(
+        settings=sqlite_settings,
+        email="owner@example.test",
+        password="new correct horse battery staple",
+        display_name="Owner",
+        household_name="Replacement Household",
+        rotate_password=True,
+        require_existing_active=True,
+        now=BASE_TIME + timedelta(minutes=5),
+    )
 
     with OrmSession(engine, expire_on_commit=False, future=True) as db_session:
         user = db_session.execute(select(User)).scalar_one()
-        assert db_session.execute(select(Membership)).all() == []
-        assert db_session.execute(select(Household)).all() == []
-    assert user.session_version == 1
-    assert Pbkdf2Sha256PasswordHashingBackend().verify_password(PASSWORD, user.password_hash)
+        membership = db_session.execute(select(Membership)).scalar_one()
+        household = db_session.execute(select(Household)).scalar_one()
+    assert rotated.household_id is None
+    assert rotated.membership_id is None
+    assert user.session_version == 2
+    assert membership.id == UUID(created.membership_id or "")
+    assert membership.membership_status == "active"
+    assert household.id == UUID(created.household_id or "")
+    assert household.name == "QA Household"
 
 
 def test_require_existing_active_validates_password_before_mutation(

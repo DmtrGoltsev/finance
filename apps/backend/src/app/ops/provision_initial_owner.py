@@ -59,6 +59,10 @@ def provision_initial_owner(
 
     The command intentionally inserts only auth bootstrap rows. It does not create
     accounts, categories, transactions, reports, imports, or sessions.
+
+    ``require_existing_active`` is a rotation-only safety mode. It requires an
+    existing active user and returns before the bootstrap path, so household and
+    membership rows are never queried, created, or modified in that mode.
     """
 
     _validate_runtime_guards(settings, confirm_production=confirm_production)
@@ -84,20 +88,27 @@ def provision_initial_owner(
             )
         ).scalar_one_or_none()
 
-        active_membership = None
         if require_existing_active:
             if user is None:
                 raise ProvisioningError("required existing active user was not found")
             if user.auth_status != "active" or user.record_status != "active":
                 raise ProvisioningError("required existing user is not active")
-            active_membership = session.execute(
-                select(Membership).where(
-                    Membership.user_id == user.id,
-                    Membership.membership_status == "active",
-                )
-            ).scalar_one_or_none()
-            if active_membership is None:
-                raise ProvisioningError("required existing active membership was not found")
+            _require_password(password)
+            user.password_hash = password_hasher.hash_password(password or "")
+            user.session_version = int(user.session_version or 1) + 1
+            user.updated_at = current_time
+            revoked_sessions = _revoke_active_sessions(session, user.id, current_time)
+            return ProvisionInitialOwnerResult(
+                user_id=str(user.id),
+                email_normalized=normalized_email,
+                user_created=False,
+                password_rotated=True,
+                household_id=None,
+                household_created=False,
+                membership_id=None,
+                membership_created=False,
+                active_sessions_revoked=revoked_sessions,
+            )
 
         user_created = user is None
         password_rotated = False
@@ -132,13 +143,12 @@ def provision_initial_owner(
                 password_rotated = True
                 revoked_sessions = _revoke_active_sessions(session, user.id, current_time)
 
-        if active_membership is None:
-            active_membership = session.execute(
-                select(Membership).where(
-                    Membership.user_id == user.id,
-                    Membership.membership_status == "active",
-                )
-            ).scalar_one_or_none()
+        active_membership = session.execute(
+            select(Membership).where(
+                Membership.user_id == user.id,
+                Membership.membership_status == "active",
+            )
+        ).scalar_one_or_none()
 
         household_created = False
         membership_created = False
