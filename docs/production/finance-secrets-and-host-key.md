@@ -17,6 +17,14 @@ Optional:
 
 - `HEXCORE_PROD_SSH_PORT`: SSH port. The workflow defaults to `22` when unset.
 
+Password rotation workflow only:
+
+- `FINANCE_PROD_ROTATION_PASSWORD`: the new password for the fixed Finance
+  account. Store it only as a `production` environment secret. The workflow
+  transfers it base64-encoded over SSH stdin, restores it into the process
+  environment on the host, and never places it in dispatch inputs, command-line
+  arguments, logs, or artifacts. Delete or replace the secret after the run.
+
 Do not store database passwords, `FINANCE_BACKEND_DATABASE_URL`, auth token hash
 secrets, cookie secrets, one-time operator passwords, backup encryption keys, or
 host environment file contents in GitHub for this workflow.
