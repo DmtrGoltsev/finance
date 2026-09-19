@@ -13,8 +13,11 @@ from pydantic import (
     HttpUrl,
     StringConstraints,
     UrlConstraints,
+    field_validator,
     model_validator,
 )
+
+from .instrument_resolver import is_valid_isin, is_valid_secid
 
 
 def to_camel(value: str) -> str:
@@ -129,7 +132,10 @@ class PortfolioPositionInput(ApiModel):
     )
 
     instrument_name: ShortText
-    ticker: Annotated[str | None, StringConstraints(min_length=1, max_length=32)] = None
+    ticker: Annotated[
+        str | None,
+        StringConstraints(min_length=1, max_length=32, pattern=r"^[A-Z0-9][A-Z0-9._-]{0,31}$"),
+    ] = None
     isin: Annotated[str | None, StringConstraints(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None
     instrument_type: InstrumentType
     risk_bucket: RiskBucket
@@ -150,6 +156,20 @@ class PortfolioPositionInput(ApiModel):
         if not self.ticker and not self.isin:
             raise ValueError("ticker/SECID or ISIN is required")
         return self
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_secid(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_secid(value):
+            raise ValueError("invalid SECID format")
+        return value
+
+    @field_validator("isin")
+    @classmethod
+    def validate_isin(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_isin(value):
+            raise ValueError("invalid ISIN")
+        return value
 
 
 class PortfolioImportConfirmRequest(ApiModel):
@@ -219,7 +239,10 @@ class RecommendationActionInput(ApiModel):
     )
 
     instrument_name: ShortText
-    ticker: Annotated[str | None, StringConstraints(min_length=1, max_length=32)] = None
+    ticker: Annotated[
+        str | None,
+        StringConstraints(min_length=1, max_length=32, pattern=r"^[A-Z0-9][A-Z0-9._-]{0,31}$"),
+    ] = None
     isin: Annotated[str | None, StringConstraints(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None
     risk_bucket: RiskBucket
     action: RecommendationActionType
@@ -235,6 +258,20 @@ class RecommendationActionInput(ApiModel):
         if not self.ticker and not self.isin:
             raise ValueError("ticker/SECID or ISIN is required")
         return self
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_secid(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_secid(value):
+            raise ValueError("invalid SECID format")
+        return value
+
+    @field_validator("isin")
+    @classmethod
+    def validate_isin(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_isin(value):
+            raise ValueError("invalid ISIN")
+        return value
 
 
 class RecommendationActionDto(RecommendationActionInput):

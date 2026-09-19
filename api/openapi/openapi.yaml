@@ -1950,7 +1950,7 @@ components:
       required: [instrumentName, instrumentType, riskBucket, quantity, marketValue]
       properties:
         instrumentName: { type: string, minLength: 1, maxLength: 300 }
-        ticker: { type: [string, 'null'], maxLength: 32 }
+        ticker: { type: [string, 'null'], minLength: 1, maxLength: 32, pattern: '^[A-Z0-9][A-Z0-9._-]{0,31}$' }
         isin: { type: [string, 'null'], pattern: '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' }
         instrumentType: { $ref: '#/components/schemas/InvestmentInstrumentType' }
         riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
@@ -2062,7 +2062,7 @@ components:
       required: [instrumentName, riskBucket, action, currentPercent, targetPercent, amount, priority, rationale, risks]
       properties:
         instrumentName: { type: string, minLength: 1, maxLength: 300 }
-        ticker: { type: [string, 'null'], maxLength: 32 }
+        ticker: { type: [string, 'null'], minLength: 1, maxLength: 32, pattern: '^[A-Z0-9][A-Z0-9._-]{0,31}$' }
         isin: { type: [string, 'null'], pattern: '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' }
         riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
         action: { type: string, enum: [keep, reduce, increase, add] }

@@ -8,6 +8,7 @@ from uuid import UUID
 from app.authz import Actor
 
 from .allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
+from .instrument_resolver import LocalMoexInstrumentResolver
 from .models import (
     InvestmentPolicyModel,
     PortfolioImportModel,
@@ -84,10 +85,12 @@ class InvestmentService:
         *,
         now: datetime | None = None,
         issuer_source_hosts: list[str] | None = None,
+        instrument_resolver: LocalMoexInstrumentResolver | None = None,
     ) -> None:
         self.repo = repository
         self._fixed_now = now
         self._issuer_source_hosts = issuer_source_hosts or []
+        self._instrument_resolver = instrument_resolver or LocalMoexInstrumentResolver()
 
     @property
     def now(self) -> datetime:
@@ -327,16 +330,7 @@ class InvestmentService:
     def cash_first_adjustments(self, job: RecommendationJobModel) -> list[Any]:
         snapshots = [self.repo.get_snapshot(item) for item in self.repo.job_snapshot_ids(job.id)]
         snapshots = [item for item in snapshots if item is not None]
-        policy_model = self.repo.get_policy(job.owner_user_id)
-        if policy_model is None:
-            policy = AllocationPolicy()
-        else:
-            policy = AllocationPolicy(
-                conservative=policy_model.conservative_percent,
-                moderate=policy_model.moderate_percent,
-                aggressive=policy_model.aggressive_percent,
-                tolerance=policy_model.tolerance_percent,
-            )
+        policy = self._allocation_policy(job)
         current = {bucket: Decimal("0") for bucket in RiskBucket}
         for snapshot in snapshots:
             for position in self.repo.positions(snapshot.id):
@@ -358,10 +352,13 @@ class InvestmentService:
         positions: list[dict[str, Any]] = []
         for snapshot in snapshots:
             for item in self.repo.positions(snapshot.id):
+                resolved = self._instrument_resolver.resolve(secid=item.ticker, isin=item.isin)
+                if resolved is None:
+                    raise InvalidRecommendationPayload()
                 positions.append(
                     {
-                        "secid": item.ticker,
-                        "isin": item.isin,
+                        "secid": resolved.secid,
+                        "isin": resolved.isin,
                         "instrumentType": item.instrument_type,
                         "riskBucket": item.risk_bucket,
                         "quantity": str(item.quantity),
@@ -426,18 +423,18 @@ class InvestmentService:
         job: RecommendationJobModel,
         request: RecommendationCallbackRequest,
     ) -> None:
+        policy = self._allocation_policy(job)
         adjustments = {str(item.bucket): item for item in self.cash_first_adjustments(job)}
         aggregates = {str(item.risk_bucket): item for item in request.aggregates}
-        epsilon = Decimal("0.0100")
         for bucket, adjustment in adjustments.items():
             aggregate = aggregates.get(bucket)
             if aggregate is None:
                 raise InvalidRecommendationPayload()
-            if abs(aggregate.current_percent - adjustment.current_percent) > epsilon:
+            if aggregate.current_percent != adjustment.current_percent:
                 raise InvalidRecommendationPayload()
-            if abs(aggregate.proposed_percent - adjustment.projected_percent) > epsilon:
+            if aggregate.proposed_percent != adjustment.projected_percent:
                 raise InvalidRecommendationPayload()
-            if abs(aggregate.proposed_percent - adjustment.target_percent) > Decimal("5"):
+            if abs(aggregate.proposed_percent - adjustment.target_percent) > policy.tolerance:
                 raise InvalidRecommendationPayload()
 
         known: dict[tuple[str, str], Any] = {}
@@ -455,11 +452,19 @@ class InvestmentService:
             adjustment = adjustments.get(bucket)
             if adjustment is None:
                 raise InvalidRecommendationPayload()
+            aggregate = aggregates[bucket]
+            if (
+                action.current_percent != aggregate.current_percent
+                or action.target_percent != aggregate.proposed_percent
+            ):
+                raise InvalidRecommendationPayload()
+            resolved = self._instrument_resolver.resolve(secid=action.ticker, isin=action.isin)
+            if resolved is None:
+                raise InvalidRecommendationPayload()
             position = None
-            if action.ticker:
-                position = known.get(("secid", action.ticker.casefold()))
-            if position is None and action.isin:
-                position = known.get(("isin", action.isin.casefold()))
+            position = known.get(("secid", resolved.secid.casefold()))
+            if position is None:
+                position = known.get(("isin", resolved.isin.casefold()))
             action_name = str(action.action)
             if action_name in {"keep", "reduce", "increase"}:
                 if position is None or position.risk_bucket != bucket:
@@ -474,10 +479,21 @@ class InvestmentService:
                 additions[bucket] += action.amount
 
         for bucket, adjustment in adjustments.items():
-            if reductions[bucket] > adjustment.reduce_amount + Decimal("0.0001"):
+            if reductions[bucket] != adjustment.reduce_amount:
                 raise InvalidRecommendationPayload()
-            if additions[bucket] > adjustment.add_amount + Decimal("0.0001"):
+            if additions[bucket] != adjustment.add_amount:
                 raise InvalidRecommendationPayload()
+
+    def _allocation_policy(self, job: RecommendationJobModel) -> AllocationPolicy:
+        policy_model = self.repo.get_policy(job.owner_user_id)
+        if policy_model is None:
+            return AllocationPolicy()
+        return AllocationPolicy(
+            conservative=policy_model.conservative_percent,
+            moderate=policy_model.moderate_percent,
+            aggressive=policy_model.aggressive_percent,
+            tolerance=policy_model.tolerance_percent,
+        )
 
 
 def _actor_uuid(actor: Actor) -> UUID:

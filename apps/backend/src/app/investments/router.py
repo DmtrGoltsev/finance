@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from app.api.auth_context import CurrentActor
 from app.config import get_settings
@@ -51,6 +52,37 @@ from .service import (
 )
 
 router = APIRouter(prefix="/investments", tags=["Investments"])
+
+CALLBACK_OPENAPI_EXTRA = {
+    "parameters": [
+        {
+            "name": "X-Finance-Timestamp",
+            "in": "header",
+            "required": True,
+            "schema": {"type": "string"},
+        },
+        {
+            "name": "X-Finance-Nonce",
+            "in": "header",
+            "required": True,
+            "schema": {"type": "string", "minLength": 16, "maxLength": 128},
+        },
+        {
+            "name": "X-Finance-Signature",
+            "in": "header",
+            "required": True,
+            "schema": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        },
+    ],
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/RecommendationCallbackRequest"}
+            }
+        },
+    },
+}
 
 
 def investment_service_for_request() -> Iterator[InvestmentService]:
@@ -355,32 +387,33 @@ async def get_recommendation_report(
     response_model=RecommendationJobEnvelope,
     operation_id="receiveRecommendationCallback",
     include_in_schema=True,
+    openapi_extra=CALLBACK_OPENAPI_EXTRA,
 )
 async def recommendation_callback(
     jobId: UUID,
     raw_request: Request,
-    callback: RecommendationCallbackRequest,
     service: InvestmentServiceDependency,
-    x_finance_timestamp: Annotated[str | None, Header()] = None,
-    x_finance_nonce: Annotated[str | None, Header()] = None,
-    x_finance_signature: Annotated[str | None, Header()] = None,
 ) -> RecommendationJobEnvelope | JSONResponse:
     body = await raw_request.body()
-    settings = get_settings()
+    settings = getattr(raw_request.app.state, "settings", None) or get_settings()
     try:
+        canonical_path = raw_request.url.path
+        expected_path = (
+            f"{settings.api_v1_prefix}/investments/internal/recommendation-jobs/{jobId}/callback"
+        )
+        if canonical_path != expected_path:
+            raise HmacVerificationError("callback path does not match configured prefix")
         verified = verify_callback(
             secret=settings.investment_callback_hmac_secret,
             method=raw_request.method,
-            canonical_path=(
-                f"{settings.api_v1_prefix}/investments/internal/"
-                f"recommendation-jobs/{jobId}/callback"
-            ),
-            timestamp_text=x_finance_timestamp,
-            nonce=x_finance_nonce,
-            signature=x_finance_signature,
+            canonical_path=canonical_path,
+            timestamp_text=raw_request.headers.get("X-Finance-Timestamp"),
+            nonce=raw_request.headers.get("X-Finance-Nonce"),
+            signature=raw_request.headers.get("X-Finance-Signature"),
             body=body,
             max_clock_skew_seconds=settings.investment_callback_max_clock_skew_seconds,
         )
+        callback = RecommendationCallbackRequest.model_validate_json(body)
         model = service.apply_callback(job_id=jobId, nonce=verified.nonce, request=callback)
         return RecommendationJobEnvelope(data=_job_dto(service, model))
     except HmacVerificationError:
@@ -390,6 +423,17 @@ async def recommendation_callback(
                 "error": {
                     "code": "INVALID_SERVICE_CALLBACK",
                     "message": "Invalid service callback.",
+                    "requestId": "internal",
+                }
+            },
+        )
+    except ValidationError:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": "INVALID_RECOMMENDATION_CALLBACK",
+                    "message": "Invalid recommendation callback.",
                     "requestId": "internal",
                 }
             },

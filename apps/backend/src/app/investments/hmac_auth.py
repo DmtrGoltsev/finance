@@ -62,7 +62,11 @@ def verify_callback(
     current = int(time.time()) if now_epoch is None else now_epoch
     if abs(current - timestamp) > max_clock_skew_seconds:
         raise HmacVerificationError("callback timestamp outside allowed window")
-    if not canonical_path.startswith("/api/v1/investments/internal/recommendation-jobs/"):
+    if (
+        not canonical_path.startswith("/")
+        or "?" in canonical_path
+        or not canonical_path.endswith("/callback")
+    ):
         raise HmacVerificationError("invalid callback path")
     expected = sign_callback(
         secret=secret,

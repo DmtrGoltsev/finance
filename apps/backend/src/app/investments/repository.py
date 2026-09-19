@@ -52,7 +52,7 @@ class InvestmentRepository:
         now = datetime.now(UTC)
         model = self.get_policy(owner_user_id)
         if model is None:
-            model = InvestmentPolicyModel(
+            candidate = InvestmentPolicyModel(
                 owner_user_id=owner_user_id,
                 conservative_percent=conservative,
                 moderate_percent=moderate,
@@ -62,7 +62,15 @@ class InvestmentRepository:
                 updated_at=now,
                 version=1,
             )
-            self.session.add(model)
+            try:
+                with self.session.begin_nested():
+                    self.session.add(candidate)
+                    self.session.flush()
+                return candidate
+            except IntegrityError:
+                model = self.get_policy(owner_user_id)
+                if model is None:
+                    raise
         else:
             model.conservative_percent = conservative
             model.moderate_percent = moderate
@@ -145,36 +153,43 @@ class InvestmentRepository:
             total_value=invested + free_cash,
             created_at=now,
         )
-        self.session.add(snapshot)
-        self.session.flush()
-        for item in positions:
-            self.session.add(
-                PortfolioPositionModel(
-                    snapshot_id=snapshot.id,
-                    instrument_name=item.instrument_name,
-                    ticker=item.ticker,
-                    isin=item.isin,
-                    instrument_type=str(item.instrument_type),
-                    risk_bucket=str(item.risk_bucket),
-                    currency="RUB",
-                    quantity=item.quantity,
-                    market_price=item.market_price,
-                    market_value=item.market_value,
-                    average_price=item.average_price,
-                    nominal=item.nominal,
-                    accrued_interest=item.accrued_interest,
-                    coupon_rate=item.coupon_rate,
-                    maturity_date=item.maturity_date,
-                    tax_account_type=str(item.tax_account_type),
-                    holding_started_at=item.holding_started_at,
-                    estimated_fee_rate=item.estimated_fee_rate,
-                )
-            )
-        import_model.status = "confirmed"
-        import_model.confirmed_at = now
-        import_model.updated_at = now
-        self.session.flush()
-        return snapshot
+        try:
+            with self.session.begin_nested():
+                self.session.add(snapshot)
+                self.session.flush()
+                for item in positions:
+                    self.session.add(
+                        PortfolioPositionModel(
+                            snapshot_id=snapshot.id,
+                            instrument_name=item.instrument_name,
+                            ticker=item.ticker,
+                            isin=item.isin,
+                            instrument_type=str(item.instrument_type),
+                            risk_bucket=str(item.risk_bucket),
+                            currency="RUB",
+                            quantity=item.quantity,
+                            market_price=item.market_price,
+                            market_value=item.market_value,
+                            average_price=item.average_price,
+                            nominal=item.nominal,
+                            accrued_interest=item.accrued_interest,
+                            coupon_rate=item.coupon_rate,
+                            maturity_date=item.maturity_date,
+                            tax_account_type=str(item.tax_account_type),
+                            holding_started_at=item.holding_started_at,
+                            estimated_fee_rate=item.estimated_fee_rate,
+                        )
+                    )
+                import_model.status = "confirmed"
+                import_model.confirmed_at = now
+                import_model.updated_at = now
+                self.session.flush()
+            return snapshot
+        except IntegrityError:
+            existing = self.get_snapshot_by_import(import_model.id)
+            if existing is None:
+                raise
+            return existing
 
     def get_snapshot(self, snapshot_id: UUID) -> PortfolioSnapshotModel | None:
         return self.session.get(PortfolioSnapshotModel, snapshot_id)

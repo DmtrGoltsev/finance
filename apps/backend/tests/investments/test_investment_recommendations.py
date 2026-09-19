@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -9,17 +10,21 @@ import pytest
 import yaml
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.db.models  # noqa: F401
 from app.authz import Actor
+from app.config import Settings
 from app.db.base import Base
 from app.db.models import OutboxEvent, User
 from app.investments.allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from app.investments.hmac_auth import HmacVerificationError, sign_callback, verify_callback
 from app.investments.repository import InvestmentRepository
+from app.investments.router import investment_service_for_request
 from app.investments.schemas import (
+    InvestmentPolicyPutRequest,
     PortfolioImportConfirmRequest,
     PortfolioImportCreateRequest,
     PortfolioPositionInput,
@@ -42,13 +47,18 @@ from app.investments.source_validation import (
     UntrustedRecommendationSource,
     validate_recommendation_sources,
 )
+from app.main import create_app
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
 def session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as value:
         yield value
@@ -224,6 +234,56 @@ def test_owner_isolation_and_idempotency(session: Session) -> None:
         )
 
 
+def test_concurrent_first_policy_and_snapshot_confirmation_reread_winner(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = actor(session)
+    repository = InvestmentRepository(session)
+    service = InvestmentService(repository, now=NOW)
+    policy = service.policy(owner)
+    original_policy_lookup = repository.get_policy
+    policy_calls = 0
+
+    def miss_policy_twice(owner_user_id: UUID):
+        nonlocal policy_calls
+        policy_calls += 1
+        if policy_calls <= 2:
+            return None
+        return original_policy_lookup(owner_user_id)
+
+    monkeypatch.setattr(repository, "get_policy", miss_policy_twice)
+    assert service.policy(owner).id == policy.id
+    monkeypatch.setattr(repository, "get_policy", original_policy_lookup)
+
+    imported = service.create_import(
+        owner,
+        PortfolioImportCreateRequest(
+            idempotencyKey="snapshot-race-import",
+            brokerage="finam",
+            screenshotCount=1,
+            observedAt=NOW,
+        ),
+    )
+    confirm_request = PortfolioImportConfirmRequest(
+        freeCash="0",
+        monthlyContribution="0",
+        positions=[position()],
+    )
+    snapshot = service.confirm_import(owner, imported.id, confirm_request)
+    original_snapshot_lookup = repository.get_snapshot_by_import
+    snapshot_calls = 0
+
+    def miss_snapshot_once(import_id: UUID):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls == 1:
+            return None
+        return original_snapshot_lookup(import_id)
+
+    monkeypatch.setattr(repository, "get_snapshot_by_import", miss_snapshot_once)
+    assert service.confirm_import(owner, imported.id, confirm_request).id == snapshot.id
+
+
 def test_idempotency_insert_race_returns_existing_or_conflict(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -284,6 +344,65 @@ def test_position_requires_canonical_secid_or_isin() -> None:
             quantity="1",
             marketValue="100",
         )
+
+    with pytest.raises(ValueError, match="pattern"):
+        PortfolioPositionInput(
+            instrumentName="Утечка OCR",
+            ticker="ACCOUNT 123 PERSON",
+            instrumentType="stock",
+            riskBucket="aggressive",
+            quantity="1",
+            marketValue="100",
+        )
+
+    with pytest.raises(ValueError, match="invalid ISIN"):
+        PortfolioPositionInput(
+            instrumentName="Неверный ISIN",
+            isin="RU000A1038V7",
+            instrumentType="bond",
+            riskBucket="conservative",
+            quantity="1",
+            marketValue="100",
+        )
+
+
+def test_unresolved_instrument_never_creates_external_payload(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    imported = service.create_import(
+        owner,
+        PortfolioImportCreateRequest(
+            idempotencyKey="unresolved-import",
+            brokerage="finam",
+            screenshotCount=1,
+            observedAt=NOW,
+        ),
+    )
+    snapshot = service.confirm_import(
+        owner,
+        imported.id,
+        PortfolioImportConfirmRequest(
+            positions=[
+                PortfolioPositionInput(
+                    instrumentName="Произвольный тикер",
+                    ticker="ACCOUNT",
+                    instrumentType="stock",
+                    riskBucket="aggressive",
+                    quantity="1",
+                    marketValue="100",
+                )
+            ]
+        ),
+    )
+    with pytest.raises(InvalidRecommendationPayload):
+        service.create_job(
+            owner,
+            RecommendationJobCreateRequest(
+                idempotencyKey="unresolved-job",
+                snapshotIds=[snapshot.id],
+            ),
+        )
+    assert list(session.scalars(select(OutboxEvent))) == []
 
 
 def test_future_portfolio_observation_is_rejected(session: Session) -> None:
@@ -445,13 +564,25 @@ def test_transitions_three_attempts_ready_report_and_replay(session: Session) ->
                     "ticker": "LQDT",
                     "riskBucket": "moderate",
                     "action": "add",
-                    "currentPercent": "5",
-                    "targetPercent": "10",
+                    "currentPercent": "25",
+                    "targetPercent": "30",
                     "amount": "10000",
                     "priority": 1,
                     "rationale": "Снижает отклонение консервативной доли.",
                     "risks": "Стоимость пая может меняться.",
-                }
+                },
+                {
+                    "instrumentName": "Сбербанк",
+                    "ticker": "SBER",
+                    "riskBucket": "aggressive",
+                    "action": "increase",
+                    "currentPercent": "25",
+                    "targetPercent": "30",
+                    "amount": "10000",
+                    "priority": 2,
+                    "rationale": "Закрывает рассчитанный дефицит доли.",
+                    "risks": "Цена акции может меняться.",
+                },
             ],
             sources=[
                 {
@@ -467,7 +598,7 @@ def test_transitions_three_attempts_ready_report_and_replay(session: Session) ->
     report = service.report(owner, job.id)
     assert report.valid_until == NOW + timedelta(days=7)
     assert report.valid_until.tzinfo is UTC
-    assert len(service.repo.report_actions(report.id)) == 1
+    assert len(service.repo.report_actions(report.id)) == 2
     sources = service.repo.report_sources(report.id)
     assert len(sources) == 1
     assert sources[0].trust_tier == "official"
@@ -529,7 +660,32 @@ def test_ready_callback_rejects_arbitrary_sales_and_invalid_aggregates(
                 "proposedPercent": "30",
             },
         ],
-        "actions": [],
+        "actions": [
+            {
+                "instrumentName": "Фонд денежного рынка",
+                "ticker": "LQDT",
+                "riskBucket": "moderate",
+                "action": "add",
+                "currentPercent": "25",
+                "targetPercent": "30",
+                "amount": "10000",
+                "priority": 1,
+                "rationale": "Закрывает рассчитанный дефицит доли.",
+                "risks": "Стоимость пая может меняться.",
+            },
+            {
+                "instrumentName": "Сбербанк",
+                "ticker": "SBER",
+                "riskBucket": "aggressive",
+                "action": "increase",
+                "currentPercent": "25",
+                "targetPercent": "30",
+                "amount": "10000",
+                "priority": 2,
+                "rationale": "Закрывает рассчитанный дефицит доли.",
+                "risks": "Цена акции может меняться.",
+            },
+        ],
         "sources": [
             {
                 "title": "MOEX ISS",
@@ -576,6 +732,126 @@ def test_ready_callback_rejects_arbitrary_sales_and_invalid_aggregates(
             job_id=aggregate_job.id,
             nonce="reject-aggregate-ready",
             request=RecommendationCallbackRequest.model_validate(aggregate_payload),
+        )
+
+    for suffix, actions in (
+        ("empty", []),
+        ("partial", valid_payload["actions"][:1]),
+    ):
+        incomplete_job = queued_job(f"reject-{suffix}-actions")
+        incomplete_payload = {**valid_payload, "actions": actions}
+        with pytest.raises(InvalidRecommendationPayload):
+            service.apply_callback(
+                job_id=incomplete_job.id,
+                nonce=f"reject-{suffix}-ready",
+                request=RecommendationCallbackRequest.model_validate(incomplete_payload),
+            )
+
+
+def test_custom_policy_tolerance_is_enforced(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    service.put_policy(
+        owner,
+        InvestmentPolicyPutRequest(
+            conservativePercent="40",
+            moderatePercent="30",
+            aggressivePercent="30",
+            tolerancePercent="1",
+        ),
+    )
+    imported = service.create_import(
+        owner,
+        PortfolioImportCreateRequest(
+            idempotencyKey="custom-tolerance-import",
+            brokerage="finam",
+            screenshotCount=1,
+            observedAt=NOW,
+        ),
+    )
+    snapshot = service.confirm_import(
+        owner,
+        imported.id,
+        PortfolioImportConfirmRequest(
+            positions=[
+                position(bucket="conservative", value="0"),
+                position(bucket="moderate", value="31"),
+                position(bucket="aggressive", value="69"),
+            ]
+        ),
+    )
+    job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="custom-tolerance-job",
+            snapshotIds=[snapshot.id],
+        ),
+    )
+    job = service.apply_callback(
+        job_id=job.id,
+        nonce="custom-tolerance-collecting",
+        request=RecommendationCallbackRequest(status="collecting"),
+    )
+    with pytest.raises(InvalidRecommendationPayload):
+        service.apply_callback(
+            job_id=job.id,
+            nonce="custom-tolerance-ready",
+            request=RecommendationCallbackRequest(
+                status="ready",
+                marketDataAsOf=NOW,
+                summary="Недопустимое отклонение при tolerance=1.",
+                aggregates=[
+                    {
+                        "riskBucket": "conservative",
+                        "currentPercent": "0",
+                        "proposedPercent": "38",
+                    },
+                    {
+                        "riskBucket": "moderate",
+                        "currentPercent": "31",
+                        "proposedPercent": "31",
+                    },
+                    {
+                        "riskBucket": "aggressive",
+                        "currentPercent": "69",
+                        "proposedPercent": "31",
+                    },
+                ],
+                actions=[
+                    {
+                        "instrumentName": "ОФЗ 26238",
+                        "ticker": "SU26238RMFS4",
+                        "riskBucket": "conservative",
+                        "action": "increase",
+                        "currentPercent": "0",
+                        "targetPercent": "38",
+                        "amount": "38",
+                        "priority": 1,
+                        "rationale": "Расчётное пополнение.",
+                        "risks": "Рыночный риск.",
+                    },
+                    {
+                        "instrumentName": "Сбербанк",
+                        "ticker": "SBER",
+                        "riskBucket": "aggressive",
+                        "action": "reduce",
+                        "currentPercent": "69",
+                        "targetPercent": "31",
+                        "amount": "38",
+                        "priority": 2,
+                        "rationale": "Расчётное сокращение.",
+                        "risks": "Рыночный риск.",
+                    },
+                ],
+                sources=[
+                    {
+                        "title": "MOEX ISS",
+                        "url": "https://iss.moex.com/iss/securities.json",
+                        "publisher": "Московская биржа",
+                        "fetchedAt": NOW,
+                    }
+                ],
+            ),
         )
 
 
@@ -692,6 +968,65 @@ def test_hmac_signature_timestamp_and_replay_inputs() -> None:
         )
 
 
+def test_api_v2_callback_verifies_hmac_before_parsing_body(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="api-v2-callback-job",
+            snapshotIds=[confirmed_snapshot(service, owner)],
+        ),
+    )
+    settings = Settings(
+        api_v1_prefix="/api/v2",
+        investment_callback_hmac_secret="test-secret",
+    )
+    application = create_app(settings)
+    application.dependency_overrides[investment_service_for_request] = lambda: service
+    path = f"/api/v2/investments/internal/recommendation-jobs/{job.id}/callback"
+    timestamp = int(time.time())
+
+    malformed_body = b"{not-json"
+    unauthenticated_headers = {
+        "X-Finance-Timestamp": str(timestamp),
+        "X-Finance-Nonce": "malformed-unauth-0001",
+        "X-Finance-Signature": "0" * 64,
+        "Content-Type": "application/json",
+    }
+    with TestClient(application) as test_client:
+        rejected = test_client.post(
+            path,
+            content=malformed_body,
+            headers=unauthenticated_headers,
+        )
+        assert rejected.status_code == 401
+        assert rejected.json()["error"]["code"] == "INVALID_SERVICE_CALLBACK"
+
+        body = b'{"status":"collecting"}'
+        nonce = "api-v2-valid-000001"
+        signature = sign_callback(
+            secret="test-secret",
+            method="POST",
+            canonical_path=path,
+            timestamp=timestamp,
+            nonce=nonce,
+            body=body,
+        )
+        accepted = test_client.post(
+            path,
+            content=body,
+            headers={
+                "X-Finance-Timestamp": str(timestamp),
+                "X-Finance-Nonce": nonce,
+                "X-Finance-Signature": signature,
+                "Content-Type": "application/json",
+            },
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["data"]["status"] == "collecting"
+
+
 def test_static_and_runtime_openapi_callback_contract_match(client) -> None:
     static_path = Path(__file__).resolve().parents[4] / "api" / "openapi" / "openapi.yaml"
     static_schema = yaml.safe_load(static_path.read_text(encoding="utf-8"))
@@ -710,12 +1045,35 @@ def test_static_and_runtime_openapi_callback_contract_match(client) -> None:
     assert runtime_operation["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/RecommendationCallbackRequest"
     }
+    assert static_operation["requestBody"]["required"] is True
+    assert runtime_operation["requestBody"]["required"] is True
+
+    def header_contract(operation: dict) -> dict[str, tuple[bool, dict]]:
+        return {
+            item["name"]: (item["required"], item["schema"])
+            for item in operation["parameters"]
+            if item["in"] == "header" and item["name"].startswith("X-Finance-")
+        }
+
+    assert header_contract(static_operation) == header_contract(runtime_operation)
 
     static_components = static_schema["components"]["schemas"]
     runtime_components = runtime_schema["components"]["schemas"]
+
+    def allows_null(schema: dict) -> bool:
+        schema_type = schema.get("type")
+        if schema_type == "null" or (isinstance(schema_type, list) and "null" in schema_type):
+            return True
+        return any(
+            allows_null(candidate)
+            for keyword in ("anyOf", "oneOf")
+            for candidate in schema.get(keyword, [])
+        )
+
     for schema_name in (
         "PortfolioPositionInput",
         "RecommendationActionInput",
+        "RecommendationAggregateInput",
         "RecommendationSourceInput",
         "RecommendationCallbackRequest",
     ):
@@ -725,6 +1083,10 @@ def test_static_and_runtime_openapi_callback_contract_match(client) -> None:
         assert set(static_components[schema_name]["properties"]) == set(
             runtime_components[schema_name]["properties"]
         )
+        for property_name in static_components[schema_name]["properties"]:
+            assert allows_null(
+                static_components[schema_name]["properties"][property_name]
+            ) == allows_null(runtime_components[schema_name]["properties"][property_name])
     assert (
         static_components["PortfolioPositionInput"]["anyOf"]
         == runtime_components["PortfolioPositionInput"]["anyOf"]
