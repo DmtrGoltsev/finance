@@ -179,6 +179,7 @@ class RecommendationJobModel(Base):
     created_at: Mapped[datetime] = created_timestamp()
     updated_at: Mapped[datetime] = updated_timestamp()
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
 
 
 class RecommendationJobSnapshotModel(Base):
@@ -224,6 +225,7 @@ class RecommendationActionModel(Base):
     instrument_name: Mapped[str] = mapped_column(Text, nullable=False)
     ticker: Mapped[str | None] = mapped_column(Text)
     isin: Mapped[str | None] = mapped_column(Text)
+    risk_bucket: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     current_percent: Mapped[Decimal] = mapped_column(PERCENT_NUMERIC, nullable=False)
     target_percent: Mapped[Decimal] = mapped_column(PERCENT_NUMERIC, nullable=False)

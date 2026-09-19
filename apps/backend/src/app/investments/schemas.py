@@ -119,6 +119,15 @@ class PortfolioImportDto(ApiModel):
 
 
 class PortfolioPositionInput(ApiModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["ticker"]},
+                {"required": ["isin"]},
+            ]
+        }
+    )
+
     instrument_name: ShortText
     ticker: Annotated[str | None, StringConstraints(min_length=1, max_length=32)] = None
     isin: Annotated[str | None, StringConstraints(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None
@@ -135,6 +144,12 @@ class PortfolioPositionInput(ApiModel):
     tax_account_type: TaxAccountType = TaxAccountType.BROKERAGE
     holding_started_at: date | None = None
     estimated_fee_rate: Percent | None = None
+
+    @model_validator(mode="after")
+    def require_canonical_identifier(self) -> PortfolioPositionInput:
+        if not self.ticker and not self.isin:
+            raise ValueError("ticker/SECID or ISIN is required")
+        return self
 
 
 class PortfolioImportConfirmRequest(ApiModel):
@@ -194,9 +209,19 @@ class RecommendationJobDto(ApiModel):
 
 
 class RecommendationActionInput(ApiModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["ticker"]},
+                {"required": ["isin"]},
+            ]
+        }
+    )
+
     instrument_name: ShortText
     ticker: Annotated[str | None, StringConstraints(min_length=1, max_length=32)] = None
     isin: Annotated[str | None, StringConstraints(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None
+    risk_bucket: RiskBucket
     action: RecommendationActionType
     current_percent: Percent
     target_percent: Percent
@@ -205,14 +230,33 @@ class RecommendationActionInput(ApiModel):
     rationale: LongText
     risks: LongText
 
+    @model_validator(mode="after")
+    def require_canonical_identifier(self) -> RecommendationActionInput:
+        if not self.ticker and not self.isin:
+            raise ValueError("ticker/SECID or ISIN is required")
+        return self
+
+
+class RecommendationActionDto(RecommendationActionInput):
+    pass
+
 
 class RecommendationSourceInput(ApiModel):
     title: ShortText
     url: HttpsUrl
     publisher: ShortText
-    trust_tier: Annotated[str, StringConstraints(pattern=r"^(official|issuer|disclosure|news)$")]
     published_at: datetime | None = None
     fetched_at: datetime
+
+
+class RecommendationSourceDto(RecommendationSourceInput):
+    trust_tier: Annotated[str, StringConstraints(pattern=r"^(official|issuer|disclosure|news)$")]
+
+
+class RecommendationAggregateInput(ApiModel):
+    risk_bucket: RiskBucket
+    current_percent: Percent
+    proposed_percent: Percent
 
 
 class RecommendationReportDto(ApiModel):
@@ -224,8 +268,8 @@ class RecommendationReportDto(ApiModel):
     valid_until: datetime
     is_stale: bool
     disclaimer: str
-    actions: list[RecommendationActionInput]
-    sources: list[RecommendationSourceInput]
+    actions: list[RecommendationActionDto]
+    sources: list[RecommendationSourceDto]
 
 
 class RecommendationCallbackRequest(ApiModel):
@@ -235,14 +279,25 @@ class RecommendationCallbackRequest(ApiModel):
     market_data_as_of: datetime | None = None
     summary: LongText | None = None
     assumptions: dict[str, Any] = Field(default_factory=dict)
+    aggregates: list[RecommendationAggregateInput] = Field(default_factory=list, max_length=3)
     actions: list[RecommendationActionInput] = Field(default_factory=list, max_length=200)
     sources: list[RecommendationSourceInput] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_terminal_payload(self) -> RecommendationCallbackRequest:
         if self.status == RecommendationStatus.READY:
-            if self.market_data_as_of is None or self.summary is None or not self.sources:
-                raise ValueError("ready callback requires market data, summary, and sources")
+            if (
+                self.market_data_as_of is None
+                or self.summary is None
+                or not self.sources
+                or len(self.aggregates) != 3
+            ):
+                raise ValueError(
+                    "ready callback requires market data, summary, three aggregates, and sources"
+                )
+            buckets = {item.risk_bucket for item in self.aggregates}
+            if buckets != set(RiskBucket):
+                raise ValueError("ready callback requires one aggregate per risk bucket")
         if self.status == RecommendationStatus.FAILED and not self.error_code:
             raise ValueError("failed callback requires errorCode")
         return self

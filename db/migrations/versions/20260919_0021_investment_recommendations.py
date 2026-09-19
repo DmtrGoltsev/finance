@@ -24,6 +24,15 @@ PERCENT = sa.Numeric(7, 4)
 
 
 def upgrade() -> None:
+    op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
+    op.create_index(
+        "uq_outbox_events_deduplication_key",
+        "outbox_events",
+        ["deduplication_key"],
+        unique=True,
+        postgresql_where=sa.text("deduplication_key IS NOT NULL"),
+        sqlite_where=sa.text("deduplication_key IS NOT NULL"),
+    )
     op.create_table(
         "recommendation_jobs",
         sa.Column("id", UUID, nullable=False),
@@ -34,27 +43,66 @@ def upgrade() -> None:
         sa.Column("attempt_count", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column("market_data_as_of", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error_code", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.CheckConstraint("status IN ('queued', 'collecting', 'analyzing', 'ready', 'failed')", name=op.f("ck_recommendation_jobs_status_valid")),
-        sa.CheckConstraint("attempt_count >= 1 AND attempt_count <= 3", name=op.f("ck_recommendation_jobs_attempt_count_range")),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name=op.f("fk_recommendation_jobs_owner_user_id_users")),
+        sa.Column("version", sa.BigInteger(), nullable=False, server_default=sa.text("1")),
+        sa.CheckConstraint(
+            "status IN ('queued', 'collecting', 'analyzing', 'ready', 'failed')",
+            name=op.f("ck_recommendation_jobs_status_valid"),
+        ),
+        sa.CheckConstraint(
+            "attempt_count >= 1 AND attempt_count <= 3",
+            name=op.f("ck_recommendation_jobs_attempt_count_range"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"], ["users.id"], name=op.f("fk_recommendation_jobs_owner_user_id_users")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_jobs")),
-        sa.UniqueConstraint("owner_user_id", "idempotency_key", name=op.f("uq_recommendation_jobs_owner_idempotency_key")),
+        sa.UniqueConstraint(
+            "owner_user_id",
+            "idempotency_key",
+            name=op.f("uq_recommendation_jobs_owner_idempotency_key"),
+        ),
     )
-    op.create_index("ix_recommendation_jobs_owner_created", "recommendation_jobs", ["owner_user_id", sa.text("created_at DESC")])
-    op.create_index("ix_recommendation_jobs_status_created", "recommendation_jobs", ["status", "created_at"])
+    op.create_index(
+        "ix_recommendation_jobs_owner_created",
+        "recommendation_jobs",
+        ["owner_user_id", sa.text("created_at DESC")],
+    )
+    op.create_index(
+        "ix_recommendation_jobs_status_created", "recommendation_jobs", ["status", "created_at"]
+    )
 
     op.create_table(
         "recommendation_job_snapshots",
         sa.Column("id", UUID, nullable=False),
         sa.Column("job_id", UUID, nullable=False),
         sa.Column("snapshot_id", UUID, nullable=False),
-        sa.ForeignKeyConstraint(["job_id"], ["recommendation_jobs.id"], name=op.f("fk_recommendation_job_snapshots_job_id_recommendation_jobs")),
-        sa.ForeignKeyConstraint(["snapshot_id"], ["portfolio_snapshots.id"], name=op.f("fk_recommendation_job_snapshots_snapshot_id_portfolio_snapshots")),
+        sa.ForeignKeyConstraint(
+            ["job_id"],
+            ["recommendation_jobs.id"],
+            name=op.f("fk_recommendation_job_snapshots_job_id_recommendation_jobs"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["snapshot_id"],
+            ["portfolio_snapshots.id"],
+            name=op.f("fk_recommendation_job_snapshots_snapshot_id_portfolio_snapshots"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_job_snapshots")),
-        sa.UniqueConstraint("job_id", "snapshot_id", name=op.f("uq_recommendation_job_snapshots_pair")),
+        sa.UniqueConstraint(
+            "job_id", "snapshot_id", name=op.f("uq_recommendation_job_snapshots_pair")
+        ),
     )
 
     op.create_table(
@@ -67,12 +115,24 @@ def upgrade() -> None:
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=False),
         sa.Column("disclaimer", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name=op.f("fk_recommendation_reports_owner_user_id_users")),
-        sa.ForeignKeyConstraint(["job_id"], ["recommendation_jobs.id"], name=op.f("fk_recommendation_reports_job_id_recommendation_jobs")),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"],
+            ["users.id"],
+            name=op.f("fk_recommendation_reports_owner_user_id_users"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["job_id"],
+            ["recommendation_jobs.id"],
+            name=op.f("fk_recommendation_reports_job_id_recommendation_jobs"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_reports")),
         sa.UniqueConstraint("job_id", name=op.f("uq_recommendation_reports_job_id")),
     )
-    op.create_index("ix_recommendation_reports_owner_generated", "recommendation_reports", ["owner_user_id", sa.text("generated_at DESC")])
+    op.create_index(
+        "ix_recommendation_reports_owner_generated",
+        "recommendation_reports",
+        ["owner_user_id", sa.text("generated_at DESC")],
+    )
 
     op.create_table(
         "recommendation_actions",
@@ -81,6 +141,7 @@ def upgrade() -> None:
         sa.Column("instrument_name", sa.Text(), nullable=False),
         sa.Column("ticker", sa.Text(), nullable=True),
         sa.Column("isin", sa.Text(), nullable=True),
+        sa.Column("risk_bucket", sa.Text(), nullable=False),
         sa.Column("action", sa.Text(), nullable=False),
         sa.Column("current_percent", PERCENT, nullable=False),
         sa.Column("target_percent", PERCENT, nullable=False),
@@ -88,12 +149,26 @@ def upgrade() -> None:
         sa.Column("priority", sa.Integer(), nullable=False),
         sa.Column("rationale", sa.Text(), nullable=False),
         sa.Column("risks", sa.Text(), nullable=False),
-        sa.CheckConstraint("action IN ('keep', 'reduce', 'increase', 'add')", name=op.f("ck_recommendation_actions_action_valid")),
-        sa.CheckConstraint("priority >= 1 AND priority <= 100", name=op.f("ck_recommendation_actions_priority_range")),
-        sa.ForeignKeyConstraint(["report_id"], ["recommendation_reports.id"], name=op.f("fk_recommendation_actions_report_id_recommendation_reports")),
+        sa.CheckConstraint(
+            "action IN ('keep', 'reduce', 'increase', 'add')",
+            name=op.f("ck_recommendation_actions_action_valid"),
+        ),
+        sa.CheckConstraint(
+            "priority >= 1 AND priority <= 100",
+            name=op.f("ck_recommendation_actions_priority_range"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["report_id"],
+            ["recommendation_reports.id"],
+            name=op.f("fk_recommendation_actions_report_id_recommendation_reports"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_actions")),
     )
-    op.create_index("ix_recommendation_actions_report_priority", "recommendation_actions", ["report_id", "priority"])
+    op.create_index(
+        "ix_recommendation_actions_report_priority",
+        "recommendation_actions",
+        ["report_id", "priority"],
+    )
 
     op.create_table(
         "recommendation_sources",
@@ -105,7 +180,11 @@ def upgrade() -> None:
         sa.Column("trust_tier", sa.Text(), nullable=False),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["report_id"], ["recommendation_reports.id"], name=op.f("fk_recommendation_sources_report_id_recommendation_reports")),
+        sa.ForeignKeyConstraint(
+            ["report_id"],
+            ["recommendation_reports.id"],
+            name=op.f("fk_recommendation_sources_report_id_recommendation_reports"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_sources")),
     )
     op.create_index("ix_recommendation_sources_report", "recommendation_sources", ["report_id"])
@@ -117,15 +196,25 @@ def upgrade() -> None:
         sa.Column("nonce", sa.Text(), nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["job_id"], ["recommendation_jobs.id"], name=op.f("fk_recommendation_callback_nonces_job_id_recommendation_jobs")),
+        sa.ForeignKeyConstraint(
+            ["job_id"],
+            ["recommendation_jobs.id"],
+            name=op.f("fk_recommendation_callback_nonces_job_id_recommendation_jobs"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_recommendation_callback_nonces")),
         sa.UniqueConstraint("nonce", name=op.f("uq_recommendation_callback_nonces_nonce")),
     )
-    op.create_index("ix_recommendation_callback_nonces_expires", "recommendation_callback_nonces", ["expires_at"])
+    op.create_index(
+        "ix_recommendation_callback_nonces_expires",
+        "recommendation_callback_nonces",
+        ["expires_at"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_recommendation_callback_nonces_expires", table_name="recommendation_callback_nonces")
+    op.drop_index(
+        "ix_recommendation_callback_nonces_expires", table_name="recommendation_callback_nonces"
+    )
     op.drop_table("recommendation_callback_nonces")
     op.drop_index("ix_recommendation_sources_report", table_name="recommendation_sources")
     op.drop_table("recommendation_sources")
@@ -137,3 +226,5 @@ def downgrade() -> None:
     op.drop_index("ix_recommendation_jobs_status_created", table_name="recommendation_jobs")
     op.drop_index("ix_recommendation_jobs_owner_created", table_name="recommendation_jobs")
     op.drop_table("recommendation_jobs")
+    op.drop_index("uq_outbox_events_deduplication_key", table_name="outbox_events")
+    op.drop_column("outbox_events", "deduplication_key")

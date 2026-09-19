@@ -145,6 +145,10 @@ class Settings(BaseSettings):
         le=900,
         description="Maximum accepted n8n callback clock skew.",
     )
+    investment_source_allowed_issuer_hosts: list[str] = Field(
+        default_factory=list,
+        description="Additional exact HTTPS issuer hosts accepted in recommendation citations.",
+    )
 
     @property
     def effective_auth_bearer_refresh_ttl_seconds(self) -> int:

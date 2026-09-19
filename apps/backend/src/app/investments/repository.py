@@ -7,7 +7,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import OutboxEvent
@@ -24,7 +25,8 @@ from .models import (
     RecommendationReportModel,
     RecommendationSourceModel,
 )
-from .schemas import PortfolioPositionInput, RecommendationActionInput, RecommendationSourceInput
+from .schemas import PortfolioPositionInput, RecommendationActionInput
+from .source_validation import ValidatedRecommendationSource
 
 
 class InvestmentRepository:
@@ -103,9 +105,16 @@ class InvestmentRepository:
             created_at=now,
             updated_at=now,
         )
-        self.session.add(model)
-        self.session.flush()
-        return model
+        try:
+            with self.session.begin_nested():
+                self.session.add(model)
+                self.session.flush()
+            return model
+        except IntegrityError:
+            existing = self.find_import_by_idempotency(owner_user_id, idempotency_key)
+            if existing is None:
+                raise
+            return existing
 
     def get_import(self, import_id: UUID) -> PortfolioImportModel | None:
         return self.session.get(PortfolioImportModel, import_id)
@@ -217,8 +226,15 @@ class InvestmentRepository:
             created_at=now,
             updated_at=now,
         )
-        self.session.add(job)
-        self.session.flush()
+        try:
+            with self.session.begin_nested():
+                self.session.add(job)
+                self.session.flush()
+        except IntegrityError:
+            existing = self.find_job_by_idempotency(owner_user_id, idempotency_key)
+            if existing is None:
+                raise
+            return existing
         for snapshot in snapshots:
             self.session.add(RecommendationJobSnapshotModel(job_id=job.id, snapshot_id=snapshot.id))
         self.enqueue_job(job, analysis_package)
@@ -243,6 +259,7 @@ class InvestmentRepository:
                 available_at=now,
                 processed_at=None,
                 attempt_count=job.attempt_count - 1,
+                deduplication_key=f"investment-recommendation:{job.id}:attempt:{job.attempt_count}",
             )
         )
 
@@ -274,11 +291,40 @@ class InvestmentRepository:
                 available_at=now,
                 processed_at=None,
                 attempt_count=0,
+                deduplication_key=f"investment-recommendation:{job.id}:ready",
             )
         )
 
     def get_job(self, job_id: UUID) -> RecommendationJobModel | None:
         return self.session.get(RecommendationJobModel, job_id)
+
+    def get_job_for_update(self, job_id: UUID) -> RecommendationJobModel | None:
+        return self.session.scalar(
+            select(RecommendationJobModel)
+            .where(RecommendationJobModel.id == job_id)
+            .with_for_update()
+        )
+
+    def conditional_update_job(
+        self,
+        *,
+        job_id: UUID,
+        expected_version: int,
+        values: dict[str, Any],
+    ) -> RecommendationJobModel | None:
+        result = self.session.execute(
+            update(RecommendationJobModel)
+            .where(
+                RecommendationJobModel.id == job_id,
+                RecommendationJobModel.version == expected_version,
+            )
+            .values(**values, version=expected_version + 1)
+        )
+        if result.rowcount != 1:
+            return None
+        self.session.flush()
+        self.session.expire_all()
+        return self.get_job_for_update(job_id)
 
     def job_snapshot_ids(self, job_id: UUID) -> list[UUID]:
         return list(
@@ -301,16 +347,21 @@ class InvestmentRepository:
 
     def record_nonce(
         self, *, job_id: UUID, nonce: str, received_at: datetime, expires_at: datetime
-    ) -> None:
-        self.session.add(
-            RecommendationCallbackNonceModel(
-                job_id=job_id,
-                nonce=nonce,
-                received_at=received_at,
-                expires_at=expires_at,
-            )
-        )
-        self.session.flush()
+    ) -> bool:
+        try:
+            with self.session.begin_nested():
+                self.session.add(
+                    RecommendationCallbackNonceModel(
+                        job_id=job_id,
+                        nonce=nonce,
+                        received_at=received_at,
+                        expires_at=expires_at,
+                    )
+                )
+                self.session.flush()
+            return True
+        except IntegrityError:
+            return False
 
     def save_report(
         self,
@@ -322,7 +373,7 @@ class InvestmentRepository:
         valid_until: datetime,
         disclaimer: str,
         actions: list[RecommendationActionInput],
-        sources: list[RecommendationSourceInput],
+        sources: list[ValidatedRecommendationSource],
     ) -> RecommendationReportModel:
         report = RecommendationReportModel(
             owner_user_id=job.owner_user_id,
@@ -342,6 +393,7 @@ class InvestmentRepository:
                     instrument_name=item.instrument_name,
                     ticker=item.ticker,
                     isin=item.isin,
+                    risk_bucket=str(item.risk_bucket),
                     action=str(item.action),
                     current_percent=item.current_percent,
                     target_percent=item.target_percent,
@@ -351,14 +403,15 @@ class InvestmentRepository:
                     risks=item.risks,
                 )
             )
-        for item in sources:
+        for validated in sources:
+            item = validated.source
             self.session.add(
                 RecommendationSourceModel(
                     report_id=report.id,
                     title=item.title,
                     url=str(item.url),
                     publisher=item.publisher,
-                    trust_tier=item.trust_tier,
+                    trust_tier=validated.trust_tier,
                     published_at=item.published_at,
                     fetched_at=item.fetched_at,
                 )

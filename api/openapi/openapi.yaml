@@ -1603,6 +1603,7 @@ paths:
       tags: [Investments]
       operationId: receiveRecommendationCallback
       summary: Receive an HMAC-authenticated callback from the analysis service.
+      description: The signature binds the HTTP method, canonical callback path including jobId, timestamp, nonce, and exact request body bytes.
       security: []
       parameters:
         - name: jobId
@@ -1943,7 +1944,10 @@ components:
     PortfolioPositionInput:
       type: object
       additionalProperties: false
-      required: [instrumentName, instrumentType, riskBucket, quantity, marketValue, taxAccountType]
+      anyOf:
+        - required: [ticker]
+        - required: [isin]
+      required: [instrumentName, instrumentType, riskBucket, quantity, marketValue]
       properties:
         instrumentName: { type: string, minLength: 1, maxLength: 300 }
         ticker: { type: [string, 'null'], maxLength: 32 }
@@ -2052,11 +2056,15 @@ components:
     RecommendationActionInput:
       type: object
       additionalProperties: false
-      required: [instrumentName, action, currentPercent, targetPercent, amount, priority, rationale, risks]
+      anyOf:
+        - required: [ticker]
+        - required: [isin]
+      required: [instrumentName, riskBucket, action, currentPercent, targetPercent, amount, priority, rationale, risks]
       properties:
         instrumentName: { type: string, minLength: 1, maxLength: 300 }
         ticker: { type: [string, 'null'], maxLength: 32 }
         isin: { type: [string, 'null'], pattern: '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' }
+        riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
         action: { type: string, enum: [keep, reduce, increase, add] }
         currentPercent: { $ref: '#/components/schemas/InvestmentPercent' }
         targetPercent: { $ref: '#/components/schemas/InvestmentPercent' }
@@ -2064,17 +2072,34 @@ components:
         priority: { type: integer, minimum: 1, maximum: 100 }
         rationale: { type: string, minLength: 1, maxLength: 5000 }
         risks: { type: string, minLength: 1, maxLength: 5000 }
+    RecommendationActionDto:
+      allOf:
+        - $ref: '#/components/schemas/RecommendationActionInput'
     RecommendationSourceInput:
       type: object
       additionalProperties: false
-      required: [title, url, publisher, trustTier, fetchedAt]
+      required: [title, url, publisher, fetchedAt]
       properties:
         title: { type: string, minLength: 1, maxLength: 300 }
         url: { type: string, format: uri, pattern: '^https://' }
         publisher: { type: string, minLength: 1, maxLength: 300 }
-        trustTier: { type: string, enum: [official, issuer, disclosure, news] }
         publishedAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
         fetchedAt: { $ref: '#/components/schemas/DateTime' }
+    RecommendationSourceDto:
+      allOf:
+        - $ref: '#/components/schemas/RecommendationSourceInput'
+        - type: object
+          required: [trustTier]
+          properties:
+            trustTier: { type: string, enum: [official, issuer, disclosure, news] }
+    RecommendationAggregateInput:
+      type: object
+      additionalProperties: false
+      required: [riskBucket, currentPercent, proposedPercent]
+      properties:
+        riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
+        currentPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        proposedPercent: { $ref: '#/components/schemas/InvestmentPercent' }
     RecommendationCallbackRequest:
       type: object
       additionalProperties: false
@@ -2086,6 +2111,10 @@ components:
         marketDataAsOf: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
         summary: { type: [string, 'null'], maxLength: 5000 }
         assumptions: { type: object, additionalProperties: true }
+        aggregates:
+          type: array
+          maxItems: 3
+          items: { $ref: '#/components/schemas/RecommendationAggregateInput' }
         actions:
           type: array
           maxItems: 200
@@ -2108,10 +2137,10 @@ components:
         disclaimer: { type: string }
         actions:
           type: array
-          items: { $ref: '#/components/schemas/RecommendationActionInput' }
+          items: { $ref: '#/components/schemas/RecommendationActionDto' }
         sources:
           type: array
-          items: { $ref: '#/components/schemas/RecommendationSourceInput' }
+          items: { $ref: '#/components/schemas/RecommendationSourceDto' }
     RecommendationReportEnvelope:
       type: object
       required: [data]

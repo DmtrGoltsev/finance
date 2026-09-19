@@ -7,7 +7,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 
 from app.api.auth_context import CurrentActor
 from app.config import get_settings
@@ -28,17 +27,20 @@ from .schemas import (
     PortfolioPositionDto,
     PortfolioSnapshotDto,
     PortfolioSnapshotEnvelope,
-    RecommendationActionInput,
+    RecommendationActionDto,
     RecommendationCallbackRequest,
     RecommendationJobCreateRequest,
     RecommendationJobDto,
     RecommendationJobEnvelope,
     RecommendationReportDto,
     RecommendationReportEnvelope,
-    RecommendationSourceInput,
+    RecommendationSourceDto,
 )
 from .service import (
+    ConcurrentTransition,
     IdempotencyConflict,
+    InvalidObservedAt,
+    InvalidRecommendationPayload,
     InvalidTransition,
     InvestmentService,
     InvestmentServiceError,
@@ -52,8 +54,12 @@ router = APIRouter(prefix="/investments", tags=["Investments"])
 
 
 def investment_service_for_request() -> Iterator[InvestmentService]:
-    with sync_session_scope(get_settings()) as session:
-        yield InvestmentService(InvestmentRepository(session))
+    settings = get_settings()
+    with sync_session_scope(settings) as session:
+        yield InvestmentService(
+            InvestmentRepository(session),
+            issuer_source_hosts=settings.investment_source_allowed_issuer_hosts,
+        )
 
 
 InvestmentServiceDependency = Annotated[InvestmentService, Depends(investment_service_for_request)]
@@ -62,9 +68,15 @@ InvestmentServiceDependency = Annotated[InvestmentService, Depends(investment_se
 def _error(error: InvestmentServiceError, request_id: str | None = None) -> JSONResponse:
     if isinstance(error, ResourceNotFoundOrInaccessible):
         status_code = status.HTTP_404_NOT_FOUND
-    elif isinstance(error, (IdempotencyConflict, InvalidTransition, ReplayDetected)):
+    elif isinstance(
+        error,
+        (IdempotencyConflict, InvalidTransition, ReplayDetected, ConcurrentTransition),
+    ):
         status_code = status.HTTP_409_CONFLICT
-    elif isinstance(error, (StalePortfolio, StaleMarketData)):
+    elif isinstance(
+        error,
+        (StalePortfolio, StaleMarketData, InvalidObservedAt, InvalidRecommendationPayload),
+    ):
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     else:
         status_code = status.HTTP_400_BAD_REQUEST
@@ -170,18 +182,14 @@ def _job_dto(service: InvestmentService, model: Any) -> RecommendationJobDto:
     )
 
 
-@router.get(
-    "/policy", response_model=InvestmentPolicyEnvelope, operation_id="getInvestmentPolicy"
-)
+@router.get("/policy", response_model=InvestmentPolicyEnvelope, operation_id="getInvestmentPolicy")
 async def get_policy(
     actor: CurrentActor, service: InvestmentServiceDependency
 ) -> InvestmentPolicyEnvelope:
     return InvestmentPolicyEnvelope(data=_policy_dto(service.policy(actor)))
 
 
-@router.put(
-    "/policy", response_model=InvestmentPolicyEnvelope, operation_id="putInvestmentPolicy"
-)
+@router.put("/policy", response_model=InvestmentPolicyEnvelope, operation_id="putInvestmentPolicy")
 async def put_policy(
     request: InvestmentPolicyPutRequest,
     actor: CurrentActor,
@@ -267,9 +275,7 @@ async def create_recommendation_job(
     service: InvestmentServiceDependency,
 ) -> RecommendationJobEnvelope | JSONResponse:
     try:
-        return RecommendationJobEnvelope(
-            data=_job_dto(service, service.create_job(actor, request))
-        )
+        return RecommendationJobEnvelope(data=_job_dto(service, service.create_job(actor, request)))
     except InvestmentServiceError as error:
         return _error(error, actor.request_id)
 
@@ -307,15 +313,16 @@ async def get_recommendation_report(
             job_id=str(model.job_id),
             summary=model.summary,
             assumptions=model.assumptions,
-            generated_at=model.generated_at,
-            valid_until=model.valid_until,
-            is_stale=model.valid_until < datetime.now(UTC),
+            generated_at=_utc(model.generated_at),
+            valid_until=_utc(model.valid_until),
+            is_stale=_utc(model.valid_until) < datetime.now(UTC),
             disclaimer=model.disclaimer,
             actions=[
-                RecommendationActionInput(
+                RecommendationActionDto(
                     instrument_name=item.instrument_name,
                     ticker=item.ticker,
                     isin=item.isin,
+                    risk_bucket=item.risk_bucket,
                     action=item.action,
                     current_percent=item.current_percent,
                     target_percent=item.target_percent,
@@ -327,7 +334,7 @@ async def get_recommendation_report(
                 for item in service.repo.report_actions(model.id)
             ],
             sources=[
-                RecommendationSourceInput(
+                RecommendationSourceDto(
                     title=item.title,
                     url=item.url,
                     publisher=item.publisher,
@@ -352,6 +359,7 @@ async def get_recommendation_report(
 async def recommendation_callback(
     jobId: UUID,
     raw_request: Request,
+    callback: RecommendationCallbackRequest,
     service: InvestmentServiceDependency,
     x_finance_timestamp: Annotated[str | None, Header()] = None,
     x_finance_nonce: Annotated[str | None, Header()] = None,
@@ -362,16 +370,20 @@ async def recommendation_callback(
     try:
         verified = verify_callback(
             secret=settings.investment_callback_hmac_secret,
+            method=raw_request.method,
+            canonical_path=(
+                f"{settings.api_v1_prefix}/investments/internal/"
+                f"recommendation-jobs/{jobId}/callback"
+            ),
             timestamp_text=x_finance_timestamp,
             nonce=x_finance_nonce,
             signature=x_finance_signature,
             body=body,
             max_clock_skew_seconds=settings.investment_callback_max_clock_skew_seconds,
         )
-        callback = RecommendationCallbackRequest.model_validate_json(body)
         model = service.apply_callback(job_id=jobId, nonce=verified.nonce, request=callback)
         return RecommendationJobEnvelope(data=_job_dto(service, model))
-    except (HmacVerificationError, ValidationError):
+    except HmacVerificationError:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={
@@ -384,3 +396,9 @@ async def recommendation_callback(
         )
     except InvestmentServiceError as error:
         return _error(error, "internal")
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)

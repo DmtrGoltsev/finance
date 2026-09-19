@@ -16,14 +16,32 @@ class HmacVerificationError(ValueError):
     pass
 
 
-def sign_callback(*, secret: str, timestamp: int, nonce: str, body: bytes) -> str:
-    payload = str(timestamp).encode() + b"." + nonce.encode() + b"." + body
+def sign_callback(
+    *,
+    secret: str,
+    method: str,
+    canonical_path: str,
+    timestamp: int,
+    nonce: str,
+    body: bytes,
+) -> str:
+    payload = b"\n".join(
+        (
+            method.upper().encode("ascii"),
+            canonical_path.encode("utf-8"),
+            str(timestamp).encode("ascii"),
+            nonce.encode("utf-8"),
+            body,
+        )
+    )
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
 def verify_callback(
     *,
     secret: str | None,
+    method: str,
+    canonical_path: str,
     timestamp_text: str | None,
     nonce: str | None,
     signature: str | None,
@@ -44,7 +62,16 @@ def verify_callback(
     current = int(time.time()) if now_epoch is None else now_epoch
     if abs(current - timestamp) > max_clock_skew_seconds:
         raise HmacVerificationError("callback timestamp outside allowed window")
-    expected = sign_callback(secret=secret, timestamp=timestamp, nonce=nonce, body=body)
+    if not canonical_path.startswith("/api/v1/investments/internal/recommendation-jobs/"):
+        raise HmacVerificationError("invalid callback path")
+    expected = sign_callback(
+        secret=secret,
+        method=method,
+        canonical_path=canonical_path,
+        timestamp=timestamp,
+        nonce=nonce,
+        body=body,
+    )
     if not hmac.compare_digest(expected, signature.casefold()):
         raise HmacVerificationError("invalid callback signature")
     return HmacVerification(timestamp=timestamp, nonce=nonce)

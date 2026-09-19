@@ -968,6 +968,13 @@ class OutboxEvent(Base):
         Index("ix_outbox_events_event_type_created", "event_type", "created_at"),
         Index("ix_outbox_events_owner_created", "owner_user_id", "created_at"),
         Index("ix_outbox_events_household_created", "household_id", "created_at"),
+        Index(
+            "uq_outbox_events_deduplication_key",
+            "deduplication_key",
+            unique=True,
+            postgresql_where=text("deduplication_key IS NOT NULL"),
+            sqlite_where=text("deduplication_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -988,6 +995,7 @@ class OutboxEvent(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    deduplication_key: Mapped[str | None] = mapped_column(Text)
 
 
 class SyncClient(Base):

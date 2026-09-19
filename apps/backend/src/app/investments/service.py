@@ -23,6 +23,10 @@ from .schemas import (
     RecommendationCallbackRequest,
     RecommendationJobCreateRequest,
 )
+from .source_validation import (
+    UntrustedRecommendationSource,
+    validate_recommendation_sources,
+)
 
 SNAPSHOT_FRESHNESS = timedelta(hours=24)
 RECOMMENDATION_VALIDITY = timedelta(days=7)
@@ -61,10 +65,29 @@ class ReplayDetected(InvestmentServiceError):
     code = "CALLBACK_REPLAY_DETECTED"
 
 
+class InvalidObservedAt(InvestmentServiceError):
+    code = "PORTFOLIO_OBSERVED_AT_INVALID"
+
+
+class InvalidRecommendationPayload(InvestmentServiceError):
+    code = "INVALID_RECOMMENDATION_PAYLOAD"
+
+
+class ConcurrentTransition(InvestmentServiceError):
+    code = "CONCURRENT_RECOMMENDATION_TRANSITION"
+
+
 class InvestmentService:
-    def __init__(self, repository: InvestmentRepository, *, now: datetime | None = None) -> None:
+    def __init__(
+        self,
+        repository: InvestmentRepository,
+        *,
+        now: datetime | None = None,
+        issuer_source_hosts: list[str] | None = None,
+    ) -> None:
         self.repo = repository
         self._fixed_now = now
+        self._issuer_source_hosts = issuer_source_hosts or []
 
     @property
     def now(self) -> datetime:
@@ -99,6 +122,8 @@ class InvestmentService:
         self, actor: Actor, request: PortfolioImportCreateRequest
     ) -> PortfolioImportModel:
         owner = _actor_uuid(actor)
+        if _utc(request.observed_at) > self.now + timedelta(minutes=5):
+            raise InvalidObservedAt()
         payload = request.model_dump(mode="json", exclude={"idempotency_key"})
         request_hash = canonical_hash(payload)
         existing = self.repo.find_import_by_idempotency(owner, request.idempotency_key)
@@ -106,7 +131,7 @@ class InvestmentService:
             if existing.request_hash != request_hash:
                 raise IdempotencyConflict()
             return existing
-        return self.repo.create_import(
+        created = self.repo.create_import(
             owner_user_id=owner,
             brokerage=str(request.brokerage),
             idempotency_key=request.idempotency_key,
@@ -114,6 +139,9 @@ class InvestmentService:
             screenshot_count=request.screenshot_count,
             observed_at=request.observed_at,
         )
+        if created.request_hash != request_hash:
+            raise IdempotencyConflict()
+        return created
 
     def confirm_import(
         self,
@@ -169,13 +197,16 @@ class InvestmentService:
 
         policy = self.policy(actor)
         analysis_package = self._analysis_package(snapshots, policy)
-        return self.repo.create_job(
+        created = self.repo.create_job(
             owner_user_id=owner,
             idempotency_key=request.idempotency_key,
             request_hash=request_hash,
             snapshots=snapshots,
             analysis_package=analysis_package,
         )
+        if created.request_hash != request_hash:
+            raise IdempotencyConflict()
+        return created
 
     def job(self, actor: Actor, job_id: UUID) -> RecommendationJobModel:
         owner = _actor_uuid(actor)
@@ -189,6 +220,8 @@ class InvestmentService:
         report = self.repo.report_for_job(job_id)
         if report is None:
             raise ResourceNotFoundOrInaccessible()
+        report.generated_at = _utc(report.generated_at)
+        report.valid_until = _utc(report.valid_until)
         return report
 
     def apply_callback(
@@ -198,17 +231,16 @@ class InvestmentService:
         nonce: str,
         request: RecommendationCallbackRequest,
     ) -> RecommendationJobModel:
-        job = self.repo.get_job(job_id)
+        job = self.repo.get_job_for_update(job_id)
         if job is None:
             raise ResourceNotFoundOrInaccessible()
-        if self.repo.nonce_exists(nonce):
-            raise ReplayDetected()
-        self.repo.record_nonce(
+        if not self.repo.record_nonce(
             job_id=job.id,
             nonce=nonce,
             received_at=self.now,
             expires_at=self.now + CALLBACK_NONCE_TTL,
-        )
+        ):
+            raise ReplayDetected()
 
         status = str(request.status)
         allowed = {
@@ -227,38 +259,70 @@ class InvestmentService:
                 minutes=5
             ):
                 raise StaleMarketData()
-            job.market_data_as_of = market_time
+        else:
+            market_time = job.market_data_as_of
+
+        validated_sources = []
+        if status == "ready":
+            try:
+                validated_sources = validate_recommendation_sources(
+                    request.sources,
+                    issuer_hosts=self._issuer_source_hosts,
+                )
+            except UntrustedRecommendationSource as exc:
+                raise InvalidRecommendationPayload() from exc
+            self._validate_ready_payload(job, request)
 
         if status == "failed" and request.retryable and job.attempt_count < 3:
-            job.attempt_count += 1
-            job.status = "queued"
-            job.last_error_code = request.error_code
-            job.updated_at = self.now
-            self.repo.enqueue_job(job, {"schemaVersion": 1, "jobId": str(job.id), "retry": True})
+            updated = self.repo.conditional_update_job(
+                job_id=job.id,
+                expected_version=job.version,
+                values={
+                    "attempt_count": job.attempt_count + 1,
+                    "status": "queued",
+                    "last_error_code": request.error_code,
+                    "updated_at": self.now,
+                    "market_data_as_of": market_time,
+                },
+            )
+            if updated is None:
+                raise ConcurrentTransition()
+            self.repo.enqueue_job(
+                updated,
+                {"schemaVersion": 1, "jobId": str(updated.id), "retry": True},
+            )
             self.repo.session.flush()
-            return job
+            return updated
 
-        job.status = status
-        job.updated_at = self.now
-        job.last_error_code = request.error_code
+        completed_at = self.now if status in {"ready", "failed"} else None
+        updated = self.repo.conditional_update_job(
+            job_id=job.id,
+            expected_version=job.version,
+            values={
+                "status": status,
+                "last_error_code": request.error_code,
+                "updated_at": self.now,
+                "market_data_as_of": market_time,
+                "completed_at": completed_at,
+            },
+        )
+        if updated is None:
+            raise ConcurrentTransition()
         if status == "ready":
             generated_at = self.now
             report = self.repo.save_report(
-                job=job,
+                job=updated,
                 summary=request.summary or "",
                 assumptions=request.assumptions,
                 generated_at=generated_at,
                 valid_until=generated_at + RECOMMENDATION_VALIDITY,
                 disclaimer=DISCLAIMER,
                 actions=request.actions,
-                sources=request.sources,
+                sources=validated_sources,
             )
-            self.repo.enqueue_ready_notification(job, report)
-            job.completed_at = generated_at
-        elif status == "failed":
-            job.completed_at = self.now
+            self.repo.enqueue_ready_notification(updated, report)
         self.repo.session.flush()
-        return job
+        return updated
 
     def cash_first_adjustments(self, job: RecommendationJobModel) -> list[Any]:
         snapshots = [self.repo.get_snapshot(item) for item in self.repo.job_snapshot_ids(job.id)]
@@ -296,8 +360,7 @@ class InvestmentService:
             for item in self.repo.positions(snapshot.id):
                 positions.append(
                     {
-                        "instrumentName": item.instrument_name,
-                        "ticker": item.ticker,
+                        "secid": item.ticker,
                         "isin": item.isin,
                         "instrumentType": item.instrument_type,
                         "riskBucket": item.risk_bucket,
@@ -357,6 +420,64 @@ class InvestmentService:
                 ],
             },
         }
+
+    def _validate_ready_payload(
+        self,
+        job: RecommendationJobModel,
+        request: RecommendationCallbackRequest,
+    ) -> None:
+        adjustments = {str(item.bucket): item for item in self.cash_first_adjustments(job)}
+        aggregates = {str(item.risk_bucket): item for item in request.aggregates}
+        epsilon = Decimal("0.0100")
+        for bucket, adjustment in adjustments.items():
+            aggregate = aggregates.get(bucket)
+            if aggregate is None:
+                raise InvalidRecommendationPayload()
+            if abs(aggregate.current_percent - adjustment.current_percent) > epsilon:
+                raise InvalidRecommendationPayload()
+            if abs(aggregate.proposed_percent - adjustment.projected_percent) > epsilon:
+                raise InvalidRecommendationPayload()
+            if abs(aggregate.proposed_percent - adjustment.target_percent) > Decimal("5"):
+                raise InvalidRecommendationPayload()
+
+        known: dict[tuple[str, str], Any] = {}
+        for snapshot_id in self.repo.job_snapshot_ids(job.id):
+            for position in self.repo.positions(snapshot_id):
+                if position.ticker:
+                    known[("secid", position.ticker.casefold())] = position
+                if position.isin:
+                    known[("isin", position.isin.casefold())] = position
+
+        additions = {bucket: Decimal("0") for bucket in adjustments}
+        reductions = {bucket: Decimal("0") for bucket in adjustments}
+        for action in request.actions:
+            bucket = str(action.risk_bucket)
+            adjustment = adjustments.get(bucket)
+            if adjustment is None:
+                raise InvalidRecommendationPayload()
+            position = None
+            if action.ticker:
+                position = known.get(("secid", action.ticker.casefold()))
+            if position is None and action.isin:
+                position = known.get(("isin", action.isin.casefold()))
+            action_name = str(action.action)
+            if action_name in {"keep", "reduce", "increase"}:
+                if position is None or position.risk_bucket != bucket:
+                    raise InvalidRecommendationPayload()
+            if action_name == "keep" and action.amount != 0:
+                raise InvalidRecommendationPayload()
+            if action_name == "reduce":
+                if position is None or action.amount > position.market_value:
+                    raise InvalidRecommendationPayload()
+                reductions[bucket] += action.amount
+            elif action_name in {"add", "increase"}:
+                additions[bucket] += action.amount
+
+        for bucket, adjustment in adjustments.items():
+            if reductions[bucket] > adjustment.reduce_amount + Decimal("0.0001"):
+                raise InvalidRecommendationPayload()
+            if additions[bucket] > adjustment.add_amount + Decimal("0.0001"):
+                raise InvalidRecommendationPayload()
 
 
 def _actor_uuid(actor: Actor) -> UUID:
