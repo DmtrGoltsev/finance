@@ -158,6 +158,15 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/planning/allocations/{allocationId}",
         "/sync/push",
         "/sync/pull",
+        "/investments/policy",
+        "/investments/portfolio-imports",
+        "/investments/portfolio-imports/{importId}/confirm",
+        "/investments/portfolio-snapshots",
+        "/investments/portfolio-snapshots/{snapshotId}",
+        "/investments/recommendation-jobs",
+        "/investments/recommendation-jobs/{jobId}",
+        "/investments/recommendation-jobs/{jobId}/report",
+        "/investments/internal/recommendation-jobs/{jobId}/callback",
     }
 
     assert paths == required_paths
@@ -359,3 +368,23 @@ def test_openapi_mobile_session_revoke_proof_is_explicit_and_backward_compatible
     assert "required: [sessionId, revokeToken]" in revoke_request
     assert "operationId: revokeBearerSession" in contract
     assert "including when access and refresh tokens have just rotated" in contract
+
+
+def test_openapi_investment_contract_excludes_sensitive_broker_data_and_trade_execution() -> None:
+    contract = _contract_text()
+
+    assert "operationId: createPortfolioImport" in contract
+    assert "operationId: receiveRecommendationCallback" in contract
+    assert "X-Finance-Signature" in contract
+    assert "market data no older than 24 hours" in contract
+    assert "never executes trades" in contract
+    for forbidden in (
+        "brokerPassword",
+        "brokerToken",
+        "accountNumber",
+        "personName",
+        "rawScreenshot",
+        "rawOcrText",
+        "executeTrade",
+    ):
+        assert forbidden not in contract

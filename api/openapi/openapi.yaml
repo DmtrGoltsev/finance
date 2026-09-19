@@ -46,6 +46,8 @@ tags:
     description: Monthly personal and household planning; confirmations never create transactions.
   - name: Sync
     description: Offline-first sync push/pull for the mounted MVP entity subset.
+  - name: Investments
+    description: Personal Russian-market portfolio snapshots and asynchronous manual recommendations using market data no older than 24 hours. The service never executes trades and accepts no broker credentials, account numbers, person names, or raw screenshots.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
@@ -1446,6 +1448,191 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /investments/policy:
+    get:
+      tags: [Investments]
+      operationId: getInvestmentPolicy
+      summary: Get the owner's 40/30/30 investment policy.
+      responses:
+        '200':
+          description: Personal policy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestmentPolicyEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Investments]
+      operationId: putInvestmentPolicy
+      summary: Replace the owner's investment policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestmentPolicyPutRequest' }
+      responses:
+        '200':
+          description: Updated personal policy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestmentPolicyEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports:
+    post:
+      tags: [Investments]
+      operationId: createPortfolioImport
+      summary: Start a metadata-only portfolio screenshot import.
+      description: Raw screenshots and OCR text are transient and must not be stored by this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortfolioImportCreateRequest' }
+      responses:
+        '201':
+          description: Pending import.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioImportEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports/{importId}/confirm:
+    post:
+      tags: [Investments]
+      operationId: confirmPortfolioImport
+      summary: Confirm edited structured positions and create an immutable snapshot.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/ResourceId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortfolioImportConfirmRequest' }
+      responses:
+        '201':
+          description: Confirmed portfolio snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioSnapshotEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-snapshots:
+    get:
+      tags: [Investments]
+      operationId: listPortfolioSnapshots
+      summary: List owner-only portfolio snapshots newest first.
+      responses:
+        '200':
+          description: Portfolio snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PortfolioSnapshotDto' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-snapshots/{snapshotId}:
+    get:
+      tags: [Investments]
+      operationId: getPortfolioSnapshot
+      summary: Get an owner-only portfolio snapshot.
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        '200':
+          description: Portfolio snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioSnapshotEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs:
+    post:
+      tags: [Investments]
+      operationId: createRecommendationJob
+      summary: Queue an owner-requested recommendation over one or more fresh snapshots.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecommendationJobCreateRequest' }
+      responses:
+        '202':
+          description: Queued recommendation job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}:
+    get:
+      tags: [Investments]
+      operationId: getRecommendationJob
+      summary: Get owner-only recommendation status and cash-first calculation.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        '200':
+          description: Recommendation job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}/report:
+    get:
+      tags: [Investments]
+      operationId: getRecommendationReport
+      summary: Get a ready owner-only recommendation report.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        '200':
+          description: Recommendation report with citations and seven-day validity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationReportEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/internal/recommendation-jobs/{jobId}/callback:
+    post:
+      tags: [Investments]
+      operationId: receiveRecommendationCallback
+      summary: Receive an HMAC-authenticated callback from the analysis service.
+      security: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/ResourceId' }
+        - name: X-Finance-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-Finance-Nonce
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+        - name: X-Finance-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecommendationCallbackRequest' }
+      responses:
+        '200':
+          description: Callback accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     pwaCookieAuth:
@@ -1685,6 +1872,251 @@ components:
       maxLength: 128
       pattern: '^[A-Za-z0-9_:-]+$'
       examples: [usr_123]
+    InvestmentPercent:
+      type: string
+      pattern: '^(0|[1-9][0-9]?|100)(\.[0-9]{1,4})?$'
+      examples: ['40.0000']
+    Brokerage:
+      type: string
+      enum: [sinara, sber_investments, finam]
+    InvestmentInstrumentType:
+      type: string
+      enum: [stock, bond, fund]
+    InvestmentRiskBucket:
+      type: string
+      enum: [conservative, moderate, aggressive]
+    InvestmentPolicyPutRequest:
+      type: object
+      additionalProperties: false
+      required: [conservativePercent, moderatePercent, aggressivePercent, tolerancePercent]
+      properties:
+        conservativePercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        moderatePercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        aggressivePercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        tolerancePercent: { $ref: '#/components/schemas/InvestmentPercent' }
+      description: Percentages must total 100. The initial owner policy is 40/30/30 with a five percentage-point tolerance.
+    InvestmentPolicyDto:
+      allOf:
+        - $ref: '#/components/schemas/InvestmentPolicyPutRequest'
+        - type: object
+          required: [id, ownerUserId, createdAt, updatedAt, version]
+          properties:
+            id: { $ref: '#/components/schemas/ResourceId' }
+            ownerUserId: { $ref: '#/components/schemas/ResourceId' }
+            createdAt: { $ref: '#/components/schemas/DateTime' }
+            updatedAt: { $ref: '#/components/schemas/DateTime' }
+            version: { type: integer, minimum: 1 }
+    InvestmentPolicyEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/InvestmentPolicyDto' }
+    PortfolioImportCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, brokerage, screenshotCount, observedAt]
+      properties:
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+        brokerage: { $ref: '#/components/schemas/Brokerage' }
+        screenshotCount: { type: integer, minimum: 1, maximum: 20 }
+        observedAt: { $ref: '#/components/schemas/DateTime' }
+      description: Metadata only. Raw screenshots, OCR text, person names, broker account identifiers, and credentials are forbidden.
+    PortfolioImportDto:
+      type: object
+      required: [id, brokerage, screenshotCount, observedAt, status, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        brokerage: { $ref: '#/components/schemas/Brokerage' }
+        screenshotCount: { type: integer }
+        observedAt: { $ref: '#/components/schemas/DateTime' }
+        status: { type: string, enum: [pending, confirmed] }
+        confirmedAt:
+          oneOf:
+            - { $ref: '#/components/schemas/DateTime' }
+            - { type: 'null' }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    PortfolioImportEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/PortfolioImportDto' }
+    PortfolioPositionInput:
+      type: object
+      additionalProperties: false
+      required: [instrumentName, instrumentType, riskBucket, quantity, marketValue, taxAccountType]
+      properties:
+        instrumentName: { type: string, minLength: 1, maxLength: 300 }
+        ticker: { type: [string, 'null'], maxLength: 32 }
+        isin: { type: [string, 'null'], pattern: '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' }
+        instrumentType: { $ref: '#/components/schemas/InvestmentInstrumentType' }
+        riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
+        quantity: { $ref: '#/components/schemas/DecimalString' }
+        marketPrice: { oneOf: [{ $ref: '#/components/schemas/DecimalString' }, { type: 'null' }] }
+        marketValue: { $ref: '#/components/schemas/DecimalString' }
+        averagePrice: { oneOf: [{ $ref: '#/components/schemas/DecimalString' }, { type: 'null' }] }
+        nominal: { oneOf: [{ $ref: '#/components/schemas/DecimalString' }, { type: 'null' }] }
+        accruedInterest: { oneOf: [{ $ref: '#/components/schemas/DecimalString' }, { type: 'null' }] }
+        couponRate: { oneOf: [{ $ref: '#/components/schemas/InvestmentPercent' }, { type: 'null' }] }
+        maturityDate: { oneOf: [{ $ref: '#/components/schemas/DateOnly' }, { type: 'null' }] }
+        taxAccountType: { type: string, enum: [brokerage, iis_a, iis_b, iis_iii] }
+        holdingStartedAt: { oneOf: [{ $ref: '#/components/schemas/DateOnly' }, { type: 'null' }] }
+        estimatedFeeRate: { oneOf: [{ $ref: '#/components/schemas/InvestmentPercent' }, { type: 'null' }] }
+    PortfolioPositionDto:
+      allOf:
+        - $ref: '#/components/schemas/PortfolioPositionInput'
+        - type: object
+          required: [id]
+          properties:
+            id: { $ref: '#/components/schemas/ResourceId' }
+    PortfolioImportConfirmRequest:
+      type: object
+      additionalProperties: false
+      required: [freeCash, monthlyContribution, positions]
+      properties:
+        freeCash: { $ref: '#/components/schemas/DecimalString' }
+        monthlyContribution: { $ref: '#/components/schemas/DecimalString' }
+        positions:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/PortfolioPositionInput' }
+    PortfolioSnapshotDto:
+      type: object
+      required: [id, importId, brokerage, observedAt, currency, freeCash, monthlyContribution, totalValue, positions, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        importId: { $ref: '#/components/schemas/ResourceId' }
+        brokerage: { $ref: '#/components/schemas/Brokerage' }
+        observedAt: { $ref: '#/components/schemas/DateTime' }
+        currency: { type: string, const: RUB }
+        freeCash: { $ref: '#/components/schemas/DecimalString' }
+        monthlyContribution: { $ref: '#/components/schemas/DecimalString' }
+        totalValue: { $ref: '#/components/schemas/DecimalString' }
+        positions:
+          type: array
+          items: { $ref: '#/components/schemas/PortfolioPositionDto' }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    PortfolioSnapshotEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/PortfolioSnapshotDto' }
+    RecommendationJobCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, snapshotIds]
+      properties:
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+        snapshotIds:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/ResourceId' }
+    RecommendationStatus:
+      type: string
+      enum: [queued, collecting, analyzing, ready, failed]
+    BucketAdjustmentDto:
+      type: object
+      required: [riskBucket, addAmount, reduceAmount, currentPercent, projectedPercent, targetPercent, withinTolerance]
+      properties:
+        riskBucket: { $ref: '#/components/schemas/InvestmentRiskBucket' }
+        addAmount: { $ref: '#/components/schemas/DecimalString' }
+        reduceAmount: { $ref: '#/components/schemas/DecimalString' }
+        currentPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        projectedPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        targetPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        withinTolerance: { type: boolean }
+    RecommendationJobDto:
+      type: object
+      required: [id, snapshotIds, status, attemptCount, cashFirstAdjustments, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        snapshotIds:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceId' }
+        status: { $ref: '#/components/schemas/RecommendationStatus' }
+        attemptCount: { type: integer, minimum: 1, maximum: 3 }
+        marketDataAsOf: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        cashFirstAdjustments:
+          type: array
+          items: { $ref: '#/components/schemas/BucketAdjustmentDto' }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+        completedAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+    RecommendationJobEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/RecommendationJobDto' }
+    RecommendationActionInput:
+      type: object
+      additionalProperties: false
+      required: [instrumentName, action, currentPercent, targetPercent, amount, priority, rationale, risks]
+      properties:
+        instrumentName: { type: string, minLength: 1, maxLength: 300 }
+        ticker: { type: [string, 'null'], maxLength: 32 }
+        isin: { type: [string, 'null'], pattern: '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' }
+        action: { type: string, enum: [keep, reduce, increase, add] }
+        currentPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        targetPercent: { $ref: '#/components/schemas/InvestmentPercent' }
+        amount: { $ref: '#/components/schemas/DecimalString' }
+        priority: { type: integer, minimum: 1, maximum: 100 }
+        rationale: { type: string, minLength: 1, maxLength: 5000 }
+        risks: { type: string, minLength: 1, maxLength: 5000 }
+    RecommendationSourceInput:
+      type: object
+      additionalProperties: false
+      required: [title, url, publisher, trustTier, fetchedAt]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        url: { type: string, format: uri, pattern: '^https://' }
+        publisher: { type: string, minLength: 1, maxLength: 300 }
+        trustTier: { type: string, enum: [official, issuer, disclosure, news] }
+        publishedAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        fetchedAt: { $ref: '#/components/schemas/DateTime' }
+    RecommendationCallbackRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { $ref: '#/components/schemas/RecommendationStatus' }
+        retryable: { type: boolean, default: false }
+        errorCode: { type: [string, 'null'], maxLength: 100 }
+        marketDataAsOf: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        summary: { type: [string, 'null'], maxLength: 5000 }
+        assumptions: { type: object, additionalProperties: true }
+        actions:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/RecommendationActionInput' }
+        sources:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/RecommendationSourceInput' }
+    RecommendationReportDto:
+      type: object
+      required: [id, jobId, summary, assumptions, generatedAt, validUntil, isStale, disclaimer, actions, sources]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        jobId: { $ref: '#/components/schemas/ResourceId' }
+        summary: { type: string, maxLength: 5000 }
+        assumptions: { type: object, additionalProperties: true }
+        generatedAt: { $ref: '#/components/schemas/DateTime' }
+        validUntil: { $ref: '#/components/schemas/DateTime' }
+        isStale: { type: boolean }
+        disclaimer: { type: string }
+        actions:
+          type: array
+          items: { $ref: '#/components/schemas/RecommendationActionInput' }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/RecommendationSourceInput' }
+    RecommendationReportEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/RecommendationReportDto' }
     DateTime:
       type: string
       format: date-time

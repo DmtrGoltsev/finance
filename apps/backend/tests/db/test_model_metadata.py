@@ -43,6 +43,16 @@ EXPECTED_TABLES = {
     "sync_clients",
     "sync_changes",
     "sync_client_mutations",
+    "investment_policies",
+    "portfolio_imports",
+    "portfolio_snapshots",
+    "portfolio_positions",
+    "recommendation_jobs",
+    "recommendation_job_snapshots",
+    "recommendation_reports",
+    "recommendation_actions",
+    "recommendation_sources",
+    "recommendation_callback_nonces",
 }
 
 
@@ -62,6 +72,11 @@ class ModelMetadataTests(unittest.TestCase):
             ("planning_income_sources", "amount"),
             ("planning_allocations", "allocation_value"),
             ("planning_allocations", "goal_target_amount"),
+            ("portfolio_snapshots", "free_cash"),
+            ("portfolio_snapshots", "monthly_contribution"),
+            ("portfolio_snapshots", "total_value"),
+            ("portfolio_positions", "market_value"),
+            ("recommendation_actions", "amount"),
         ):
             column_type = Base.metadata.tables[table_name].c[column_name].type
             self.assertIsInstance(column_type, Numeric)

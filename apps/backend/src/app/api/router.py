@@ -8,6 +8,7 @@ from app.asset_categories import router as asset_categories_router
 from app.auth.router import router as auth_router
 from app.capture_drafts import router as capture_drafts_router
 from app.categories import router as categories_router
+from app.investments import router as investments_router
 from app.planning import router as planning_router
 from app.reports import router as reports_router
 from app.sync import router as sync_router
@@ -60,6 +61,7 @@ _include_router_with_error_envelope(capture_drafts_router)
 _include_router_with_error_envelope(reports_router)
 _include_router_with_error_envelope(planning_router)
 _include_router_with_error_envelope(sync_router)
+_include_router_with_error_envelope(investments_router.router)
 
 
 @api_router.api_route(

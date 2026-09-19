@@ -135,6 +135,16 @@ class Settings(BaseSettings):
         ge=1,
         description="Per-image Tesseract OCR timeout in seconds.",
     )
+    investment_callback_hmac_secret: str | None = Field(
+        default=None,
+        description="Shared HMAC secret for the n8n recommendation callback.",
+    )
+    investment_callback_max_clock_skew_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=900,
+        description="Maximum accepted n8n callback clock skew.",
+    )
 
     @property
     def effective_auth_bearer_refresh_ttl_seconds(self) -> int:

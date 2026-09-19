@@ -954,9 +954,9 @@ class AuditEvent(Base):
     request_id: Mapped[str | None] = mapped_column(Text)
     reason_code: Mapped[str | None] = mapped_column(Text)
     metadata_safe: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
+        JSONB().with_variant(JSON, "sqlite"),
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("'{}'"),
     )
 
 
@@ -979,9 +979,9 @@ class OutboxEvent(Base):
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     membership_version: Mapped[int | None] = mapped_column(BigInteger)
     payload_safe: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
+        JSONB().with_variant(JSON, "sqlite"),
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("'{}'"),
     )
     status: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = created_timestamp()
@@ -1127,3 +1127,7 @@ class SyncClientMutation(TimestampMixin, Base):
     response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error_code: Mapped[str | None] = mapped_column(Text)
     change_seq: Mapped[int | None] = mapped_column(BigInteger)
+
+
+# Import additive domain models so Alembic and metadata checks see their tables.
+from app.investments import models as investment_models  # noqa: E402,F401
