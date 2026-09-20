@@ -7,7 +7,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 docker compose --env-file $EnvFile -f (Join-Path $root "compose.yml") ps
+if ($LASTEXITCODE -ne 0) { throw "Compose status failed" }
 docker compose --env-file $EnvFile -f (Join-Path $root "compose.yml") exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+if ($LASTEXITCODE -ne 0) { throw "PostgreSQL health failed" }
 
 $secretLine = Get-Content -LiteralPath $EnvFile | Where-Object { $_ -match '^FINANCE_INGRESS_HMAC_SECRET=' } | Select-Object -Last 1
 if (-not $secretLine) { throw "FINANCE_INGRESS_HMAC_SECRET is absent" }

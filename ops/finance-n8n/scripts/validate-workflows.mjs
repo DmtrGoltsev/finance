@@ -1,52 +1,38 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const files = (await readdir(join(root, 'workflows'))).filter((name) => name.endsWith('.json'));
-assert.deepEqual(files.sort(), [
-  'finance-investment-recommendation-v1.json',
-  'finance-metadata-retention-v1.json',
-  'finance-signed-health-v1.json',
-]);
-
+const dir = new URL('../workflows/', import.meta.url);
+const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+assert.equal(files.length, 3);
+const ids = new Set();
 for (const file of files) {
-  const workflow = JSON.parse(await readFile(join(root, 'workflows', file), 'utf8'));
-  assert.equal(workflow.active, false, `${file}: import must not activate workflow`);
+  const raw = await readFile(new URL(file, dir), 'utf8');
+  const workflow = JSON.parse(raw);
+  assert.ok(workflow.id && !ids.has(workflow.id)); ids.add(workflow.id);
+  assert.equal(workflow.active, false);
   assert.equal(workflow.settings.saveDataSuccessExecution, 'none');
   assert.equal(workflow.settings.saveDataErrorExecution, 'none');
   assert.equal(workflow.settings.saveManualExecutions, false);
-  assert.ok(workflow.nodes.length >= 2);
-  const names = new Set(workflow.nodes.map((node) => node.name));
-  assert.equal(names.size, workflow.nodes.length, `${file}: duplicate node names`);
-  for (const [source, outputs] of Object.entries(workflow.connections)) {
-    assert.ok(names.has(source), `${file}: missing source node ${source}`);
-    for (const branch of outputs.main || []) {
-      for (const target of branch) assert.ok(names.has(target.node), `${file}: missing target node ${target.node}`);
+  assert.doesNotMatch(raw, /\$env|\bfetch\(|\bURL\(|onReceived|n8n-nodes-base.code/);
+  const names = new Set(workflow.nodes.map((n) => n.name));
+  for (const [name, links] of Object.entries(workflow.connections)) {
+    assert.ok(names.has(name));
+    for (const link of links.main.flat()) assert.ok(names.has(link.node));
+  }
+  for (const node of workflow.nodes) {
+    if (node.type === 'n8n-nodes-base.httpRequest') {
+      assert.match(node.parameters.url, /^http:\/\/analysis-gateway:8080\/(accept|signed-health|drain|prune)$/);
+      assert.equal(node.parameters.options.redirect.redirect.followRedirects, false);
+    }
+    if (node.type === 'n8n-nodes-base.webhook') {
+      assert.equal(node.parameters.responseMode, 'responseNode');
+      const forward = workflow.nodes.find((n) => n.type === 'n8n-nodes-base.httpRequest');
+      const response = workflow.nodes.find((n) => n.type === 'n8n-nodes-base.respondToWebhook');
+      assert.equal(forward.parameters.contentType, 'binaryData');
+      assert.equal(forward.parameters.inputDataFieldName, 'data');
+      assert.equal(response.parameters.options.responseCode, '={{ $json.statusCode }}');
+      assert.equal(workflow.connections[node.name].main[0][0].node, forward.name);
+      assert.equal(workflow.connections[forward.name].main[0][0].node, response.name);
     }
   }
 }
-
-const main = JSON.parse(await readFile(join(root, 'workflows', 'finance-investment-recommendation-v1.json'), 'utf8'));
-const code = main.nodes.filter((node) => node.type === 'n8n-nodes-base.code').map((node) => node.parameters.jsCode).join('\n');
-for (const token of [
-  "https://api.deepseek.com/responses",
-  "https://iss.moex.com/iss/",
-  "https://www.cbr.ru/hd_base/KeyRate/",
-  "redirect: 'manual'",
-  'validateModelRecommendation',
-  'FINANCE_CALLBACK_HMAC_SECRET',
-]) assert.ok(code.includes(token), `main workflow lacks ${token}`);
-for (const forbidden of ['openclaw', 'telegram', 'poruchik', 'docker.sock']) assert.ok(!code.toLowerCase().includes(forbidden));
-assert.equal(code.includes('www.rbc.ru'), true, 'licensed news allowlist must be explicit');
-assert.ok(code.includes('NEWS_REQUIRES_LICENSE'), 'news must fail closed');
-
-const compose = await readFile(join(root, 'compose.yml'), 'utf8');
-assert.match(compose, /FINANCE_N8N_IMAGE:-n8nio\/n8n:2\.39\.8/);
-assert.match(compose, /EXECUTIONS_DATA_SAVE_ON_SUCCESS: none/);
-assert.match(compose, /EXECUTIONS_DATA_SAVE_ON_ERROR: none/);
-assert.match(compose, /NEWS_SOURCES_ENABLED: "false"/);
-assert.doesNotMatch(compose, /docker\.sock/);
-
-console.log(`Validated ${files.length} Finance workflows and isolated compose contract.`);
+console.log('3 thin workflows PASS: stable IDs, raw bytes, gateway acceptance before response, no Code nodes.');

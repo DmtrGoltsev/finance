@@ -1,28 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import vm from 'node:vm';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-
-export async function loadSecurityCore() {
-  const code = await readFile(join(root, 'runtime', 'security-core.n8n.js'), 'utf8');
-  const exposed = [
-    'canonicalJson', 'sha256', 'hmacSignature', 'verifyInboundSignature',
-    'validateJobEnvelope', 'assertAllowedSourceUrl', 'validateModelRecommendation',
-    'cashFirstAdjustments', 'safeFetch', 'extractProviderJson',
-  ];
-  const context = {
-    require, Buffer, URL, AbortSignal, setTimeout, clearTimeout, fetch,
-    console: { log() {}, error() {} },
-  };
-  vm.createContext(context);
-  vm.runInContext(`${code}\nglobalThis.__finance = { ${exposed.join(', ')} };`, context);
-  return context.__finance;
-}
-
 export function validEnvelope(now = new Date()) {
   return {
     schemaVersion: 1,

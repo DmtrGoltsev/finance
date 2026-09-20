@@ -1,14 +1,6 @@
-const crypto = require('crypto');
+import crypto from 'node:crypto';
 
 const MAX_CLOCK_SKEW_SECONDS = 300;
-const MAX_SOURCE_BYTES = 1024 * 1024;
-const ALLOWED_SOURCE_HOSTS = new Set([
-  'iss.moex.com',
-  'www.cbr.ru',
-  'minfin.gov.ru',
-  'www.nalog.gov.ru',
-]);
-const LICENSED_NEWS_HOSTS = new Set(['www.rbc.ru', 'www.interfax.ru', 'tass.ru']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SECID_RE = /^[A-Z0-9][A-Z0-9._-]{0,31}$/;
 const ISIN_RE = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;
@@ -28,20 +20,13 @@ function exactKeys(value, required, optional = []) {
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 function hmacSignature({ secret, method, path, timestamp, nonce, body }) {
-  const canonical = [method.toUpperCase(), path, String(timestamp), nonce, body].join('\n');
+  const prefix = Buffer.from([method.toUpperCase(), path, String(timestamp), nonce, ''].join('\n'));
+  const canonical = Buffer.concat([prefix, Buffer.isBuffer(body) ? body : Buffer.from(body)]);
   return crypto.createHmac('sha256', secret).update(canonical).digest('hex');
 }
 
@@ -64,7 +49,8 @@ function verifyInboundSignature({ headers, body, secret, path, nowEpoch = Math.f
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce || '')) throw new Error('INVALID_NONCE');
   const timestamp = Number(timestampText);
   if (Math.abs(nowEpoch - timestamp) > MAX_CLOCK_SKEW_SECONDS) throw new Error('STALE_SIGNATURE');
-  const canonicalBody = canonicalJson(body);
+  if (!Buffer.isBuffer(body)) throw new Error('RAW_BODY_REQUIRED');
+  const canonicalBody = body;
   const expected = hmacSignature({ secret, method: 'POST', path, timestamp, nonce, body: canonicalBody });
   if (!safeEqualHex(expected, signature)) throw new Error('INVALID_SIGNATURE');
   return { timestamp, nonce, canonicalBody, payloadHash: sha256(canonicalBody) };
@@ -88,13 +74,14 @@ function assertNoSensitivePayload(value, path = '$') {
 }
 
 function assertMoney(value, field) {
-  if (typeof value !== 'string' || !MONEY_RE.test(value)) throw new Error(`INVALID_MONEY:${field}`);
+  if (typeof value !== 'string' || value.length > 24 || !MONEY_RE.test(value) || Number(value) > 1e12) throw new Error(`INVALID_MONEY:${field}`);
 }
 
 function validateAnalysisPackage(pkg) {
   exactKeys(pkg, ['schemaVersion', 'currency', 'market', 'policy', 'freeCash', 'monthlyContribution', 'positions', 'constraints']);
   if (pkg.schemaVersion !== 1 || pkg.currency !== 'RUB' || pkg.market !== 'RU') throw new Error('INVALID_ANALYSIS_SCOPE');
   exactKeys(pkg.policy, ['conservativePercent', 'moderatePercent', 'aggressivePercent', 'tolerancePercent']);
+  for (const value of Object.values(pkg.policy)) assertMoney(value, 'policy');
   const allocation = ['conservativePercent', 'moderatePercent', 'aggressivePercent'].map((key) => Number(pkg.policy[key]));
   if (allocation.some((value) => !Number.isFinite(value) || value < 0) || Math.abs(allocation.reduce((a, b) => a + b, 0) - 100) > 0.0001) throw new Error('INVALID_POLICY');
   const tolerance = Number(pkg.policy.tolerancePercent);
@@ -113,9 +100,14 @@ function validateAnalysisPackage(pkg) {
       if (position[key] !== null) assertMoney(position[key], key);
     }
     if (!['brokerage', 'iis_a', 'iis_b', 'iis_iii'].includes(position.taxAccountType)) throw new Error('INVALID_TAX_ACCOUNT');
+    for (const key of ['maturityDate', 'holdingStartedAt']) {
+      if (position[key] !== null && (typeof position[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(position[key]) || !Number.isFinite(Date.parse(position[key])))) throw new Error('INVALID_DATE');
+    }
   }
   exactKeys(pkg.constraints, ['cashFirst', 'automaticExecution', 'marketDataMaxAgeHours', 'recommendationValidityDays', 'allowedSources']);
   if (pkg.constraints.cashFirst !== true || pkg.constraints.automaticExecution !== false || pkg.constraints.marketDataMaxAgeHours !== 24 || pkg.constraints.recommendationValidityDays !== 7) throw new Error('INVALID_CONSTRAINTS');
+  const sourceNames = new Set(['moex.com', 'cbr.ru', 'minfin.gov.ru', 'nalog.gov.ru', 'e-disclosure.ru', 'interfax.ru', 'tass.ru', 'rbc.ru', 'issuer-official-sites']);
+  if (!Array.isArray(pkg.constraints.allowedSources) || !pkg.constraints.allowedSources.length || pkg.constraints.allowedSources.some((name) => !sourceNames.has(name))) throw new Error('INVALID_SOURCE_SCOPE');
   assertNoSensitivePayload(pkg);
 }
 
@@ -127,16 +119,6 @@ function validateJobEnvelope(envelope, now = new Date()) {
   if (!Number.isFinite(createdAt.getTime()) || createdAt > new Date(now.getTime() + 5 * 60 * 1000) || createdAt < new Date(now.getTime() - 24 * 60 * 60 * 1000)) throw new Error('STALE_JOB');
   validateAnalysisPackage(envelope.analysisPackage);
   return envelope;
-}
-
-function assertAllowedSourceUrl(rawUrl, { newsEnabled = false } = {}) {
-  let url;
-  try { url = new URL(rawUrl); } catch { throw new Error('INVALID_SOURCE_URL'); }
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || url.hash) throw new Error('UNSAFE_SOURCE_URL');
-  if (/^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|\[?::1\]?$)/i.test(host)) throw new Error('PRIVATE_SOURCE_FORBIDDEN');
-  if (!ALLOWED_SOURCE_HOSTS.has(host) && !(newsEnabled && LICENSED_NEWS_HOSTS.has(host))) throw new Error('SOURCE_NOT_ALLOWLISTED');
-  return url.toString();
 }
 
 function validateModelRecommendation(value, allowedInstruments, expectedAdjustments) {
@@ -217,27 +199,6 @@ function cashFirstAdjustments(pkg) {
   }));
 }
 
-async function safeFetch(url, options = {}, fetchImpl = fetch) {
-  const safeUrl = assertAllowedSourceUrl(url);
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const response = await fetchImpl(safeUrl, { ...options, redirect: 'manual', signal: AbortSignal.timeout(10000) });
-      if (response.status >= 300 && response.status < 400) throw new Error('REDIRECT_FORBIDDEN');
-      if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
-      const declared = Number(response.headers.get('content-length') || 0);
-      if (declared > MAX_SOURCE_BYTES) throw new Error('SOURCE_TOO_LARGE');
-      const text = await response.text();
-      if (Buffer.byteLength(text, 'utf8') > MAX_SOURCE_BYTES) throw new Error('SOURCE_TOO_LARGE');
-      return { text, fetchedAt: new Date().toISOString(), url: safeUrl };
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
-    }
-  }
-  throw lastError;
-}
-
 function extractProviderJson(response) {
   if (typeof response.output_text === 'string') return JSON.parse(response.output_text);
   const outputText = Array.isArray(response.output)
@@ -248,3 +209,6 @@ function extractProviderJson(response) {
   if (typeof chatText === 'string') return JSON.parse(chatText);
   throw new Error('INVALID_LLM_JSON');
 }
+
+export { sha256, hmacSignature, verifyInboundSignature, validateJobEnvelope,
+  validateAnalysisPackage, cashFirstAdjustments, validateModelRecommendation, extractProviderJson };

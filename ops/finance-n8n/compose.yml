@@ -8,10 +8,14 @@ services:
       POSTGRES_DB: ${FINANCE_N8N_POSTGRES_DB:?required}
       POSTGRES_USER: ${FINANCE_N8N_POSTGRES_USER:?required}
       POSTGRES_PASSWORD: ${FINANCE_N8N_POSTGRES_PASSWORD:?required}
+      FINANCE_GATEWAY_DB: ${FINANCE_GATEWAY_DB:?required}
+      FINANCE_GATEWAY_DB_USER: ${FINANCE_GATEWAY_DB_USER:?required}
+      FINANCE_GATEWAY_DB_PASSWORD: ${FINANCE_GATEWAY_DB_PASSWORD:?required}
       TZ: ${TZ:-Europe/Moscow}
     volumes:
       - finance_n8n_postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/gateway-schema.sql:/opt/finance/gateway-schema.sql:ro
     networks:
       - finance_n8n_private
     healthcheck:
@@ -62,20 +66,17 @@ services:
       N8N_METRICS: "true"
       N8N_LOG_LEVEL: warn
       N8N_LOG_OUTPUT: console
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      N8N_PAYLOAD_SIZE_MAX: "1"
+      NODES_EXCLUDE: '["n8n-nodes-base.code","n8n-nodes-base.executeCommand","n8n-nodes-base.readWriteFile"]'
       EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
       EXECUTIONS_DATA_SAVE_ON_ERROR: none
       EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE: "720"
-      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      NODE_FUNCTION_ALLOW_BUILTIN: ""
       NODE_FUNCTION_ALLOW_EXTERNAL: ""
       N8N_RESTRICT_FILE_ACCESS_TO: /home/node/.n8n
-      FINANCE_INGRESS_HMAC_SECRET: ${FINANCE_INGRESS_HMAC_SECRET:?required}
-      FINANCE_CALLBACK_HMAC_SECRET: ${FINANCE_CALLBACK_HMAC_SECRET:?required}
-      FINANCE_BACKEND_INTERNAL_URL: ${FINANCE_BACKEND_INTERNAL_URL:-http://finance-backend:8000}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?required}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
-      NEWS_SOURCES_ENABLED: "false"
       TZ: ${TZ:-Europe/Moscow}
       GENERIC_TIMEZONE: ${TZ:-Europe/Moscow}
     ports:
@@ -88,7 +89,6 @@ services:
     networks:
       - finance_n8n_private
       - finance_backend_bridge
-      - finance_n8n_egress
     healthcheck:
       test:
         - CMD-SHELL
@@ -104,6 +104,47 @@ services:
     pids_limit: 220
     mem_limit: 1024m
     cpus: 1.0
+
+  analysis-gateway:
+    image: ${FINANCE_GATEWAY_IMAGE:-finance-analysis-gateway:20260920}
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FINANCE_GATEWAY_DB: ${FINANCE_GATEWAY_DB:?required}
+      FINANCE_GATEWAY_DB_USER: ${FINANCE_GATEWAY_DB_USER:?required}
+      FINANCE_GATEWAY_DB_PASSWORD: ${FINANCE_GATEWAY_DB_PASSWORD:?required}
+      FINANCE_GATEWAY_TOKEN: ${FINANCE_GATEWAY_TOKEN:?required}
+      FINANCE_GATEWAY_QUEUE_KEY: ${FINANCE_GATEWAY_QUEUE_KEY:?required}
+      FINANCE_INGRESS_HMAC_SECRET: ${FINANCE_INGRESS_HMAC_SECRET:?required}
+      FINANCE_CALLBACK_HMAC_SECRET: ${FINANCE_CALLBACK_HMAC_SECRET:?required}
+      FINANCE_BACKEND_API_PREFIX: ${FINANCE_BACKEND_API_PREFIX:-/api/v1}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?required}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+    networks:
+      - finance_n8n_private
+      - finance_backend_bridge
+      - finance_n8n_egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 80
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
 networks:
   finance_n8n_private:

@@ -1,72 +1,136 @@
 {
-  "name": "Finance n8n Signed Health v1",
-  "nodes": [
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "internal/finance/health/v1",
-        "responseMode": "lastNode",
-        "options": {
-          "rawBody": true
-        }
-      },
-      "id": "a178598a-17ee-4aa6-a5c0-727275080001",
-      "name": "Подписанная проверка готовности",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        -260,
-        0
-      ],
-      "webhookId": "finance-n8n-health-v1"
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const crypto = require('crypto');\n\nconst MAX_CLOCK_SKEW_SECONDS = 300;\nconst MAX_SOURCE_BYTES = 1024 * 1024;\nconst ALLOWED_SOURCE_HOSTS = new Set([\n  'iss.moex.com',\n  'www.cbr.ru',\n  'minfin.gov.ru',\n  'www.nalog.gov.ru',\n]);\nconst LICENSED_NEWS_HOSTS = new Set(['www.rbc.ru', 'www.interfax.ru', 'tass.ru']);\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nconst SECID_RE = /^[A-Z0-9][A-Z0-9._-]{0,31}$/;\nconst ISIN_RE = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;\nconst MONEY_RE = /^\\d+(?:\\.\\d{1,4})?$/;\nconst RISK_BUCKETS = ['conservative', 'moderate', 'aggressive'];\n\nfunction exactKeys(value, required, optional = []) {\n  if (!value || typeof value !== 'object' || Array.isArray(value)) {\n    throw new Error('INVALID_OBJECT');\n  }\n  const allowed = new Set([...required, ...optional]);\n  for (const key of Object.keys(value)) {\n    if (!allowed.has(key)) throw new Error(`UNEXPECTED_FIELD:${key}`);\n  }\n  for (const key of required) {\n    if (!(key in value)) throw new Error(`MISSING_FIELD:${key}`);\n  }\n}\n\nfunction canonicalJson(value) {\n  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;\n  if (value && typeof value === 'object') {\n    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;\n  }\n  return JSON.stringify(value);\n}\n\nfunction sha256(value) {\n  return crypto.createHash('sha256').update(value).digest('hex');\n}\n\nfunction hmacSignature({ secret, method, path, timestamp, nonce, body }) {\n  const canonical = [method.toUpperCase(), path, String(timestamp), nonce, body].join('\\n');\n  return crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n}\n\nfunction safeEqualHex(left, right) {\n  if (!/^[0-9a-f]{64}$/i.test(left || '') || !/^[0-9a-f]{64}$/i.test(right || '')) return false;\n  return crypto.timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'));\n}\n\nfunction normalizedHeaders(headers) {\n  return Object.fromEntries(Object.entries(headers || {}).map(([key, value]) => [key.toLowerCase(), String(value)]));\n}\n\nfunction verifyInboundSignature({ headers, body, secret, path, nowEpoch = Math.floor(Date.now() / 1000) }) {\n  if (!secret || secret.length < 32) throw new Error('INGRESS_SECRET_NOT_CONFIGURED');\n  const normalized = normalizedHeaders(headers);\n  const timestampText = normalized['x-finance-timestamp'];\n  const nonce = normalized['x-finance-nonce'];\n  const signature = normalized['x-finance-signature'];\n  if (!/^\\d{10}$/.test(timestampText || '')) throw new Error('INVALID_TIMESTAMP');\n  if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce || '')) throw new Error('INVALID_NONCE');\n  const timestamp = Number(timestampText);\n  if (Math.abs(nowEpoch - timestamp) > MAX_CLOCK_SKEW_SECONDS) throw new Error('STALE_SIGNATURE');\n  const canonicalBody = canonicalJson(body);\n  const expected = hmacSignature({ secret, method: 'POST', path, timestamp, nonce, body: canonicalBody });\n  if (!safeEqualHex(expected, signature)) throw new Error('INVALID_SIGNATURE');\n  return { timestamp, nonce, canonicalBody, payloadHash: sha256(canonicalBody) };\n}\n\nfunction assertNoSensitivePayload(value, path = '$') {\n  const forbiddenKeys = new Set([\n    'email', 'phone', 'fullName', 'ownerUserId', 'userId', 'accountNumber', 'brokerAccountId',\n    'screenshot', 'screenshots', 'image', 'binary', 'base64', 'url', 'callbackUrl', 'webhookUrl',\n  ]);\n  if (Array.isArray(value)) {\n    value.forEach((item, index) => assertNoSensitivePayload(item, `${path}[${index}]`));\n    return;\n  }\n  if (!value || typeof value !== 'object') return;\n  for (const [key, item] of Object.entries(value)) {\n    if (forbiddenKeys.has(key)) throw new Error(`SENSITIVE_FIELD:${path}.${key}`);\n    if (typeof item === 'string' && /^https?:\\/\\//i.test(item)) throw new Error(`PAYLOAD_URL_FORBIDDEN:${path}.${key}`);\n    assertNoSensitivePayload(item, `${path}.${key}`);\n  }\n}\n\nfunction assertMoney(value, field) {\n  if (typeof value !== 'string' || !MONEY_RE.test(value)) throw new Error(`INVALID_MONEY:${field}`);\n}\n\nfunction validateAnalysisPackage(pkg) {\n  exactKeys(pkg, ['schemaVersion', 'currency', 'market', 'policy', 'freeCash', 'monthlyContribution', 'positions', 'constraints']);\n  if (pkg.schemaVersion !== 1 || pkg.currency !== 'RUB' || pkg.market !== 'RU') throw new Error('INVALID_ANALYSIS_SCOPE');\n  exactKeys(pkg.policy, ['conservativePercent', 'moderatePercent', 'aggressivePercent', 'tolerancePercent']);\n  const allocation = ['conservativePercent', 'moderatePercent', 'aggressivePercent'].map((key) => Number(pkg.policy[key]));\n  if (allocation.some((value) => !Number.isFinite(value) || value < 0) || Math.abs(allocation.reduce((a, b) => a + b, 0) - 100) > 0.0001) throw new Error('INVALID_POLICY');\n  const tolerance = Number(pkg.policy.tolerancePercent);\n  if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 25) throw new Error('INVALID_TOLERANCE');\n  assertMoney(pkg.freeCash, 'freeCash');\n  assertMoney(pkg.monthlyContribution, 'monthlyContribution');\n  if (!Array.isArray(pkg.positions) || pkg.positions.length < 1 || pkg.positions.length > 500) throw new Error('INVALID_POSITIONS');\n  const positionKeys = ['secid', 'isin', 'instrumentType', 'riskBucket', 'quantity', 'marketValue', 'averagePrice', 'nominal', 'accruedInterest', 'couponRate', 'maturityDate', 'taxAccountType', 'holdingStartedAt', 'estimatedFeeRate'];\n  for (const position of pkg.positions) {\n    exactKeys(position, positionKeys);\n    if (!SECID_RE.test(position.secid) || !ISIN_RE.test(position.isin)) throw new Error('INVALID_INSTRUMENT_ID');\n    if (!['stock', 'bond', 'fund'].includes(position.instrumentType) || !RISK_BUCKETS.includes(position.riskBucket)) throw new Error('INVALID_INSTRUMENT_CLASS');\n    assertMoney(position.quantity, 'quantity');\n    assertMoney(position.marketValue, 'marketValue');\n    for (const key of ['averagePrice', 'nominal', 'accruedInterest', 'couponRate', 'estimatedFeeRate']) {\n      if (position[key] !== null) assertMoney(position[key], key);\n    }\n    if (!['brokerage', 'iis_a', 'iis_b', 'iis_iii'].includes(position.taxAccountType)) throw new Error('INVALID_TAX_ACCOUNT');\n  }\n  exactKeys(pkg.constraints, ['cashFirst', 'automaticExecution', 'marketDataMaxAgeHours', 'recommendationValidityDays', 'allowedSources']);\n  if (pkg.constraints.cashFirst !== true || pkg.constraints.automaticExecution !== false || pkg.constraints.marketDataMaxAgeHours !== 24 || pkg.constraints.recommendationValidityDays !== 7) throw new Error('INVALID_CONSTRAINTS');\n  assertNoSensitivePayload(pkg);\n}\n\nfunction validateJobEnvelope(envelope, now = new Date()) {\n  exactKeys(envelope, ['schemaVersion', 'eventId', 'jobId', 'attempt', 'createdAt', 'analysisPackage']);\n  if (envelope.schemaVersion !== 1 || !UUID_RE.test(envelope.eventId) || !UUID_RE.test(envelope.jobId)) throw new Error('INVALID_JOB_ID');\n  if (!Number.isInteger(envelope.attempt) || envelope.attempt < 1 || envelope.attempt > 3) throw new Error('INVALID_ATTEMPT');\n  const createdAt = new Date(envelope.createdAt);\n  if (!Number.isFinite(createdAt.getTime()) || createdAt > new Date(now.getTime() + 5 * 60 * 1000) || createdAt < new Date(now.getTime() - 24 * 60 * 60 * 1000)) throw new Error('STALE_JOB');\n  validateAnalysisPackage(envelope.analysisPackage);\n  return envelope;\n}\n\nfunction assertAllowedSourceUrl(rawUrl, { newsEnabled = false } = {}) {\n  let url;\n  try { url = new URL(rawUrl); } catch { throw new Error('INVALID_SOURCE_URL'); }\n  const host = url.hostname.toLowerCase().replace(/\\.$/, '');\n  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || url.hash) throw new Error('UNSAFE_SOURCE_URL');\n  if (/^(localhost|0\\.0\\.0\\.0|127\\.|10\\.|192\\.168\\.|169\\.254\\.|\\[?::1\\]?$)/i.test(host)) throw new Error('PRIVATE_SOURCE_FORBIDDEN');\n  if (!ALLOWED_SOURCE_HOSTS.has(host) && !(newsEnabled && LICENSED_NEWS_HOSTS.has(host))) throw new Error('SOURCE_NOT_ALLOWLISTED');\n  return url.toString();\n}\n\nfunction validateModelRecommendation(value, allowedInstruments, expectedAdjustments) {\n  exactKeys(value, ['summary', 'assumptions', 'aggregates', 'actions']);\n  if (typeof value.summary !== 'string' || value.summary.length < 1 || value.summary.length > 5000) throw new Error('INVALID_SUMMARY');\n  if (!value.assumptions || typeof value.assumptions !== 'object' || Array.isArray(value.assumptions)) throw new Error('INVALID_ASSUMPTIONS');\n  if (!Array.isArray(value.aggregates) || value.aggregates.length !== 3 || !Array.isArray(value.actions) || value.actions.length > 200) throw new Error('INVALID_RECOMMENDATION_SHAPE');\n  const expectedByBucket = new Map(expectedAdjustments.map((item) => [item.riskBucket, item]));\n  for (const aggregate of value.aggregates) {\n    exactKeys(aggregate, ['riskBucket', 'currentPercent', 'proposedPercent']);\n    const expected = expectedByBucket.get(aggregate.riskBucket);\n    if (!expected || Math.abs(Number(aggregate.currentPercent) - expected.currentPercent) > 0.0001 || Math.abs(Number(aggregate.proposedPercent) - expected.projectedPercent) > 0.0001) throw new Error('AGGREGATE_MISMATCH');\n  }\n  const additions = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, 0]));\n  const reductions = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, 0]));\n  for (const action of value.actions) {\n    exactKeys(action, ['instrumentName', 'ticker', 'isin', 'riskBucket', 'action', 'currentPercent', 'targetPercent', 'amount', 'priority', 'rationale', 'risks']);\n    if (!SECID_RE.test(action.ticker) || !ISIN_RE.test(action.isin) || !allowedInstruments.has(`${action.ticker}|${action.isin}`)) throw new Error('UNVERIFIED_ACTION_INSTRUMENT');\n    if (!RISK_BUCKETS.includes(action.riskBucket) || !['keep', 'reduce', 'increase', 'add'].includes(action.action)) throw new Error('INVALID_ACTION');\n    if (!Number.isInteger(action.priority) || action.priority < 1 || action.priority > 100 || typeof action.rationale !== 'string' || typeof action.risks !== 'string') throw new Error('INVALID_ACTION_DETAILS');\n    assertMoney(String(action.amount), 'action.amount');\n    const amount = Number(action.amount);\n    if (action.action === 'reduce') reductions[action.riskBucket] += amount;\n    if (action.action === 'increase' || action.action === 'add') additions[action.riskBucket] += amount;\n    if (action.action === 'keep' && amount !== 0) throw new Error('KEEP_AMOUNT_MUST_BE_ZERO');\n  }\n  for (const expected of expectedAdjustments) {\n    if (Math.abs(additions[expected.riskBucket] - expected.addAmount) > 0.0001 || Math.abs(reductions[expected.riskBucket] - expected.reduceAmount) > 0.0001) throw new Error('ACTION_TOTAL_MISMATCH');\n  }\n  return value;\n}\n\nfunction round4(value) { return Math.round((value + Number.EPSILON) * 10000) / 10000; }\n\nfunction cashFirstAdjustments(pkg) {\n  const current = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, 0]));\n  for (const position of pkg.positions) current[position.riskBucket] += Number(position.marketValue);\n  const invested = Object.values(current).reduce((a, b) => a + b, 0);\n  let cash = Math.max(0, Number(pkg.freeCash)) + Math.max(0, Number(pkg.monthlyContribution));\n  const total = invested + cash;\n  const targets = {\n    conservative: Number(pkg.policy.conservativePercent),\n    moderate: Number(pkg.policy.moderatePercent),\n    aggressive: Number(pkg.policy.aggressivePercent),\n  };\n  const tolerance = Number(pkg.policy.tolerancePercent);\n  if (total <= 0) return RISK_BUCKETS.map((riskBucket) => ({ riskBucket, addAmount: 0, reduceAmount: 0, currentPercent: 0, projectedPercent: 0, targetPercent: targets[riskBucket] }));\n  const targetAmounts = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, round4(total * targets[bucket] / 100)]));\n  const additions = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, 0]));\n  const reductions = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, 0]));\n  const projected = { ...current };\n  for (const bucket of RISK_BUCKETS) {\n    const addition = Math.min(Math.max(0, targetAmounts[bucket] - current[bucket]), cash);\n    additions[bucket] = round4(addition); projected[bucket] += addition; cash -= addition;\n  }\n  if (cash > 0) { additions.conservative = round4(additions.conservative + cash); projected.conservative += cash; cash = 0; }\n  const deficits = Object.fromEntries(RISK_BUCKETS.map((bucket) => [bucket, Math.max(0, targetAmounts[bucket] - projected[bucket])]));\n  let totalDeficit = Object.values(deficits).reduce((a, b) => a + b, 0);\n  if (totalDeficit > 0) {\n    for (const source of RISK_BUCKETS) {\n      let reduction = Math.min(Math.max(0, projected[source] - total * (targets[source] + tolerance) / 100), totalDeficit);\n      if (reduction <= 0) continue;\n      reductions[source] = round4(reduction); projected[source] -= reduction; totalDeficit -= reduction;\n      for (const destination of RISK_BUCKETS) {\n        const moved = Math.min(deficits[destination], reduction);\n        if (moved <= 0) continue;\n        additions[destination] = round4(additions[destination] + moved); projected[destination] += moved; deficits[destination] -= moved; reduction -= moved;\n      }\n    }\n  }\n  return RISK_BUCKETS.map((riskBucket) => ({\n    riskBucket,\n    addAmount: round4(additions[riskBucket]),\n    reduceAmount: round4(reductions[riskBucket]),\n    currentPercent: invested > 0 ? round4(current[riskBucket] * 100 / invested) : 0,\n    projectedPercent: round4(projected[riskBucket] * 100 / total),\n    targetPercent: targets[riskBucket],\n  }));\n}\n\nasync function safeFetch(url, options = {}, fetchImpl = fetch) {\n  const safeUrl = assertAllowedSourceUrl(url);\n  let lastError;\n  for (let attempt = 1; attempt <= 3; attempt += 1) {\n    try {\n      const response = await fetchImpl(safeUrl, { ...options, redirect: 'manual', signal: AbortSignal.timeout(10000) });\n      if (response.status >= 300 && response.status < 400) throw new Error('REDIRECT_FORBIDDEN');\n      if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);\n      const declared = Number(response.headers.get('content-length') || 0);\n      if (declared > MAX_SOURCE_BYTES) throw new Error('SOURCE_TOO_LARGE');\n      const text = await response.text();\n      if (Buffer.byteLength(text, 'utf8') > MAX_SOURCE_BYTES) throw new Error('SOURCE_TOO_LARGE');\n      return { text, fetchedAt: new Date().toISOString(), url: safeUrl };\n    } catch (error) {\n      lastError = error;\n      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));\n    }\n  }\n  throw lastError;\n}\n\nfunction extractProviderJson(response) {\n  if (typeof response.output_text === 'string') return JSON.parse(response.output_text);\n  const outputText = Array.isArray(response.output)\n    ? response.output.flatMap((item) => item.content || []).find((item) => item.type === 'output_text')?.text\n    : null;\n  if (typeof outputText === 'string') return JSON.parse(outputText);\n  const chatText = response.choices?.[0]?.message?.content;\n  if (typeof chatText === 'string') return JSON.parse(chatText);\n  throw new Error('INVALID_LLM_JSON');\n}\n\nconst item = $input.first().json;\nconst path = '/webhook/internal/finance/health/v1';\nverifyInboundSignature({\n  headers: item.headers,\n  body: {},\n  secret: $env.FINANCE_INGRESS_HMAC_SECRET,\n  path,\n});\nreturn [{ json: { status: 'ok', service: 'finance-n8n', version: 1 } }];\n"
-      },
-      "id": "a178598a-17ee-4aa6-a5c0-727275080002",
-      "name": "Проверить подпись готовности",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        0,
-        0
-      ]
-    }
-  ],
-  "connections": {
-    "Подписанная проверка готовности": {
-      "main": [
-        [
-          {
-            "node": "Проверить подпись готовности",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
-  },
+  "id": "finance-signed-health-v1",
+  "name": "Finance Signed Health v1",
   "active": false,
   "settings": {
     "executionOrder": "v1",
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
     "saveManualExecutions": false,
-    "timezone": "Europe/Moscow"
+    "timezone": "Europe/Moscow",
+    "executionTimeout": 1800
   },
-  "versionId": "a178598a-17ee-4aa6-a5c0-727275089999",
-  "meta": {
-    "templateCredsSetupCompleted": false,
-    "financeContractVersion": 1
-  },
-  "tags": [
+  "nodes": [
     {
-      "name": "finance"
+      "id": "finance-signed-health-v1-webhook",
+      "name": "Приём подписанного запроса",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "finance-signed-health-v1",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal/finance/health/v1",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      }
     },
     {
-      "name": "health"
+      "id": "finance-http-signed-health",
+      "name": "Проверка и приём gateway",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "finance-gateway-token",
+          "name": "Finance Gateway Internal Token"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "http://analysis-gateway:8080/signed-health",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-finance-timestamp",
+              "value": "={{ $json.headers['x-finance-timestamp'] || '' }}"
+            },
+            {
+              "name": "x-finance-nonce",
+              "value": "={{ $json.headers['x-finance-nonce'] || '' }}"
+            },
+            {
+              "name": "x-finance-signature",
+              "value": "={{ $json.headers['x-finance-signature'] || '' }}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/octet-stream"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "finance-signed-health-v1-respond",
+      "name": "Ответ после проверки",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
     }
-  ]
+  ],
+  "connections": {
+    "Приём подписанного запроса": {
+      "main": [
+        [
+          {
+            "node": "Проверка и приём gateway",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Проверка и приём gateway": {
+      "main": [
+        [
+          {
+            "node": "Ответ после проверки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
 }
