@@ -7,11 +7,15 @@ from pathlib import Path
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
-import app.db.models  # noqa: F401
 import pytest
 import yaml
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+import app.db.models  # noqa: F401
 from app.api.auth_context import require_authenticated_actor
 from app.authz import Actor
 from app.config import Settings
@@ -56,9 +60,6 @@ from app.investments.source_validation import (
     validate_recommendation_sources,
 )
 from app.main import create_app
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
 PROFILE_IDS = {
