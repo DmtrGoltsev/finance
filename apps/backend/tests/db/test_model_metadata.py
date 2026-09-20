@@ -44,6 +44,7 @@ EXPECTED_TABLES = {
     "sync_changes",
     "sync_client_mutations",
     "investment_policies",
+    "moex_instruments",
     "portfolio_imports",
     "portfolio_snapshots",
     "portfolio_positions",
