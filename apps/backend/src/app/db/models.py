@@ -996,6 +996,9 @@ class OutboxEvent(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     deduplication_key: Mapped[str | None] = mapped_column(Text)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class SyncClient(Base):
@@ -1138,4 +1141,5 @@ class SyncClientMutation(TimestampMixin, Base):
 
 
 # Import additive domain models so Alembic and metadata checks see their tables.
+from app.delivery import models as delivery_models  # noqa: E402,F401
 from app.investments import models as investment_models  # noqa: E402,F401

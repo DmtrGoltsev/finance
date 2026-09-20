@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.main import create_app
-
 from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -141,6 +140,8 @@ EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
 
 EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
     {
+        ("PUT", "/api/v1/push/devices/{device_id}"),
+        ("DELETE", "/api/v1/push/devices/{device_id}"),
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
@@ -153,6 +154,8 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
 )
 EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
     {
+        ("PUT", "/api/v1/push/devices/{device_id}"),
+        ("DELETE", "/api/v1/push/devices/{device_id}"),
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SESSION_OPERATIONS.keys(),

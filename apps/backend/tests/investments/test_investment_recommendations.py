@@ -190,7 +190,8 @@ def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
         str(backend_root.parents[1] / "db" / "migrations"),
     )
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260920_0023"]
+    assert scripts.get_heads() == ["20260920_0024"]
+    assert scripts.get_revision("20260920_0024").down_revision == "20260920_0023"
     assert scripts.get_revision("20260920_0023").down_revision == "20260920_0022"
     assert scripts.get_revision("20260920_0022").down_revision == "20260919_0021"
     assert scripts.get_revision("20260919_0021").down_revision == "20260919_0020"

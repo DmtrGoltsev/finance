@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.CompositionLocalProvider
+import com.finance.mvp.notifications.LocalInvestmentJobId
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -26,6 +28,7 @@ import com.finance.mvp.ui.theme.FinanceTheme
 class MainActivity : ComponentActivity() {
     private var openPlanningRequestKey by mutableStateOf(0)
     private var openInvestmentRecommendationsRequestKey by mutableStateOf(0)
+    private var investmentJobId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +47,7 @@ class MainActivity : ComponentActivity() {
         }
         if (shouldOpenInvestmentRecommendations(intent)) {
             openInvestmentRecommendationsRequestKey += 1
+            investmentJobId = investmentJobFromIntent(intent)
         }
 
         setContent {
@@ -52,14 +56,16 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    FinanceApp(
-                        apiClient = apiClient,
-                        syncManager = syncManager,
-                        initialOpenPlanning = openPlanningRequestKey > 0,
-                        openPlanningRequestKey = openPlanningRequestKey,
-                        initialOpenInvestmentRecommendations = openInvestmentRecommendationsRequestKey > 0,
-                        openInvestmentRecommendationsRequestKey = openInvestmentRecommendationsRequestKey,
-                    )
+                    CompositionLocalProvider(LocalInvestmentJobId provides investmentJobId) {
+                        FinanceApp(
+                            apiClient = apiClient,
+                            syncManager = syncManager,
+                            initialOpenPlanning = openPlanningRequestKey > 0,
+                            openPlanningRequestKey = openPlanningRequestKey,
+                            initialOpenInvestmentRecommendations = openInvestmentRecommendationsRequestKey > 0,
+                            openInvestmentRecommendationsRequestKey = openInvestmentRecommendationsRequestKey,
+                        )
+                    }
                 }
             }
         }
@@ -73,6 +79,7 @@ class MainActivity : ComponentActivity() {
         }
         if (shouldOpenInvestmentRecommendations(intent)) {
             openInvestmentRecommendationsRequestKey += 1
+            investmentJobId = investmentJobFromIntent(intent)
         }
     }
 
@@ -81,6 +88,9 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), POST_NOTIFICATIONS_REQUEST_CODE)
     }
+
+    private fun investmentJobFromIntent(intent: android.content.Intent?): String? =
+        runCatching { java.util.UUID.fromString(intent?.data?.getQueryParameter("jobId")).toString() }.getOrNull()
 
     private fun shouldOpenPlanning(intent: android.content.Intent?): Boolean =
         intent?.getBooleanExtra("openPlanning", false) == true ||

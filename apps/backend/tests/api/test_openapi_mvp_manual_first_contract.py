@@ -112,6 +112,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
     paths = _contract_paths()
 
     required_paths = {
+        "/push/devices/{device_id}",
         "/users",
         "/sessions",
         "/sessions/refresh",

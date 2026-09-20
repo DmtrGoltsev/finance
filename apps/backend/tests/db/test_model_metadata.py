@@ -9,9 +9,10 @@ sys.path.insert(0, str(BACKEND_ROOT / "src"))
 
 
 try:
+    from sqlalchemy import CheckConstraint, Numeric, UniqueConstraint
+
     import app.db.models  # noqa: F401
     from app.db.base import Base
-    from sqlalchemy import CheckConstraint, Numeric, UniqueConstraint
 
     SQLALCHEMY_IMPORT_ERROR = None
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without deps
@@ -19,6 +20,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without 
 
 
 EXPECTED_TABLES = {
+    "push_devices",
+    "push_deliveries",
     "users",
     "households",
     "memberships",

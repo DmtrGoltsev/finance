@@ -1671,6 +1671,33 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
         default: { $ref: '#/components/responses/Error' }
+  /push/devices/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    put:
+      operationId: registerPushDevice
+      summary: Зарегистрировать или обновить устройство текущей сессии
+      tags: [Push]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PushDeviceRequest'}
+      responses:
+        '204': {description: Устройство зарегистрировано}
+        '401': {description: Требуется действующая сессия}
+        '404': {description: Устройство недоступно}
+        '409': {description: Конфликт регистрации}
+    delete:
+      operationId: revokePushDevice
+      summary: Отозвать устройство текущего владельца и сессии
+      tags: [Push]
+      responses:
+        '204': {description: Регистрация отозвана или уже отсутствует}
+        '401': {description: Требуется действующая сессия}
 components:
   securitySchemes:
     pwaCookieAuth:
@@ -2091,6 +2118,16 @@ components:
       - status
       - confirmedAt
       - createdAt
+    PushDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 20
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_:.-]+$'
     BrokerageAccountProfileDto:
       properties:
         id:

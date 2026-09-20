@@ -11,6 +11,40 @@ import org.junit.Test
 
 class ApiClientInvestmentContractTest {
     @Test
+    fun pushRegistrationUsesAuthenticatedDeviceEndpoint() = runBlocking {
+        val store = InMemorySecureTokenStore()
+        store.saveSessionTokens("access", "refresh", "session", "owner")
+        withJsonServer(204, "") { baseUrl, request ->
+            val result = LiveFinanceApiClient(ApiConfig(baseUrl), store)
+                .registerPushDevice("device", "test-fcm-token", "session")
+            assertTrue(result is ApiResult.Success)
+            assertTrue(request.get().startsWith("PUT /api/v1/push/devices/device"))
+            assertEquals("test-fcm-token", JSONObject(request.get().substringAfter("\r\n\r\n")).getString("token"))
+        }
+    }
+
+    @Test
+    fun pushRevocationUsesDelete() = runBlocking {
+        val store = InMemorySecureTokenStore()
+        store.saveSessionTokens("access", "refresh", "session", "owner")
+        withJsonServer(204, "") { baseUrl, request ->
+            val result = LiveFinanceApiClient(ApiConfig(baseUrl), store).revokePushDevice("device", "session")
+            assertTrue(result is ApiResult.Success)
+            assertTrue(request.get().startsWith("DELETE /api/v1/push/devices/device"))
+        }
+    }
+
+    @Test
+    fun registrationRejectsChangedSessionBeforeNetwork() = runBlocking {
+        val store = InMemorySecureTokenStore()
+        store.saveSessionTokens("access", "refresh", "new-session", "owner")
+        val result = LiveFinanceApiClient(ApiConfig("http://127.0.0.1:1"), store)
+            .registerPushDevice("device", "test-fcm-token", "old-session")
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(ApiFailureKind.SESSION_CHANGED, (result as ApiResult.Failure).kind)
+    }
+
+    @Test
     fun createImportPostsAccountProfileFields() = runBlocking {
         val profile = BrokerageAccountProfile(
             id = "11111111-1111-4111-8111-111111111111",

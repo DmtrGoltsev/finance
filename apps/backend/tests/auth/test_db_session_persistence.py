@@ -22,6 +22,7 @@ from app.db.base import Base
 from app.db.models import Household, Session, User
 from app.db.models import Membership as DbMembership
 from app.db.session import sync_engine_for_url, sync_session_factory_for_settings
+from app.delivery.models import PushDevice
 from app.main import create_app
 
 BASE_TIME = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
@@ -30,6 +31,7 @@ AUTH_TABLES = [
     Household.__table__,
     DbMembership.__table__,
     Session.__table__,
+    PushDevice.__table__,
 ]
 
 

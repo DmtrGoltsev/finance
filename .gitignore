@@ -101,6 +101,9 @@ MVP_EVIDENCE/test-runs/**
 !MVP_EVIDENCE/reports/**
 
 # Generated clients and derived artifacts
+**/google-services.json
+**/finance-fcm.json
+**/firebase-local.properties
 packages/generated/**
 
 # Keep source-of-truth docs and source files trackable

@@ -615,6 +615,29 @@ class LiveFinanceApiClient(
     override val config: ApiConfig,
     private val tokenStore: SecureTokenStore,
 ) : FinanceApiClient {
+    suspend fun registerPushDevice(deviceId: String, token: String, sessionId: String): ApiResult<Unit> = safeCall {
+        val current = tokenStore.readSession() ?: throw SessionChangedException()
+        if (current.sessionIdentity != sessionId) throw SessionChangedException()
+        val expected = current.expectation()
+        request(
+            path = "/api/v1/push/devices/${deviceId.urlEncodePath()}", method = "PUT",
+            body = JSONObject().put("token", token).toString(), requiredSession = expected,
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
+    suspend fun revokePushDevice(deviceId: String, sessionId: String): ApiResult<Unit> = safeCall {
+        val current = tokenStore.readSession() ?: throw SessionChangedException()
+        if (current.sessionIdentity != sessionId) throw SessionChangedException()
+        val expected = current.expectation()
+        request(
+            path = "/api/v1/push/devices/${deviceId.urlEncodePath()}", method = "DELETE",
+            requiredSession = expected, expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
     override suspend fun login(email: String, password: String): ApiResult<SessionStatus> = safeCall {
         val response = request(
             path = "/api/v1/sessions",

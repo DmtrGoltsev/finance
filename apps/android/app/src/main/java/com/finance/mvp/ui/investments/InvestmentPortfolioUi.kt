@@ -99,6 +99,7 @@ fun InvestmentPortfolioPanel(
     var draft by remember { mutableStateOf<PortfolioDraftState?>(null) }
     var showDraftSheet by rememberSaveable(userId) { mutableStateOf(false) }
     var activeJobId by rememberSaveable(userId) { mutableStateOf<String?>(null) }
+    val requestedJobId = com.finance.mvp.notifications.LocalInvestmentJobId.current
 
     suspend fun reload() {
         loading = true
@@ -109,7 +110,19 @@ fun InvestmentPortfolioPanel(
         loading = false
     }
 
-    LaunchedEffect(userId) { reload() }
+    LaunchedEffect(userId, requestedJobId) {
+        reload()
+        requestedJobId?.let { jobId ->
+            when (val result = withContext(Dispatchers.IO) { repository.refreshRecommendation(userId, jobId) }) {
+                is ApiResult.Success -> {
+                    overview = overview.copy(recommendations = repository.cachedRecommendations(userId)
+                        .sortedByDescending { it.job.id == jobId })
+                    if (needsRecommendationPolling(result.value)) activeJobId = jobId
+                }
+                is ApiResult.Failure -> message = "Не удалось загрузить рекомендацию. Повторите обновление."
+            }
+        }
+    }
 
     LaunchedEffect(activeJobId) {
         val jobId = activeJobId ?: return@LaunchedEffect

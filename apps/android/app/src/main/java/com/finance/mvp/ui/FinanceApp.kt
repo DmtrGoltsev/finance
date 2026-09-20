@@ -211,6 +211,11 @@ fun FinanceApp(
     var registerConfirmPassword by remember { mutableStateOf("") }
     var registerDisplayName by rememberSaveable { mutableStateOf("") }
     var uiState by remember { mutableStateOf(FinanceUiState()) }
+    LaunchedEffect(uiState.session?.isAuthenticated) {
+        if (uiState.session?.isAuthenticated == true) {
+            com.finance.mvp.notifications.PushRegistrationWorker.enqueue(context)
+        }
+    }
     var captureDrafts by remember { mutableStateOf<List<CaptureDraft>>(emptyList()) }
     var captureIsLoading by rememberSaveable { mutableStateOf(false) }
     var captureMessage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -831,6 +836,9 @@ fun FinanceApp(
             val userId = uiState.session?.syncUserIdOrNull()
             userId?.let { TransactionSyncWorker.cancel(context, it) }
             uiState = uiState.copy(isLoading = true, message = "Выходим")
+            withContext(Dispatchers.IO) {
+                com.finance.mvp.notifications.PushRegistrationWorker.revoke(context)
+            }
             val result = withContext(Dispatchers.IO) { apiClient.logout() }
             if (syncManager != null && userId != null) {
                 withContext(Dispatchers.IO) { syncManager.clearUserData(userId) }
