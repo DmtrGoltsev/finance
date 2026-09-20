@@ -7,15 +7,12 @@ from pathlib import Path
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
+import app.db.models  # noqa: F401
 import pytest
 import yaml
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
-import app.db.models  # noqa: F401
+from app.api.auth_context import require_authenticated_actor
 from app.authz import Actor
 from app.config import Settings
 from app.db.base import Base
@@ -23,22 +20,29 @@ from app.db.models import OutboxEvent, User
 from app.investments.allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from app.investments.hmac_auth import HmacVerificationError, sign_callback, verify_callback
 from app.investments.instrument_resolver import ResolvedInstrument
-from app.investments.models import MoexInstrumentModel
+from app.investments.models import MoexInstrumentModel, RecommendationReportModel
 from app.investments.moex_catalog import refresh_catalog
 from app.investments.repository import InvestmentRepository
 from app.investments.router import investment_service_for_request
 from app.investments.schemas import (
     InvestmentPolicyPutRequest,
-    PortfolioImportConfirmRequest,
-    PortfolioImportCreateRequest,
     PortfolioPositionInput,
     RecommendationCallbackRequest,
     RecommendationJobCreateRequest,
     RecommendationSourceInput,
 )
+from app.investments.schemas import (
+    PortfolioImportConfirmRequest as PortfolioImportConfirmRequestModel,
+)
+from app.investments.schemas import (
+    PortfolioImportCreateRequest as PortfolioImportCreateRequestModel,
+)
 from app.investments.service import (
+    AccountProfileConflict,
+    ConfirmedImportNotDiscardable,
     IdempotencyConflict,
     InvalidObservedAt,
+    InvalidPagination,
     InvalidRecommendationPayload,
     InvalidTransition,
     InvestmentService,
@@ -52,8 +56,29 @@ from app.investments.source_validation import (
     validate_recommendation_sources,
 )
 from app.main import create_app
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+PROFILE_IDS = {
+    "sinara": UUID("10000000-0000-4000-8000-000000000001"),
+    "sber_investments": UUID("10000000-0000-4000-8000-000000000002"),
+    "finam": UUID("10000000-0000-4000-8000-000000000003"),
+}
+
+
+def PortfolioImportCreateRequest(**values):
+    brokerage = values.get("brokerage", values.get("brokerage", "finam"))
+    values.setdefault("accountProfileId", PROFILE_IDS[str(brokerage)])
+    values.setdefault("userLabel", "Основной счет")
+    values.setdefault("accountType", "brokerage")
+    return PortfolioImportCreateRequestModel(**values)
+
+
+def PortfolioImportConfirmRequest(**values):
+    values.setdefault("accountProfileId", PROFILE_IDS["finam"])
+    return PortfolioImportConfirmRequestModel(**values)
 
 
 @pytest.fixture
@@ -164,7 +189,8 @@ def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
         str(backend_root.parents[1] / "db" / "migrations"),
     )
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260920_0022"]
+    assert scripts.get_heads() == ["20260920_0023"]
+    assert scripts.get_revision("20260920_0023").down_revision == "20260920_0022"
     assert scripts.get_revision("20260920_0022").down_revision == "20260919_0021"
     assert scripts.get_revision("20260919_0021").down_revision == "20260919_0020"
     assert scripts.get_revision("20260919_0020").down_revision == "20260822_0019"
@@ -428,6 +454,7 @@ def test_gazp_external_package_requires_verified_fresh_catalog(session, catalog_
         idempotencyKey="gazp-import", brokerage="sinara", screenshotCount=1, observedAt=NOW,
     ))
     snapshot = service.confirm_import(owner, imported.id, PortfolioImportConfirmRequest(
+        accountProfileId=PROFILE_IDS["sinara"],
         positions=[PortfolioPositionInput(
             instrumentName="Private user label", ticker="GAZP", isin="RU0007661625",
             instrumentType="stock", riskBucket="aggressive", quantity="10", marketValue="1500",
@@ -449,10 +476,157 @@ def test_gazp_external_package_requires_verified_fresh_catalog(session, catalog_
         assert "GAZP" in str(event.payload_safe)
         assert "RU0007661625" in str(event.payload_safe)
         assert "Private user label" not in str(event.payload_safe)
+        allowed_sources = event.payload_safe["constraints"]["allowedSources"]
+        assert "nalog.gov.ru" not in allowed_sources
+        assert "www.nalog.gov.ru" not in allowed_sources
     else:
         with pytest.raises(InvalidRecommendationPayload):
             service.create_job(owner, request)
         assert list(session.scalars(select(OutboxEvent))) == []
+
+
+def test_multiple_accounts_same_broker_are_distinct_and_owner_scoped(session: Session) -> None:
+    owner = actor(session)
+    other = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    first_id, second_id = uuid4(), uuid4()
+    first = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="same-broker-first", accountProfileId=first_id,
+        brokerage="finam", userLabel="Основной счет", accountType="brokerage",
+        screenshotCount=1, observedAt=NOW,
+    ))
+    second = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="same-broker-second", accountProfileId=second_id,
+        brokerage="finam", userLabel="ИИС долгий", accountType="iis_iii",
+        screenshotCount=1, observedAt=NOW,
+    ))
+    assert first.account_profile_id == first_id
+    assert second.account_profile_id == second_id
+    assert first.brokerage == second.brokerage == "finam"
+
+    snapshot = service.confirm_import(owner, second.id, PortfolioImportConfirmRequest(
+        accountProfileId=second_id, positions=[position()],
+    ))
+    assert snapshot.account_profile_id == second_id
+    with pytest.raises(AccountProfileConflict):
+        service.confirm_import(
+            owner,
+            first.id,
+            PortfolioImportConfirmRequest(
+                accountProfileId=second_id, positions=[position()]
+            ),
+        )
+
+    with pytest.raises(ResourceNotFoundOrInaccessible):
+        service.create_import(other, PortfolioImportCreateRequest(
+            idempotencyKey="profile-idor", accountProfileId=first_id,
+            brokerage="finam", userLabel="Основной счет", accountType="brokerage",
+            screenshotCount=1, observedAt=NOW,
+        ))
+    with pytest.raises(AccountProfileConflict):
+        service.create_import(owner, PortfolioImportCreateRequest(
+            idempotencyKey="duplicate-profile-label", accountProfileId=uuid4(),
+            brokerage="finam", userLabel="  ОСНОВНОЙ   СЧЕТ  ", accountType="brokerage",
+            screenshotCount=1, observedAt=NOW,
+        ))
+    with pytest.raises(ValueError):
+        PortfolioImportCreateRequest(
+            idempotencyKey="unsafe-profile-label", accountProfileId=uuid4(),
+            brokerage="finam", userLabel="Счет 123@example.com", accountType="brokerage",
+            screenshotCount=1, observedAt=NOW,
+        )
+
+
+def test_discard_import_is_owner_only_idempotent_and_rejects_confirmed(session: Session) -> None:
+    owner = actor(session)
+    other = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    pending = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="discard-pending", brokerage="sinara", screenshotCount=1, observedAt=NOW,
+    ))
+    service.discard_import(other, pending.id)
+    assert service.repo.get_import(pending.id) is not None
+    service.discard_import(owner, pending.id)
+    service.discard_import(owner, pending.id)
+    assert service.repo.get_import(pending.id) is None
+
+    confirmed = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="discard-confirmed", brokerage="finam", screenshotCount=1, observedAt=NOW,
+    ))
+    service.confirm_import(
+        owner, confirmed.id, PortfolioImportConfirmRequest(positions=[position()])
+    )
+    with pytest.raises(ConfirmedImportNotDiscardable):
+        service.discard_import(owner, confirmed.id)
+    assert service.repo.get_import(confirmed.id) is not None
+
+    route_pending = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="discard-route", brokerage="sinara", screenshotCount=1, observedAt=NOW,
+    ))
+    application = create_app()
+    application.dependency_overrides[investment_service_for_request] = lambda: service
+    application.dependency_overrides[require_authenticated_actor] = lambda: owner
+    with TestClient(application) as test_client:
+        path = f"/api/v1/investments/portfolio-imports/{route_pending.id}"
+        assert test_client.delete(path).status_code == 204
+        assert test_client.delete(path).status_code == 204
+        confirmed_path = f"/api/v1/investments/portfolio-imports/{confirmed.id}"
+        response = test_client.delete(confirmed_path)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CONFIRMED_IMPORT_NOT_DISCARDABLE"
+
+
+def test_recommendation_history_is_owner_only_paginated_and_newest_first(session: Session) -> None:
+    owner = actor(session)
+    other = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    snapshot_id = confirmed_snapshot(service, owner)
+    jobs = [
+        service.create_job(owner, RecommendationJobCreateRequest(
+            idempotencyKey=f"history-job-{index}", snapshotIds=[snapshot_id],
+        ))
+        for index in range(3)
+    ]
+    for index, job in enumerate(jobs):
+        job.created_at = NOW + timedelta(minutes=index)
+        job.updated_at = job.created_at
+    session.add(RecommendationReportModel(
+        owner_user_id=UUID(owner.user_id), job_id=jobs[2].id,
+        summary="Свежая рекомендация", assumptions={}, generated_at=NOW,
+        valid_until=NOW + timedelta(days=7), disclaimer="Ручное исполнение",
+    ))
+    session.flush()
+
+    first_page, cursor, has_more = service.jobs(owner, limit=2, cursor=None)
+    assert [item.id for item in first_page] == [jobs[2].id, jobs[1].id]
+    assert cursor == "2" and has_more is True
+    second_page, cursor, has_more = service.jobs(owner, limit=2, cursor=cursor)
+    assert [item.id for item in second_page] == [jobs[0].id]
+    assert cursor is None and has_more is False
+    assert service.jobs(other, limit=20, cursor=None)[0] == []
+    with pytest.raises(InvalidPagination):
+        service.jobs(owner, limit=20, cursor="not-a-cursor")
+
+    application = create_app()
+    application.dependency_overrides[investment_service_for_request] = lambda: service
+    application.dependency_overrides[require_authenticated_actor] = lambda: owner
+    with TestClient(application) as test_client:
+        response = test_client.get("/api/v1/investments/recommendation-jobs?limit=2")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["job"]["id"] for item in payload["items"]] == [
+        str(jobs[2].id), str(jobs[1].id)
+    ]
+    assert payload["items"][0]["reportSummary"] == "Свежая рекомендация"
+    assert payload["items"][0]["reportPath"].endswith(f"/{jobs[2].id}/report")
+    assert payload["items"][0]["accountProfiles"][0]["userLabel"] == "Основной счет"
+    assert payload["page"] == {"limit": 2, "nextCursor": "2", "hasMore": True}
+
+    unauthenticated = create_app()
+    unauthenticated.dependency_overrides[investment_service_for_request] = lambda: service
+    with TestClient(unauthenticated) as test_client:
+        response = test_client.get("/api/v1/investments/recommendation-jobs")
+    assert response.status_code == 401
 
 
 def test_future_portfolio_observation_is_rejected(session: Session) -> None:
@@ -478,6 +652,22 @@ def test_source_allowlist_rejects_evil_and_private_hosts_and_derives_trust() -> 
         fetchedAt=NOW,
     )
     assert validate_recommendation_sources([valid], issuer_hosts=[])[0].trust_tier == "official"
+
+    for host in ("nalog.gov.ru", "www.nalog.gov.ru"):
+        tax_source = RecommendationSourceInput(
+            title="ФНС России",
+            url=f"https://{host}/rn77/taxation/investment_deduction/",
+            publisher="ФНС России",
+            fetchedAt=NOW,
+        )
+        with pytest.raises(UntrustedRecommendationSource):
+            validate_recommendation_sources([tax_source], issuer_hosts=[])
+        assert (
+            validate_recommendation_sources(
+                [tax_source], issuer_hosts=[], allow_tax_sources=True
+            )[0].trust_tier
+            == "official"
+        )
 
     for url in ("https://evil.example/data", "https://127.0.0.1/data"):
         with pytest.raises(UntrustedRecommendationSource):
@@ -554,6 +744,9 @@ def test_transitions_three_attempts_ready_report_and_replay(session: Session) ->
         "rawOcrText",
     ):
         assert forbidden not in serialized_dispatch
+    allowed_sources = dispatch.payload_safe["constraints"]["allowedSources"]
+    assert "nalog.gov.ru" in allowed_sources
+    assert "www.nalog.gov.ru" in allowed_sources
 
     for expected_attempt in (2, 3):
         job = service.apply_callback(
@@ -636,9 +829,9 @@ def test_transitions_three_attempts_ready_report_and_replay(session: Session) ->
             ],
             sources=[
                 {
-                    "title": "Данные инструмента",
-                    "url": "https://www.moex.com/ru/issue.aspx?board=TQTF&code=LQDT",
-                    "publisher": "Московская биржа",
+                    "title": "Индивидуальный инвестиционный счет",
+                    "url": "https://www.nalog.gov.ru/rn77/taxation/investment_deduction/",
+                    "publisher": "ФНС России",
                     "fetchedAt": NOW,
                 }
             ],

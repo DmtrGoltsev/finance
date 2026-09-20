@@ -68,6 +68,14 @@ def assert_contract(static, runtime):
         for method, operation in operations.items():
             approved = static_paths[path][method]
             assert approved["operationId"] == operation["operationId"]
+            def parameters(op, doc):
+                return {
+                    (parameter["in"], parameter["name"]): normalized(parameter, doc)
+                    for parameter in op.get("parameters", [])
+                }
+            assert parameters(approved, static) == parameters(operation, runtime), (
+                path, method, "parameters"
+            )
             for part in ("requestBody",):
                 assert normalized(approved.get(part), static) == normalized(
                     operation.get(part), runtime
@@ -106,7 +114,8 @@ def test_all_public_investment_schemas_match_canonical_contract(client):
         name for name, value in vars(schemas).items()
         if isinstance(value, type) and issubclass(value, ApiModel) and value is not ApiModel
     }
-    assert public_models <= visited
+    visited_model_names = {name.rsplit("__", 1)[-1] for name in visited}
+    assert public_models <= visited_model_names
 
 
 @pytest.mark.parametrize("change", ["required", "nullable", "type", "header", "body"])

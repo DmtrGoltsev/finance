@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.main import create_app
+
 from tests.api.route_introspection import iter_api_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -105,6 +106,10 @@ EXPECTED_APPROVED_INVESTMENT_OPERATIONS = {
     ("PUT", "/api/v1/investments/policy"): "putInvestmentPolicy",
     ("POST", "/api/v1/investments/portfolio-imports"): "createPortfolioImport",
     (
+        "DELETE",
+        "/api/v1/investments/portfolio-imports/{importId}",
+    ): "discardPortfolioImport",
+    (
         "POST",
         "/api/v1/investments/portfolio-imports/{importId}/confirm",
     ): "confirmPortfolioImport",
@@ -114,6 +119,7 @@ EXPECTED_APPROVED_INVESTMENT_OPERATIONS = {
         "/api/v1/investments/portfolio-snapshots/{snapshotId}",
     ): "getPortfolioSnapshot",
     ("POST", "/api/v1/investments/recommendation-jobs"): "createRecommendationJob",
+    ("GET", "/api/v1/investments/recommendation-jobs"): "listRecommendationJobs",
     (
         "GET",
         "/api/v1/investments/recommendation-jobs/{jobId}",

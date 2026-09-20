@@ -41,6 +41,15 @@ LongText = Annotated[str, StringConstraints(min_length=1, max_length=5000)]
 Money = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=4)]
 Percent = Annotated[Decimal, Field(ge=0, le=100, max_digits=7, decimal_places=4)]
 HttpsUrl = Annotated[HttpUrl, UrlConstraints(allowed_schemes=["https"])]
+SafeAccountLabel = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=60,
+        pattern=r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$",
+    ),
+]
 
 
 class Brokerage(StrEnum):
@@ -106,14 +115,24 @@ class InvestmentPolicyDto(InvestmentPolicyPutRequest):
 
 class PortfolioImportCreateRequest(ApiModel):
     idempotency_key: IdempotencyKey
+    account_profile_id: UUID
     brokerage: Brokerage
+    user_label: SafeAccountLabel
+    account_type: TaxAccountType
     screenshot_count: Annotated[int, Field(ge=1, le=20)]
     observed_at: datetime
 
 
-class PortfolioImportDto(ApiModel):
+class BrokerageAccountProfileDto(ApiModel):
     id: ResourceId
     brokerage: Brokerage
+    user_label: SafeAccountLabel
+    account_type: TaxAccountType
+
+
+class PortfolioImportDto(ApiModel):
+    id: ResourceId
+    account_profile: BrokerageAccountProfileDto | None
     screenshot_count: int
     observed_at: datetime
     status: str
@@ -173,6 +192,7 @@ class PortfolioPositionInput(ApiModel):
 
 
 class PortfolioImportConfirmRequest(ApiModel):
+    account_profile_id: UUID
     free_cash: Money = Decimal("0")
     monthly_contribution: Money = Decimal("0")
     positions: Annotated[list[PortfolioPositionInput], Field(min_length=1, max_length=500)]
@@ -185,7 +205,7 @@ class PortfolioPositionDto(PortfolioPositionInput):
 class PortfolioSnapshotDto(ApiModel):
     id: ResourceId
     import_id: ResourceId
-    brokerage: Brokerage
+    account_profile: BrokerageAccountProfileDto | None
     observed_at: datetime
     currency: str
     free_cash: Money
@@ -226,6 +246,24 @@ class RecommendationJobDto(ApiModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+
+
+class RecommendationHistoryItemDto(ApiModel):
+    job: RecommendationJobDto
+    account_profiles: list[BrokerageAccountProfileDto]
+    report_summary: LongText | None
+    report_path: str | None
+
+
+class PageInfo(ApiModel):
+    limit: Annotated[int, Field(ge=1, le=100)]
+    next_cursor: str | None = None
+    has_more: bool
+
+
+class RecommendationHistoryPageEnvelope(ApiModel):
+    items: list[RecommendationHistoryItemDto]
+    page: PageInfo
 
 
 class RecommendationActionInput(ApiModel):

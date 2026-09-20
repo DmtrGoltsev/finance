@@ -9,10 +9,9 @@ sys.path.insert(0, str(BACKEND_ROOT / "src"))
 
 
 try:
-    from sqlalchemy import CheckConstraint, Numeric, UniqueConstraint
-
     import app.db.models  # noqa: F401
     from app.db.base import Base
+    from sqlalchemy import CheckConstraint, Numeric, UniqueConstraint
 
     SQLALCHEMY_IMPORT_ERROR = None
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without deps
@@ -44,6 +43,7 @@ EXPECTED_TABLES = {
     "sync_changes",
     "sync_client_mutations",
     "investment_policies",
+    "brokerage_account_profiles",
     "moex_instruments",
     "portfolio_imports",
     "portfolio_snapshots",

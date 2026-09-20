@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -17,10 +17,12 @@ from .hmac_auth import HmacVerificationError, verify_callback
 from .models import PortfolioImportModel, PortfolioPositionModel, PortfolioSnapshotModel
 from .repository import InvestmentRepository
 from .schemas import (
+    BrokerageAccountProfileDto,
     BucketAdjustmentDto,
     InvestmentPolicyDto,
     InvestmentPolicyEnvelope,
     InvestmentPolicyPutRequest,
+    PageInfo,
     PortfolioImportConfirmRequest,
     PortfolioImportCreateRequest,
     PortfolioImportDto,
@@ -30,6 +32,8 @@ from .schemas import (
     PortfolioSnapshotEnvelope,
     RecommendationActionDto,
     RecommendationCallbackRequest,
+    RecommendationHistoryItemDto,
+    RecommendationHistoryPageEnvelope,
     RecommendationJobCreateRequest,
     RecommendationJobDto,
     RecommendationJobEnvelope,
@@ -38,9 +42,12 @@ from .schemas import (
     RecommendationSourceDto,
 )
 from .service import (
+    AccountProfileConflict,
     ConcurrentTransition,
+    ConfirmedImportNotDiscardable,
     IdempotencyConflict,
     InvalidObservedAt,
+    InvalidPagination,
     InvalidRecommendationPayload,
     InvalidTransition,
     InvestmentService,
@@ -102,12 +109,25 @@ def _error(error: InvestmentServiceError, request_id: str | None = None) -> JSON
         status_code = status.HTTP_404_NOT_FOUND
     elif isinstance(
         error,
-        (IdempotencyConflict, InvalidTransition, ReplayDetected, ConcurrentTransition),
+        (
+            IdempotencyConflict,
+            InvalidTransition,
+            ReplayDetected,
+            ConcurrentTransition,
+            AccountProfileConflict,
+            ConfirmedImportNotDiscardable,
+        ),
     ):
         status_code = status.HTTP_409_CONFLICT
     elif isinstance(
         error,
-        (StalePortfolio, StaleMarketData, InvalidObservedAt, InvalidRecommendationPayload),
+        (
+            StalePortfolio,
+            StaleMarketData,
+            InvalidObservedAt,
+            InvalidRecommendationPayload,
+            InvalidPagination,
+        ),
     ):
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     else:
@@ -138,10 +158,24 @@ def _policy_dto(model: Any) -> InvestmentPolicyDto:
     )
 
 
-def _import_dto(model: PortfolioImportModel) -> PortfolioImportDto:
-    return PortfolioImportDto(
+def _profile_dto(model: Any | None) -> BrokerageAccountProfileDto | None:
+    if model is None:
+        return None
+    return BrokerageAccountProfileDto(
         id=str(model.id),
         brokerage=model.brokerage,
+        user_label=model.user_label,
+        account_type=model.account_type,
+    )
+
+
+def _import_dto(service: InvestmentService, model: PortfolioImportModel) -> PortfolioImportDto:
+    return PortfolioImportDto(
+        id=str(model.id),
+        account_profile=_profile_dto(
+            service.repo.get_account_profile(model.account_profile_id)
+            if model.account_profile_id else None
+        ),
         screenshot_count=model.screenshot_count,
         observed_at=model.observed_at,
         status=model.status,
@@ -178,7 +212,10 @@ def _snapshot_dto(
     return PortfolioSnapshotDto(
         id=str(model.id),
         import_id=str(model.import_id),
-        brokerage=model.brokerage,
+        account_profile=_profile_dto(
+            service.repo.get_account_profile(model.account_profile_id)
+            if model.account_profile_id else None
+        ),
         observed_at=model.observed_at,
         currency=model.currency,
         free_cash=model.free_cash,
@@ -214,6 +251,27 @@ def _job_dto(service: InvestmentService, model: Any) -> RecommendationJobDto:
     )
 
 
+def _history_item_dto(
+    service: InvestmentService, model: Any
+) -> RecommendationHistoryItemDto:
+    report = service.repo.report_for_job(model.id)
+    return RecommendationHistoryItemDto(
+        job=_job_dto(service, model),
+        account_profiles=[
+            profile
+            for account in service.repo.job_account_profiles(model.id)
+            if (profile := _profile_dto(account)) is not None
+        ],
+        report_summary=report.summary if report else None,
+        report_path=(
+            f"{get_settings().api_v1_prefix}/investments/"
+            f"recommendation-jobs/{model.id}/report"
+            if report
+            else None
+        ),
+    )
+
+
 @router.get("/policy", response_model=InvestmentPolicyEnvelope, operation_id="getInvestmentPolicy")
 async def get_policy(
     actor: CurrentActor, service: InvestmentServiceDependency
@@ -242,7 +300,26 @@ async def create_portfolio_import(
     service: InvestmentServiceDependency,
 ) -> PortfolioImportEnvelope | JSONResponse:
     try:
-        return PortfolioImportEnvelope(data=_import_dto(service.create_import(actor, request)))
+        model = service.create_import(actor, request)
+        return PortfolioImportEnvelope(data=_import_dto(service, model))
+    except InvestmentServiceError as error:
+        return _error(error, actor.request_id)
+
+
+@router.delete(
+    "/portfolio-imports/{importId}",
+    response_model=None,
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="discardPortfolioImport",
+)
+async def discard_portfolio_import(
+    importId: UUID,
+    actor: CurrentActor,
+    service: InvestmentServiceDependency,
+) -> Response | JSONResponse:
+    try:
+        service.discard_import(actor, importId)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except InvestmentServiceError as error:
         return _error(error, actor.request_id)
 
@@ -308,6 +385,27 @@ async def create_recommendation_job(
 ) -> RecommendationJobEnvelope | JSONResponse:
     try:
         return RecommendationJobEnvelope(data=_job_dto(service, service.create_job(actor, request)))
+    except InvestmentServiceError as error:
+        return _error(error, actor.request_id)
+
+
+@router.get(
+    "/recommendation-jobs",
+    response_model=RecommendationHistoryPageEnvelope,
+    operation_id="listRecommendationJobs",
+)
+async def list_recommendation_jobs(
+    actor: CurrentActor,
+    service: InvestmentServiceDependency,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: Annotated[str | None, Query(min_length=1)] = None,
+) -> RecommendationHistoryPageEnvelope | JSONResponse:
+    try:
+        jobs, next_cursor, has_more = service.jobs(actor, limit=limit, cursor=cursor)
+        return RecommendationHistoryPageEnvelope(
+            items=[_history_item_dto(service, job) for job in jobs],
+            page=PageInfo(limit=limit, next_cursor=next_cursor, has_more=has_more),
+        )
     except InvestmentServiceError as error:
         return _error(error, actor.request_id)
 

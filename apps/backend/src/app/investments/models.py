@@ -64,6 +64,40 @@ class InvestmentPolicyModel(Base):
     version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
 
 
+class BrokerageAccountProfileModel(Base):
+    __tablename__ = "brokerage_account_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "brokerage",
+            "label_key",
+            name="uq_brokerage_account_profiles_owner_brokerage_label",
+        ),
+        CheckConstraint(
+            "brokerage IN ('sinara', 'sber_investments', 'finam')",
+            name="brokerage_valid",
+        ),
+        CheckConstraint(
+            "account_type IN ('brokerage', 'iis_a', 'iis_b', 'iis_iii')",
+            name="account_type_valid",
+        ),
+        Index(
+            "ix_brokerage_account_profiles_owner_brokerage",
+            "owner_user_id",
+            "brokerage",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    brokerage: Mapped[str] = mapped_column(Text, nullable=False)
+    user_label: Mapped[str] = mapped_column(Text, nullable=False)
+    label_key: Mapped[str] = mapped_column(Text, nullable=False)
+    account_type: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = created_timestamp()
+    updated_at: Mapped[datetime] = updated_timestamp()
+
+
 class PortfolioImportModel(Base):
     __tablename__ = "portfolio_imports"
     __table_args__ = (
@@ -83,6 +117,9 @@ class PortfolioImportModel(Base):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     owner_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
+    account_profile_id: Mapped[uuid.UUID | None] = uuid_fk(
+        "brokerage_account_profiles.id", nullable=True
+    )
     brokerage: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     request_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -112,6 +149,9 @@ class PortfolioSnapshotModel(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     owner_user_id: Mapped[uuid.UUID] = uuid_fk("users.id")
     import_id: Mapped[uuid.UUID] = uuid_fk("portfolio_imports.id")
+    account_profile_id: Mapped[uuid.UUID | None] = uuid_fk(
+        "brokerage_account_profiles.id", nullable=True
+    )
     brokerage: Mapped[str] = mapped_column(Text, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     currency: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'RUB'"))

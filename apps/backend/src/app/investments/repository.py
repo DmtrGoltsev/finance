@@ -7,13 +7,14 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import OutboxEvent
 
 from .models import (
+    BrokerageAccountProfileModel,
     InvestmentPolicyModel,
     PortfolioImportModel,
     PortfolioPositionModel,
@@ -91,6 +92,57 @@ class InvestmentRepository:
             )
         )
 
+    def get_account_profile(self, profile_id: UUID) -> BrokerageAccountProfileModel | None:
+        return self.session.get(BrokerageAccountProfileModel, profile_id)
+
+    def find_account_profile_by_label(
+        self, owner_user_id: UUID, brokerage: str, label_key: str
+    ) -> BrokerageAccountProfileModel | None:
+        return self.session.scalar(
+            select(BrokerageAccountProfileModel).where(
+                BrokerageAccountProfileModel.owner_user_id == owner_user_id,
+                BrokerageAccountProfileModel.brokerage == brokerage,
+                BrokerageAccountProfileModel.label_key == label_key,
+            )
+        )
+
+    def create_account_profile(
+        self,
+        *,
+        profile_id: UUID,
+        owner_user_id: UUID,
+        brokerage: str,
+        user_label: str,
+        label_key: str,
+        account_type: str,
+    ) -> BrokerageAccountProfileModel:
+        now = datetime.now(UTC)
+        candidate = BrokerageAccountProfileModel(
+            id=profile_id,
+            owner_user_id=owner_user_id,
+            brokerage=brokerage,
+            user_label=user_label,
+            label_key=label_key,
+            account_type=account_type,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            with self.session.begin_nested():
+                self.session.add(candidate)
+                self.session.flush()
+            return candidate
+        except IntegrityError:
+            self.session.expire_all()
+            existing = self.get_account_profile(profile_id)
+            if existing is None:
+                existing = self.find_account_profile_by_label(
+                    owner_user_id, brokerage, label_key
+                )
+            if existing is None:
+                raise
+            return existing
+
     def create_import(
         self,
         *,
@@ -100,10 +152,12 @@ class InvestmentRepository:
         request_hash: str,
         screenshot_count: int,
         observed_at: datetime,
+        account_profile_id: UUID,
     ) -> PortfolioImportModel:
         now = datetime.now(UTC)
         model = PortfolioImportModel(
             owner_user_id=owner_user_id,
+            account_profile_id=account_profile_id,
             brokerage=brokerage,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
@@ -132,6 +186,17 @@ class InvestmentRepository:
             select(PortfolioSnapshotModel).where(PortfolioSnapshotModel.import_id == import_id)
         )
 
+    def discard_pending_import(self, import_id: UUID, owner_user_id: UUID) -> bool:
+        result = self.session.execute(
+            delete(PortfolioImportModel).where(
+                PortfolioImportModel.id == import_id,
+                PortfolioImportModel.owner_user_id == owner_user_id,
+                PortfolioImportModel.status == "pending",
+            )
+        )
+        self.session.flush()
+        return result.rowcount == 1
+
     def confirm_import(
         self,
         *,
@@ -145,6 +210,7 @@ class InvestmentRepository:
         snapshot = PortfolioSnapshotModel(
             owner_user_id=import_model.owner_user_id,
             import_id=import_model.id,
+            account_profile_id=import_model.account_profile_id,
             brokerage=import_model.brokerage,
             observed_at=import_model.observed_at,
             currency="RUB",
@@ -313,6 +379,23 @@ class InvestmentRepository:
     def get_job(self, job_id: UUID) -> RecommendationJobModel | None:
         return self.session.get(RecommendationJobModel, job_id)
 
+    def list_jobs(
+        self, owner_user_id: UUID, *, offset: int, limit: int
+    ) -> tuple[list[RecommendationJobModel], bool]:
+        items = list(
+            self.session.scalars(
+                select(RecommendationJobModel)
+                .where(RecommendationJobModel.owner_user_id == owner_user_id)
+                .order_by(
+                    RecommendationJobModel.created_at.desc(),
+                    RecommendationJobModel.id.desc(),
+                )
+                .offset(offset)
+                .limit(limit + 1)
+            )
+        )
+        return items[:limit], len(items) > limit
+
     def get_job_for_update(self, job_id: UUID) -> RecommendationJobModel | None:
         return self.session.scalar(
             select(RecommendationJobModel)
@@ -347,6 +430,29 @@ class InvestmentRepository:
                 select(RecommendationJobSnapshotModel.snapshot_id)
                 .where(RecommendationJobSnapshotModel.job_id == job_id)
                 .order_by(RecommendationJobSnapshotModel.snapshot_id)
+            )
+        )
+
+    def job_account_profiles(self, job_id: UUID) -> list[BrokerageAccountProfileModel]:
+        return list(
+            self.session.scalars(
+                select(BrokerageAccountProfileModel)
+                .join(
+                    PortfolioSnapshotModel,
+                    PortfolioSnapshotModel.account_profile_id
+                    == BrokerageAccountProfileModel.id,
+                )
+                .join(
+                    RecommendationJobSnapshotModel,
+                    RecommendationJobSnapshotModel.snapshot_id == PortfolioSnapshotModel.id,
+                )
+                .where(RecommendationJobSnapshotModel.job_id == job_id)
+                .distinct()
+                .order_by(
+                    BrokerageAccountProfileModel.brokerage,
+                    BrokerageAccountProfileModel.label_key,
+                    BrokerageAccountProfileModel.id,
+                )
             )
         )
 

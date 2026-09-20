@@ -1494,6 +1494,20 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PortfolioImportEnvelope' }
         default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports/{importId}:
+    delete:
+      tags: [Investments]
+      operationId: discardPortfolioImport
+      summary: Idempotently discard an owner-only unconfirmed portfolio import.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Draft absent or discarded. Confirmed imports are rejected.
+        default: { $ref: '#/components/responses/Error' }
   /investments/portfolio-imports/{importId}/confirm:
     post:
       tags: [Investments]
@@ -1503,7 +1517,7 @@ paths:
         - name: importId
           in: path
           required: true
-          schema: { $ref: '#/components/schemas/ResourceId' }
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -1539,7 +1553,7 @@ paths:
         - name: snapshotId
           in: path
           required: true
-          schema: { $ref: '#/components/schemas/ResourceId' }
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Portfolio snapshot.
@@ -1548,6 +1562,29 @@ paths:
               schema: { $ref: '#/components/schemas/PortfolioSnapshotEnvelope' }
         default: { $ref: '#/components/responses/Error' }
   /investments/recommendation-jobs:
+    get:
+      tags: [Investments]
+      operationId: listRecommendationJobs
+      summary: Restore owner-only recommendation history, newest first.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - { type: string, minLength: 1 }
+              - { type: 'null' }
+      responses:
+        '200':
+          description: Paginated recommendation history with report summaries and links.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationHistoryPageEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
     post:
       tags: [Investments]
       operationId: createRecommendationJob
@@ -1573,7 +1610,7 @@ paths:
         - name: jobId
           in: path
           required: true
-          schema: { $ref: '#/components/schemas/ResourceId' }
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Recommendation job.
@@ -1590,7 +1627,7 @@ paths:
         - name: jobId
           in: path
           required: true
-          schema: { $ref: '#/components/schemas/ResourceId' }
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Recommendation report with citations and seven-day validity.
@@ -1609,7 +1646,7 @@ paths:
         - name: jobId
           in: path
           required: true
-          schema: { $ref: '#/components/schemas/ResourceId' }
+          schema: { type: string, format: uuid }
         - name: X-Finance-Timestamp
           in: header
           required: true
@@ -1967,8 +2004,18 @@ components:
           type: string
           maxLength: 128
           minLength: 8
+        accountProfileId:
+          type: string
+          format: uuid
         brokerage:
           $ref: '#/components/schemas/Brokerage'
+        userLabel:
+          type: string
+          maxLength: 60
+          minLength: 1
+          pattern: ^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$
+        accountType:
+          $ref: '#/components/schemas/TaxAccountType'
         screenshotCount:
           type: integer
           maximum: 20.0
@@ -1980,7 +2027,10 @@ components:
       type: object
       required:
       - idempotencyKey
+      - accountProfileId
       - brokerage
+      - userLabel
+      - accountType
       - screenshotCount
       - observedAt
       description: Metadata only. Raw screenshots, OCR text, person names, broker account identifiers, and
@@ -1991,6 +2041,13 @@ components:
       - sinara
       - sber_investments
       - finam
+    TaxAccountType:
+      type: string
+      enum:
+      - brokerage
+      - iis_a
+      - iis_b
+      - iis_iii
     PortfolioImportEnvelope:
       properties:
         data:
@@ -2005,8 +2062,10 @@ components:
           type: string
           maxLength: 128
           minLength: 1
-        brokerage:
-          $ref: '#/components/schemas/Brokerage'
+        accountProfile:
+          anyOf:
+          - $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          - type: 'null'
         screenshotCount:
           type: integer
         observedAt:
@@ -2026,14 +2085,39 @@ components:
       type: object
       required:
       - id
-      - brokerage
+      - accountProfile
       - screenshotCount
       - observedAt
       - status
       - confirmedAt
       - createdAt
+    BrokerageAccountProfileDto:
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        brokerage:
+          $ref: '#/components/schemas/Brokerage'
+        userLabel:
+          type: string
+          maxLength: 60
+          minLength: 1
+          pattern: ^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$
+        accountType:
+          $ref: '#/components/schemas/TaxAccountType'
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - brokerage
+      - userLabel
+      - accountType
     PortfolioImportConfirmRequest:
       properties:
+        accountProfileId:
+          type: string
+          format: uuid
         freeCash:
           anyOf:
           - type: number
@@ -2057,6 +2141,7 @@ components:
       additionalProperties: false
       type: object
       required:
+      - accountProfileId
       - positions
     PortfolioPositionInput:
       anyOf:
@@ -2174,13 +2259,6 @@ components:
       - moderate
       - aggressive
       type: string
-    TaxAccountType:
-      type: string
-      enum:
-      - brokerage
-      - iis_a
-      - iis_b
-      - iis_iii
     PortfolioSnapshotEnvelope:
       properties:
         data:
@@ -2199,8 +2277,10 @@ components:
           type: string
           maxLength: 128
           minLength: 1
-        brokerage:
-          $ref: '#/components/schemas/Brokerage'
+        accountProfile:
+          anyOf:
+          - $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          - type: 'null'
         observedAt:
           type: string
           format: date-time
@@ -2227,7 +2307,7 @@ components:
       required:
       - id
       - importId
-      - brokerage
+      - accountProfile
       - observedAt
       - currency
       - freeCash
@@ -2437,6 +2517,61 @@ components:
       - projectedPercent
       - targetPercent
       - withinTolerance
+    RecommendationHistoryPageEnvelope:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RecommendationHistoryItemDto'
+          type: array
+        page:
+          $ref: '#/components/schemas/InvestmentPageInfo'
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - page
+    RecommendationHistoryItemDto:
+      properties:
+        job:
+          $ref: '#/components/schemas/RecommendationJobDto'
+        accountProfiles:
+          items:
+            $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          type: array
+        reportSummary:
+          anyOf:
+          - type: string
+            maxLength: 5000
+            minLength: 1
+          - type: 'null'
+        reportPath:
+          anyOf:
+          - type: string
+          - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+      - job
+      - accountProfiles
+      - reportSummary
+      - reportPath
+    InvestmentPageInfo:
+      properties:
+        limit:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+        hasMore:
+          type: boolean
+      additionalProperties: false
+      type: object
+      required:
+      - limit
+      - hasMore
     RecommendationReportEnvelope:
       properties:
         data:

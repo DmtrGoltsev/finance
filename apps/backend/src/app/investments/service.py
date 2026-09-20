@@ -78,6 +78,18 @@ class ConcurrentTransition(InvestmentServiceError):
     code = "CONCURRENT_RECOMMENDATION_TRANSITION"
 
 
+class AccountProfileConflict(InvestmentServiceError):
+    code = "ACCOUNT_PROFILE_CONFLICT"
+
+
+class ConfirmedImportNotDiscardable(InvestmentServiceError):
+    code = "CONFIRMED_IMPORT_NOT_DISCARDABLE"
+
+
+class InvalidPagination(InvestmentServiceError):
+    code = "INVALID_PAGINATION_CURSOR"
+
+
 class InvestmentService:
     def __init__(
         self,
@@ -136,6 +148,27 @@ class InvestmentService:
             if existing.request_hash != request_hash:
                 raise IdempotencyConflict()
             return existing
+        profile = self.repo.get_account_profile(request.account_profile_id)
+        label_key = _account_label_key(request.user_label)
+        if profile is not None and profile.owner_user_id != owner:
+            raise ResourceNotFoundOrInaccessible()
+        if profile is None:
+            profile = self.repo.create_account_profile(
+                profile_id=request.account_profile_id,
+                owner_user_id=owner,
+                brokerage=str(request.brokerage),
+                user_label=request.user_label,
+                label_key=label_key,
+                account_type=str(request.account_type),
+            )
+        if (
+            profile.id != request.account_profile_id
+            or profile.owner_user_id != owner
+            or profile.brokerage != str(request.brokerage)
+            or profile.label_key != label_key
+            or profile.account_type != str(request.account_type)
+        ):
+            raise AccountProfileConflict()
         created = self.repo.create_import(
             owner_user_id=owner,
             brokerage=str(request.brokerage),
@@ -143,6 +176,7 @@ class InvestmentService:
             request_hash=request_hash,
             screenshot_count=request.screenshot_count,
             observed_at=request.observed_at,
+            account_profile_id=profile.id,
         )
         if created.request_hash != request_hash:
             raise IdempotencyConflict()
@@ -158,6 +192,8 @@ class InvestmentService:
         imported = self.repo.get_import(import_id)
         if imported is None or imported.owner_user_id != owner:
             raise ResourceNotFoundOrInaccessible()
+        if imported.account_profile_id != request.account_profile_id:
+            raise AccountProfileConflict()
         existing = self.repo.get_snapshot_by_import(import_id)
         if existing is not None:
             return existing
@@ -167,6 +203,15 @@ class InvestmentService:
             monthly_contribution=request.monthly_contribution,
             positions=request.positions,
         )
+
+    def discard_import(self, actor: Actor, import_id: UUID) -> None:
+        owner = _actor_uuid(actor)
+        imported = self.repo.get_import(import_id)
+        if imported is None or imported.owner_user_id != owner:
+            return
+        if imported.status != "pending":
+            raise ConfirmedImportNotDiscardable()
+        self.repo.discard_pending_import(import_id, owner)
 
     def snapshot(self, actor: Actor, snapshot_id: UUID) -> PortfolioSnapshotModel:
         owner = _actor_uuid(actor)
@@ -219,6 +264,21 @@ class InvestmentService:
         if model is None or model.owner_user_id != owner:
             raise ResourceNotFoundOrInaccessible()
         return model
+
+    def jobs(
+        self, actor: Actor, *, limit: int, cursor: str | None
+    ) -> tuple[list[RecommendationJobModel], str | None, bool]:
+        try:
+            offset = 0 if cursor is None else int(cursor)
+        except ValueError as exc:
+            raise InvalidPagination() from exc
+        if offset < 0:
+            raise InvalidPagination()
+        items, has_more = self.repo.list_jobs(
+            _actor_uuid(actor), offset=offset, limit=limit
+        )
+        next_cursor = str(offset + len(items)) if has_more else None
+        return items, next_cursor, has_more
 
     def report(self, actor: Actor, job_id: UUID) -> RecommendationReportModel:
         self.job(actor, job_id)
@@ -273,6 +333,7 @@ class InvestmentService:
                 validated_sources = validate_recommendation_sources(
                     request.sources,
                     issuer_hosts=self._issuer_source_hosts,
+                    allow_tax_sources=self._job_has_tax_advantaged_position(job),
                 )
             except UntrustedRecommendationSource as exc:
                 raise InvalidRecommendationPayload() from exc
@@ -387,6 +448,19 @@ class InvestmentService:
                         else None,
                     }
                 )
+        allowed_sources = [
+            "moex.com",
+            "cbr.ru",
+            "minfin.gov.ru",
+            "e-disclosure.ru",
+            "interfax.ru",
+            "tass.ru",
+            "rbc.ru",
+            "issuer-official-sites",
+        ]
+        if any(item["taxAccountType"] != "brokerage" for item in positions):
+            allowed_sources.extend(["nalog.gov.ru", "www.nalog.gov.ru"])
+
         return {
             "schemaVersion": 1,
             "currency": "RUB",
@@ -407,18 +481,18 @@ class InvestmentService:
                 "automaticExecution": False,
                 "marketDataMaxAgeHours": 24,
                 "recommendationValidityDays": 7,
-                "allowedSources": [
-                    "moex.com",
-                    "cbr.ru",
-                    "minfin.gov.ru",
-                    "e-disclosure.ru",
-                    "interfax.ru",
-                    "tass.ru",
-                    "rbc.ru",
-                    "issuer-official-sites",
-                ],
+                "allowedSources": allowed_sources,
             },
         }
+
+    def _job_has_tax_advantaged_position(self, job: RecommendationJobModel) -> bool:
+        for snapshot_id in self.repo.job_snapshot_ids(job.id):
+            if any(
+                position.tax_account_type != "brokerage"
+                for position in self.repo.positions(snapshot_id)
+            ):
+                return True
+        return False
 
     def _validate_ready_payload(
         self,
@@ -505,6 +579,10 @@ def _actor_uuid(actor: Actor) -> UUID:
         return UUID(actor.user_id)
     except ValueError as exc:
         raise ResourceNotFoundOrInaccessible() from exc
+
+
+def _account_label_key(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def _utc(value: datetime) -> datetime:

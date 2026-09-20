@@ -22,6 +22,10 @@ TRUSTED_SOURCE_HOSTS = {
     "rbc.ru": "news",
     "www.rbc.ru": "news",
 }
+TAX_SOURCE_HOSTS = {
+    "nalog.gov.ru": "official",
+    "www.nalog.gov.ru": "official",
+}
 
 
 class UntrustedRecommendationSource(ValueError):
@@ -38,8 +42,11 @@ def validate_recommendation_sources(
     sources: list[RecommendationSourceInput],
     *,
     issuer_hosts: list[str],
+    allow_tax_sources: bool = False,
 ) -> list[ValidatedRecommendationSource]:
     allowed = dict(TRUSTED_SOURCE_HOSTS)
+    if allow_tax_sources:
+        allowed.update(TAX_SOURCE_HOSTS)
     for configured in issuer_hosts:
         normalized = configured.strip().casefold().rstrip(".")
         if normalized and not _is_forbidden_host(normalized):

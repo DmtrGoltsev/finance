@@ -160,6 +160,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/sync/pull",
         "/investments/policy",
         "/investments/portfolio-imports",
+        "/investments/portfolio-imports/{importId}",
         "/investments/portfolio-imports/{importId}/confirm",
         "/investments/portfolio-snapshots",
         "/investments/portfolio-snapshots/{snapshotId}",
