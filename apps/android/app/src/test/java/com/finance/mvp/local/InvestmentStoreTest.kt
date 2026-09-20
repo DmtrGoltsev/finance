@@ -8,9 +8,11 @@ import com.finance.mvp.api.InvestmentInstrumentType
 import com.finance.mvp.api.InvestmentRiskBucket
 import com.finance.mvp.api.PortfolioPosition
 import com.finance.mvp.api.PortfolioSnapshot
+import com.finance.mvp.investments.PortfolioDraftState
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,5 +49,33 @@ class InvestmentStoreTest {
 
         assertEquals("snap-1", store.snapshots("owner").single().id)
         assertEquals(emptyList<PortfolioSnapshot>(), store.snapshots("other"))
+    }
+
+    @Test fun structuredDraftSurvivesStoreRecreationWithoutScreenshotOrOcrPayload() = runTest {
+        val draft = PortfolioDraftState(
+            importId = "import-draft",
+            brokerage = Brokerage.Finam,
+            screenshotCount = 3,
+            positions = listOf(
+                PortfolioPosition(
+                    instrumentName = "Лукойл", ticker = "LKOH",
+                    instrumentType = InvestmentInstrumentType.Stock,
+                    riskBucket = InvestmentRiskBucket.Aggressive,
+                    quantity = "2", marketValue = "12000",
+                ),
+            ),
+            freeCash = "3000",
+            monthlyContribution = "50000",
+            createdAtEpochMillis = 100L,
+        )
+        InvestmentStore(database, nowEpochMillis = { 101L }).cacheDraft("owner", draft)
+
+        val entity = database.localInvestmentDao().latestDraft("owner")!!
+        assertTrue(!entity.payloadJson.contains("content://"))
+        assertTrue(!entity.payloadJson.contains("ocrText"))
+        assertEquals(draft, InvestmentStore(database).draft("owner"))
+
+        InvestmentStore(database).deleteDraft("owner", draft.importId)
+        assertEquals(null, InvestmentStore(database).draft("owner"))
     }
 }

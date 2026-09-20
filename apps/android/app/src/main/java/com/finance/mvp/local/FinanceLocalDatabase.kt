@@ -20,8 +20,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncStateEntity::class,
         LocalInvestmentSnapshotEntity::class,
         LocalInvestmentRecommendationEntity::class,
+        LocalInvestmentDraftEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class FinanceLocalDatabase : RoomDatabase() {
@@ -48,7 +49,7 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                     context.applicationContext,
                     FinanceLocalDatabase::class.java,
                     DATABASE_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
             }
         }
 
@@ -284,6 +285,23 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                 )
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_local_investment_recommendations_userId_jobId ON local_investment_recommendations(userId, jobId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_local_investment_recommendations_userId_updatedAtEpochMillis ON local_investment_recommendations(userId, updatedAtEpochMillis)")
+            }
+        }
+
+        internal val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS local_investment_drafts (
+                        cacheKey TEXT NOT NULL PRIMARY KEY,
+                        userId TEXT NOT NULL,
+                        importId TEXT NOT NULL,
+                        payloadJson TEXT NOT NULL,
+                        updatedAtEpochMillis INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_local_investment_drafts_userId_importId ON local_investment_drafts(userId, importId)")
             }
         }
     }

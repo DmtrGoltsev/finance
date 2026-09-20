@@ -43,4 +43,35 @@ class FinanceDatabaseMigrationV4Test {
         db.execSQL("INSERT INTO local_investment_recommendations VALUES ('u:j','u','j','queued','{}',NULL,3)")
         helper.close()
     }
+
+    @Test
+    fun migration4To5PreservesInvestmentCacheAndCreatesStructuredDraftStore() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(null)
+                .callback(object : SupportSQLiteOpenHelper.Callback(4) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        FinanceLocalDatabase.MIGRATION_3_4.migrate(db)
+                        db.execSQL("INSERT INTO local_investment_snapshots VALUES ('u:s','u','s','finam',1,'{}',2)")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                })
+                .build(),
+        )
+        val db = helper.writableDatabase
+
+        FinanceLocalDatabase.MIGRATION_4_5.migrate(db)
+
+        db.query("SELECT COUNT(*) FROM local_investment_snapshots").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+        db.execSQL("INSERT INTO local_investment_drafts VALUES ('u:i','u','i','{}',3)")
+        db.query("SELECT COUNT(*) FROM local_investment_drafts").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+        helper.close()
+    }
 }

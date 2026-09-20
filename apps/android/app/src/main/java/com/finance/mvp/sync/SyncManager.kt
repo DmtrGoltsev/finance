@@ -1019,6 +1019,7 @@ class SyncManager(
             database.localPlanningAllocationDao().deleteForUser(userId)
             database.localInvestmentDao().deleteSnapshots(userId)
             database.localInvestmentDao().deleteRecommendations(userId)
+            database.localInvestmentDao().deleteDrafts(userId)
             database.pendingMutationDao().deleteForUser(userId)
             database.syncStateDao().deleteForUser(userId)
         }

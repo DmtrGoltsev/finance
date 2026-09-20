@@ -31,9 +31,14 @@ class InvestmentRepository(
 ) {
     suspend fun load(userId: String): InvestmentOverview {
         val cachedSnapshots = store.snapshots(userId)
-        val cachedRecommendations = store.recommendations(userId)
+        val localRecommendations = store.recommendations(userId)
         val policyResult = apiClient.getInvestmentPolicy()
         val snapshotsResult = apiClient.listPortfolioSnapshots()
+        val cachedRecommendations = if (policyResult is ApiResult.Success || snapshotsResult is ApiResult.Success) {
+            refreshKnownRecommendations(userId, localRecommendations)
+        } else {
+            localRecommendations
+        }
         return if (snapshotsResult is ApiResult.Success) {
             store.cacheSnapshots(userId, snapshotsResult.value)
             InvestmentOverview(
@@ -99,6 +104,33 @@ class InvestmentRepository(
 
     suspend fun cachedRecommendations(userId: String): List<CachedInvestmentRecommendation> =
         store.recommendations(userId)
+
+    suspend fun draft(userId: String): PortfolioDraftState? = store.draft(userId)
+
+    suspend fun saveDraft(userId: String, draft: PortfolioDraftState) = store.cacheDraft(userId, draft)
+
+    suspend fun deleteDraft(userId: String, importId: String) = store.deleteDraft(userId, importId)
+
+    private suspend fun refreshKnownRecommendations(
+        userId: String,
+        cached: List<CachedInvestmentRecommendation>,
+    ): List<CachedInvestmentRecommendation> {
+        cached.take(MAX_HISTORY_REFRESH).forEach { existing ->
+            val job = (apiClient.getRecommendationJob(existing.job.id) as? ApiResult.Success)?.value
+                ?: return@forEach
+            val report = when {
+                job.status == RecommendationStatus.Ready ->
+                    (apiClient.getRecommendationReport(job.id) as? ApiResult.Success)?.value ?: existing.report
+                else -> existing.report
+            }
+            store.cacheRecommendation(userId, job, report)
+        }
+        return store.recommendations(userId)
+    }
+
+    private companion object {
+        const val MAX_HISTORY_REFRESH = 50
+    }
 }
 
 internal fun newestSnapshotsPerBroker(snapshots: List<PortfolioSnapshot>): List<PortfolioSnapshot> =
@@ -106,5 +138,19 @@ internal fun newestSnapshotsPerBroker(snapshots: List<PortfolioSnapshot>): List<
         brokerSnapshots.maxByOrNull { it.observedAt }
     }.sortedBy { it.brokerage.ordinal }
 
-internal fun recommendationStatus(job: RecommendationJob, report: RecommendationReport?): RecommendationStatus =
-    if (report?.isStale == true) RecommendationStatus.Stale else job.status
+internal fun recommendationStatus(
+    job: RecommendationJob,
+    report: RecommendationReport?,
+    now: Instant = Instant.now(),
+): RecommendationStatus = when {
+    report != null && (report.isStale || runCatching { Instant.parse(report.validUntil) <= now }.getOrDefault(false)) ->
+        RecommendationStatus.Stale
+    else -> job.status
+}
+
+internal fun needsRecommendationPolling(cached: CachedInvestmentRecommendation): Boolean =
+    cached.job.status in setOf(
+        RecommendationStatus.Queued,
+        RecommendationStatus.Collecting,
+        RecommendationStatus.Analyzing,
+    ) || (cached.job.status == RecommendationStatus.Ready && cached.report == null)

@@ -162,6 +162,7 @@ data class RecommendationReport(
     val id: String,
     val jobId: String,
     val summary: String,
+    val assumptions: Map<String, String>,
     val generatedAt: String,
     val validUntil: String,
     val isStale: Boolean,
@@ -224,6 +225,7 @@ internal fun RecommendationReport.toCacheJson(): String = JSONObject()
     .put("id", id)
     .put("jobId", jobId)
     .put("summary", summary)
+    .put("assumptions", JSONObject(assumptions))
     .put("generatedAt", generatedAt)
     .put("validUntil", validUntil)
     .put("isStale", isStale)
@@ -264,7 +266,7 @@ internal fun parsePortfolioSnapshot(json: JSONObject): PortfolioSnapshot = json.
         freeCash = data.optString("freeCash", "0"),
         monthlyContribution = data.optString("monthlyContribution", "0"),
         totalValue = data.optString("totalValue", "0"),
-        positions = data.optJSONArray("positions").objects().map(::parsePortfolioPosition),
+        positions = data.optJSONArray("positions").objects().map(::parsePortfolioPositionForCache),
         createdAt = data.getString("createdAt"),
     )
 }
@@ -298,6 +300,7 @@ internal fun parseRecommendationReport(json: JSONObject): RecommendationReport =
         id = data.getString("id"),
         jobId = data.getString("jobId"),
         summary = data.getString("summary"),
+        assumptions = data.optJSONObject("assumptions").toStringMap(),
         generatedAt = data.getString("generatedAt"),
         validUntil = data.getString("validUntil"),
         isStale = data.optBoolean("isStale"),
@@ -330,7 +333,7 @@ internal fun parseRecommendationReport(json: JSONObject): RecommendationReport =
     )
 }
 
-private fun parsePortfolioPosition(json: JSONObject): PortfolioPosition = PortfolioPosition(
+internal fun parsePortfolioPositionForCache(json: JSONObject): PortfolioPosition = PortfolioPosition(
     id = json.optNullableInvestmentString("id"),
     instrumentName = json.getString("instrumentName"),
     ticker = json.optNullableInvestmentString("ticker"),
@@ -375,3 +378,7 @@ private fun JSONObject.optNullableInvestmentString(name: String): String? =
     if (!has(name) || isNull(name)) null else optString(name).takeIf { it.isNotBlank() && it != "null" }
 private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).mapNotNull(::optJSONObject)
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+private fun JSONObject?.toStringMap(): Map<String, String> {
+    if (this == null) return emptyMap()
+    return keys().asSequence().associateWith { key -> opt(key)?.toString().orEmpty() }
+}

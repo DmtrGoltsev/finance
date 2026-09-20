@@ -44,4 +44,17 @@ class InvestmentModelsTest {
         assertNull(job.marketDataAsOf)
         assertEquals(RecommendationStatus.Queued, job.status)
     }
+
+    @Test
+    fun recommendationAssumptionsSurviveApiParsingAndCacheRoundTrip() {
+        val report = parseRecommendationReport(
+            JSONObject(
+                """{"data":{"id":"report-1","jobId":"job-1","summary":"Итог","assumptions":{"monthlyContribution":"50000","horizon":"5 years"},"generatedAt":"2026-09-20T10:00:00Z","validUntil":"2026-09-21T10:00:00Z","isStale":false,"disclaimer":"Не ИИР","actions":[],"sources":[]}}""",
+            ),
+        )
+
+        assertEquals("50000", report.assumptions["monthlyContribution"])
+        val cached = parseRecommendationReport(JSONObject(report.toCacheJson()))
+        assertEquals(report.assumptions, cached.assumptions)
+    }
 }

@@ -1,11 +1,12 @@
 package com.finance.mvp.ui.investments
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,7 +61,9 @@ import com.finance.mvp.api.TaxAccountType
 import com.finance.mvp.investments.InvestmentOverview
 import com.finance.mvp.investments.InvestmentRepository
 import com.finance.mvp.investments.PortfolioOcrParser
+import com.finance.mvp.investments.PortfolioDraftState
 import com.finance.mvp.investments.PortfolioScreenshotRecognizer
+import com.finance.mvp.investments.needsRecommendationPolling
 import com.finance.mvp.investments.newestSnapshotsPerBroker
 import com.finance.mvp.investments.recommendationStatus
 import com.finance.mvp.local.CachedInvestmentRecommendation
@@ -71,15 +74,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private data class PortfolioDraft(
-    val importId: String,
-    val brokerage: Brokerage,
-    val imageUris: List<Uri>,
-    val positions: List<PortfolioPosition>,
-    val freeCash: String = "0",
-    val monthlyContribution: String = "0",
-)
 
 @Composable
 fun InvestmentPortfolioPanel(
@@ -100,16 +94,16 @@ fun InvestmentPortfolioPanel(
     var message by rememberSaveable(userId) { mutableStateOf<String?>(null) }
     var brokerDialog by rememberSaveable { mutableStateOf(false) }
     var selectedBroker by rememberSaveable { mutableStateOf(Brokerage.Sinara) }
-    var draft by remember { mutableStateOf<PortfolioDraft?>(null) }
+    var draft by remember { mutableStateOf<PortfolioDraftState?>(null) }
+    var showDraftSheet by rememberSaveable(userId) { mutableStateOf(false) }
     var activeJobId by rememberSaveable(userId) { mutableStateOf<String?>(null) }
 
     suspend fun reload() {
         loading = true
         overview = withContext(Dispatchers.IO) { repository.load(userId) }
+        draft = withContext(Dispatchers.IO) { repository.draft(userId) }
         message = overview.message
-        activeJobId = overview.recommendations.firstOrNull {
-            it.job.status in setOf(RecommendationStatus.Queued, RecommendationStatus.Collecting, RecommendationStatus.Analyzing)
-        }?.job?.id
+        activeJobId = overview.recommendations.firstOrNull(::needsRecommendationPolling)?.job?.id
         loading = false
     }
 
@@ -122,7 +116,9 @@ fun InvestmentPortfolioPanel(
             when (val result = withContext(Dispatchers.IO) { repository.refreshRecommendation(userId, jobId) }) {
                 is ApiResult.Success -> {
                     overview = overview.copy(recommendations = repository.cachedRecommendations(userId))
-                    if (result.value.job.status in setOf(RecommendationStatus.Ready, RecommendationStatus.Failed)) {
+                    if (result.value.job.status == RecommendationStatus.Failed ||
+                        (result.value.job.status == RecommendationStatus.Ready && result.value.report != null)
+                    ) {
                         activeJobId = null
                         break
                     }
@@ -154,12 +150,16 @@ fun InvestmentPortfolioPanel(
                         withContext(Dispatchers.IO) { recognizer.recognize(uris) }
                     }
                     val positions = recognized.getOrNull()?.let { parser.parse(selectedBroker, it) }.orEmpty()
-                    draft = PortfolioDraft(
+                    val persistentDraft = PortfolioDraftState(
                         importId = importResult.value.id,
                         brokerage = selectedBroker,
-                        imageUris = uris,
+                        screenshotCount = uris.size,
                         positions = positions,
+                        createdAtEpochMillis = System.currentTimeMillis(),
                     )
+                    withContext(Dispatchers.IO) { repository.saveDraft(userId, persistentDraft) }
+                    draft = persistentDraft
+                    showDraftSheet = true
                     loading = false
                     message = if (positions.isEmpty()) {
                         "Автораспознавание не нашло позиции. Добавьте их вручную перед подтверждением."
@@ -178,6 +178,8 @@ fun InvestmentPortfolioPanel(
         modifier = modifier,
         onRefresh = { scope.launch { reload() } },
         onAddPortfolio = { brokerDialog = true },
+        hasDraft = draft != null,
+        onResumeDraft = { showDraftSheet = true },
         onUpdatePolicy = { policy ->
             scope.launch {
                 loading = true
@@ -220,14 +222,25 @@ fun InvestmentPortfolioPanel(
         )
     }
 
-    draft?.let { current ->
+    if (showDraftSheet) draft?.let { current ->
         PortfolioDraftSheet(
             draft = current,
             saving = loading,
-            onChange = { draft = it },
+            onChange = { updated ->
+                draft = updated
+                scope.launch(Dispatchers.IO) { repository.saveDraft(userId, updated) }
+            },
             onDismiss = {
-                draft = null
-                message = "Импорт не подтверждён"
+                showDraftSheet = false
+                message = "Черновик сохранён на устройстве. Его можно продолжить позже."
+            },
+            onDiscard = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { repository.deleteDraft(userId, current.importId) }
+                    draft = null
+                    showDraftSheet = false
+                    message = "Локальный черновик удалён"
+                }
             },
             onConfirm = {
                 val error = validateDraft(current)
@@ -249,7 +262,9 @@ fun InvestmentPortfolioPanel(
                         }
                     ) {
                         is ApiResult.Success -> {
-                            draft = null // URI references and OCR-derived draft leave memory here.
+                            withContext(Dispatchers.IO) { repository.deleteDraft(userId, current.importId) }
+                            draft = null
+                            showDraftSheet = false
                             overview = withContext(Dispatchers.IO) { repository.load(userId) }
                             message = "Портфель ${result.value.brokerage.title} сохранён"
                         }
@@ -270,6 +285,8 @@ internal fun InvestmentPortfolioContent(
     modifier: Modifier = Modifier,
     onRefresh: () -> Unit,
     onAddPortfolio: () -> Unit,
+    hasDraft: Boolean,
+    onResumeDraft: () -> Unit,
     onUpdatePolicy: (InvestmentPolicy) -> Unit,
     onStartRecommendation: () -> Unit,
 ) {
@@ -295,6 +312,11 @@ internal fun InvestmentPortfolioContent(
         OutlinedButton(onClick = onAddPortfolio, enabled = !loading && !overview.isOffline, modifier = Modifier.fillMaxWidth()) {
             Text("Загрузить скриншоты портфеля")
         }
+        if (hasDraft) {
+            OutlinedButton(onClick = onResumeDraft, modifier = Modifier.fillMaxWidth().testTag("resume-investment-draft")) {
+                Text("Продолжить сохранённый черновик")
+            }
+        }
         InvestmentPolicyCard(overview.policy, loading, onUpdatePolicy)
         Button(
             onClick = onStartRecommendation,
@@ -315,7 +337,7 @@ private fun CombinedPortfolioCard(snapshots: List<PortfolioSnapshot>) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Объединённый портфель", fontWeight = FontWeight.SemiBold)
             Text("${total.money()} RUB", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("${snapshots.size} брокерских счетов • ${snapshots.sumOf { it.positions.size }} позиций", style = MaterialTheme.typography.bodySmall)
+            Text("${snapshots.size} брокеров • ${snapshots.sumOf { it.positions.size }} позиций", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -419,6 +441,13 @@ private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Скрыть отчёт" else "Открыть отчёт") }
                 if (expanded) RecommendationReportBody(report)
             }
+            if (cached.job.status == RecommendationStatus.Ready && cached.report == null) {
+                Text(
+                    "Статус готов, но отчёт ещё не получен. Приложение повторит загрузку; можно нажать «Обновить» выше.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -426,6 +455,12 @@ private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
 @Composable
 private fun RecommendationReportBody(report: RecommendationReport) {
     Text(report.summary)
+    if (report.assumptions.isNotEmpty()) {
+        Text("Допущения", fontWeight = FontWeight.SemiBold)
+        report.assumptions.toSortedMap().forEach { (key, value) ->
+            Text("$key: $value", style = MaterialTheme.typography.bodySmall)
+        }
+    }
     Text("Данные на ${report.generatedAt.displayTimestamp()} • действуют до ${report.validUntil.displayTimestamp()}", style = MaterialTheme.typography.bodySmall)
     report.actions.sortedBy(RecommendationAction::priority).forEach { action ->
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
@@ -481,10 +516,11 @@ private fun BrokerPickerDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PortfolioDraftSheet(
-    draft: PortfolioDraft,
+    draft: PortfolioDraftState,
     saving: Boolean,
-    onChange: (PortfolioDraft) -> Unit,
+    onChange: (PortfolioDraftState) -> Unit,
     onDismiss: () -> Unit,
+    onDiscard: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -493,7 +529,12 @@ private fun PortfolioDraftSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("Проверьте портфель", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("${draft.brokerage.title} • ${draft.imageUris.size} скриншотов", style = MaterialTheme.typography.bodySmall)
+            Text("${draft.brokerage.title} • ${draft.screenshotCount} скриншотов", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Тикеры и суммы распознаны автоматически. Русские названия обязательно проверьте.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             MoneyField("Свободные деньги", draft.freeCash) { onChange(draft.copy(freeCash = it)) }
             MoneyField("Ежемесячное пополнение", draft.monthlyContribution) { onChange(draft.copy(monthlyContribution = it)) }
             draft.positions.forEachIndexed { index, position ->
@@ -520,8 +561,9 @@ private fun PortfolioDraftSheet(
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Добавить позицию") }
+            OutlinedButton(onClick = onDiscard, enabled = !saving, modifier = Modifier.fillMaxWidth()) { Text("Удалить черновик") }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onDismiss, enabled = !saving, modifier = Modifier.weight(1f)) { Text("Отмена") }
+                OutlinedButton(onClick = onDismiss, enabled = !saving, modifier = Modifier.weight(1f)) { Text("Позже") }
                 Button(onClick = onConfirm, enabled = !saving, modifier = Modifier.weight(1f)) { Text(if (saving) "Сохраняем" else "Подтвердить") }
             }
             Spacer(Modifier.height(24.dp))
@@ -571,14 +613,19 @@ private fun MoneyField(label: String, value: String, onValue: (String) -> Unit) 
     OutlinedTextField(value, { onValue(it.decimalInput()) }, label = { Text(label) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> EnumChips(values: List<T>, selected: T, onSelected: (T) -> Unit, title: (T) -> String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         values.forEach { value -> FilterChip(value == selected, { onSelected(value) }, { Text(title(value)) }) }
     }
 }
 
-private fun validateDraft(draft: PortfolioDraft): String? {
+private fun validateDraft(draft: PortfolioDraftState): String? {
     if (draft.positions.isEmpty()) return "Добавьте хотя бы одну позицию"
     if (draft.freeCash.toDecimalOrNull() == null || draft.monthlyContribution.toDecimalOrNull() == null) return "Проверьте свободные деньги и пополнение"
     draft.positions.forEachIndexed { index, position ->

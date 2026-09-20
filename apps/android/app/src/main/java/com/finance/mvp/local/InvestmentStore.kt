@@ -7,6 +7,9 @@ import com.finance.mvp.api.parsePortfolioSnapshot
 import com.finance.mvp.api.parseRecommendationJob
 import com.finance.mvp.api.parseRecommendationReport
 import com.finance.mvp.api.toCacheJson
+import com.finance.mvp.investments.PortfolioDraftState
+import com.finance.mvp.investments.portfolioDraftFromJson
+import com.finance.mvp.investments.toJson
 import java.time.Instant
 import org.json.JSONObject
 
@@ -19,6 +22,26 @@ class InvestmentStore(
     private val database: FinanceLocalDatabase,
     private val nowEpochMillis: () -> Long = { System.currentTimeMillis() },
 ) {
+    suspend fun draft(userId: String): PortfolioDraftState? =
+        database.localInvestmentDao().latestDraft(userId)?.let { entity ->
+            runCatching { portfolioDraftFromJson(entity.payloadJson) }.getOrNull()
+        }
+
+    suspend fun cacheDraft(userId: String, draft: PortfolioDraftState) {
+        database.localInvestmentDao().upsertDraft(
+            LocalInvestmentDraftEntity(
+                cacheKey = "$userId:${draft.importId}",
+                userId = userId,
+                importId = draft.importId,
+                payloadJson = draft.toJson(),
+                updatedAtEpochMillis = nowEpochMillis(),
+            ),
+        )
+    }
+
+    suspend fun deleteDraft(userId: String, importId: String) {
+        database.localInvestmentDao().deleteDraft(userId, importId)
+    }
     suspend fun snapshots(userId: String): List<PortfolioSnapshot> =
         database.localInvestmentDao().snapshots(userId).mapNotNull { entity ->
             runCatching { parsePortfolioSnapshot(JSONObject(entity.payloadJson)) }.getOrNull()
