@@ -8,7 +8,7 @@ from uuid import UUID
 from app.authz import Actor
 
 from .allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
-from .instrument_resolver import LocalMoexInstrumentResolver
+from .instrument_resolver import MoexInstrumentResolver
 from .models import (
     InvestmentPolicyModel,
     PortfolioImportModel,
@@ -85,12 +85,14 @@ class InvestmentService:
         *,
         now: datetime | None = None,
         issuer_source_hosts: list[str] | None = None,
-        instrument_resolver: LocalMoexInstrumentResolver | None = None,
+        instrument_resolver: MoexInstrumentResolver | None = None,
     ) -> None:
         self.repo = repository
         self._fixed_now = now
         self._issuer_source_hosts = issuer_source_hosts or []
-        self._instrument_resolver = instrument_resolver or LocalMoexInstrumentResolver()
+        self._instrument_resolver = instrument_resolver or MoexInstrumentResolver(
+            repository.session, now=now
+        )
 
     @property
     def now(self) -> datetime:

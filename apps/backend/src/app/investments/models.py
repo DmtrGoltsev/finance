@@ -26,6 +26,15 @@ from app.db.model_types import MONEY_NUMERIC, created_timestamp, updated_timesta
 PERCENT_NUMERIC = Numeric(7, 4)
 
 
+class MoexInstrumentModel(Base):
+    __tablename__ = "moex_instruments"
+    __table_args__ = (Index("ix_moex_instruments_isin", "isin"),)
+
+    secid: Mapped[str] = mapped_column(Text, primary_key=True)
+    isin: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class InvestmentPolicyModel(Base):
     __tablename__ = "investment_policies"
     __table_args__ = (

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .models import MoexInstrumentModel
 
 SECID_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,31}$")
 ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
@@ -13,22 +19,15 @@ class ResolvedInstrument:
     isin: str
 
 
-LOCAL_MOEX_INSTRUMENTS = (
-    ResolvedInstrument(secid="SU26238RMFS4", isin="RU000A1038V6"),
-    ResolvedInstrument(secid="SBMX", isin="RU000A0ZZH92"),
-    ResolvedInstrument(secid="SBER", isin="RU0009029540"),
-    ResolvedInstrument(secid="LQDT", isin="RU000A1013V9"),
-)
+CATALOG_TTL = timedelta(hours=24)
 
 
-class LocalMoexInstrumentResolver:
-    """Resolve only instruments present in the server-managed local MOEX catalog."""
+class MoexInstrumentResolver:
+    """Read verified, fresh identifiers without network access on the request path."""
 
-    def __init__(
-        self, instruments: tuple[ResolvedInstrument, ...] = LOCAL_MOEX_INSTRUMENTS
-    ) -> None:
-        self._by_secid = {item.secid: item for item in instruments}
-        self._by_isin = {item.isin: item for item in instruments}
+    def __init__(self, session: Session, *, now: datetime | None = None) -> None:
+        self.session = session
+        self._now = now
 
     def resolve(self, *, secid: str | None, isin: str | None) -> ResolvedInstrument | None:
         normalized_secid = secid.upper() if secid else None
@@ -37,15 +36,27 @@ class LocalMoexInstrumentResolver:
             return None
         if normalized_isin and not is_valid_isin(normalized_isin):
             return None
-        by_secid = self._by_secid.get(normalized_secid) if normalized_secid else None
-        by_isin = self._by_isin.get(normalized_isin) if normalized_isin else None
-        if normalized_secid and by_secid is None:
+        if not normalized_secid and not normalized_isin:
             return None
-        if normalized_isin and by_isin is None:
+        query = select(MoexInstrumentModel)
+        if normalized_secid:
+            query = query.where(MoexInstrumentModel.secid == normalized_secid)
+        if normalized_isin:
+            query = query.where(MoexInstrumentModel.isin == normalized_isin)
+        rows = self.session.scalars(query.limit(2)).all()
+        if len(rows) != 1:
             return None
-        if by_secid and by_isin and by_secid != by_isin:
+        row = rows[0]
+        fetched_at = (
+            row.fetched_at.replace(tzinfo=UTC)
+            if row.fetched_at.tzinfo is None else row.fetched_at
+        )
+        age = (self._now or datetime.now(UTC)) - fetched_at
+        if not timedelta(0) <= age < CATALOG_TTL:
             return None
-        return by_secid or by_isin
+        if not is_valid_secid(row.secid) or not is_valid_isin(row.isin):
+            return None
+        return ResolvedInstrument(secid=row.secid, isin=row.isin)
 
 
 def is_valid_secid(value: str) -> bool:

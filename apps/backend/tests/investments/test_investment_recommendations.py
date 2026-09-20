@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +22,9 @@ from app.db.base import Base
 from app.db.models import OutboxEvent, User
 from app.investments.allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from app.investments.hmac_auth import HmacVerificationError, sign_callback, verify_callback
+from app.investments.instrument_resolver import ResolvedInstrument
+from app.investments.models import MoexInstrumentModel
+from app.investments.moex_catalog import refresh_catalog
 from app.investments.repository import InvestmentRepository
 from app.investments.router import investment_service_for_request
 from app.investments.schemas import (
@@ -61,6 +65,16 @@ def session() -> Session:
     )
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as value:
+        value.add_all([
+            MoexInstrumentModel(secid=secid, isin=isin, fetched_at=NOW)
+            for secid, isin in (
+                ("SU26238RMFS4", "RU000A1038V6"),
+                ("SBMX", "RU000A0ZZH92"),
+                ("SBER", "RU0009029540"),
+                ("LQDT", "RU000A1013V9"),
+            )
+        ])
+        value.flush()
         yield value
 
 
@@ -150,7 +164,8 @@ def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
         str(backend_root.parents[1] / "db" / "migrations"),
     )
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260919_0021"]
+    assert scripts.get_heads() == ["20260920_0022"]
+    assert scripts.get_revision("20260920_0022").down_revision == "20260919_0021"
     assert scripts.get_revision("20260919_0021").down_revision == "20260919_0020"
     assert scripts.get_revision("20260919_0020").down_revision == "20260822_0019"
 
@@ -403,6 +418,41 @@ def test_unresolved_instrument_never_creates_external_payload(session: Session) 
             ),
         )
     assert list(session.scalars(select(OutboxEvent))) == []
+
+
+@pytest.mark.parametrize("catalog_state", ["fresh", "missing", "stale", "mismatch"])
+def test_gazp_external_package_requires_verified_fresh_catalog(session, catalog_state):
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    owner = actor(session)
+    imported = service.create_import(owner, PortfolioImportCreateRequest(
+        idempotencyKey="gazp-import", brokerage="sinara", screenshotCount=1, observedAt=NOW,
+    ))
+    snapshot = service.confirm_import(owner, imported.id, PortfolioImportConfirmRequest(
+        positions=[PortfolioPositionInput(
+            instrumentName="Private user label", ticker="GAZP", isin="RU0007661625",
+            instrumentType="stock", riskBucket="aggressive", quantity="10", marketValue="1500",
+        )],
+    ))
+    adapter = Mock()
+    adapter.fetch.return_value = ResolvedInstrument(
+        "GAZP", "RU0009029540" if catalog_state == "mismatch" else "RU0007661625",
+    )
+    if catalog_state != "missing":
+        refresh_catalog(
+            session, ["GAZP"], adapter=adapter,
+            now=NOW - timedelta(days=2) if catalog_state == "stale" else NOW,
+        )
+    request = RecommendationJobCreateRequest(idempotencyKey="gazp-job", snapshotIds=[snapshot.id])
+    if catalog_state == "fresh":
+        service.create_job(owner, request)
+        event = session.scalar(select(OutboxEvent))
+        assert "GAZP" in str(event.payload_safe)
+        assert "RU0007661625" in str(event.payload_safe)
+        assert "Private user label" not in str(event.payload_safe)
+    else:
+        with pytest.raises(InvalidRecommendationPayload):
+            service.create_job(owner, request)
+        assert list(session.scalars(select(OutboxEvent))) == []
 
 
 def test_future_portfolio_observation_is_rejected(session: Session) -> None:
