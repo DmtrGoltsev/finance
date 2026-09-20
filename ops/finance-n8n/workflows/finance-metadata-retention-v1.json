@@ -1,0 +1,79 @@
+{
+  "name": "Finance n8n Metadata Retention v1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "cb4243b4-39d8-45ea-a78f-11661b110001",
+      "name": "Каждые шесть часов",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT deleted_success, deleted_error FROM prune_finance_analysis_runs();",
+        "options": {}
+      },
+      "id": "cb4243b4-39d8-45ea-a78f-11661b110002",
+      "name": "Удалить истёкшие метаданные",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        40,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "Finance n8n PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Каждые шесть часов": {
+      "main": [
+        [
+          {
+            "node": "Удалить истёкшие метаданные",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "timezone": "Europe/Moscow"
+  },
+  "versionId": "cb4243b4-39d8-45ea-a78f-11661b119999",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "financeContractVersion": 1
+  },
+  "tags": [
+    {
+      "name": "finance"
+    },
+    {
+      "name": "retention"
+    }
+  ]
+}

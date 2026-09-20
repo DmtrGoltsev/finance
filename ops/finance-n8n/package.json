@@ -1,0 +1,11 @@
+{
+  "name": "finance-investment-n8n-ops",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:workflows": "node scripts/build-workflows.mjs",
+    "validate": "node scripts/validate-workflows.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "smoke": "node scripts/local-smoke.mjs"
+  }
+}
