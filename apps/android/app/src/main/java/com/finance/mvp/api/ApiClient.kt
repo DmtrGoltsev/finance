@@ -117,16 +117,19 @@ interface FinanceApiClient {
         ApiResult.Failure("Инвестиционный профиль не поддерживается этим клиентом")
     suspend fun createPortfolioImport(
         idempotencyKey: String,
-        brokerage: Brokerage,
+        accountProfile: BrokerageAccountProfile,
         screenshotCount: Int,
         observedAt: String,
     ): ApiResult<PortfolioImport> = ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
     suspend fun confirmPortfolioImport(
         importId: String,
+        accountProfileId: String,
         freeCash: String,
         monthlyContribution: String,
         positions: List<PortfolioPosition>,
     ): ApiResult<PortfolioSnapshot> = ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
+    suspend fun discardPortfolioImport(importId: String): ApiResult<Unit> =
+        ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
     suspend fun listPortfolioSnapshots(): ApiResult<List<PortfolioSnapshot>> =
         ApiResult.Failure("Портфели не поддерживаются этим клиентом")
     suspend fun getPortfolioSnapshot(snapshotId: String): ApiResult<PortfolioSnapshot> =
@@ -135,6 +138,8 @@ interface FinanceApiClient {
         idempotencyKey: String,
         snapshotIds: List<String>,
     ): ApiResult<RecommendationJob> = ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
+    suspend fun listRecommendationJobs(limit: Int = 20, cursor: String? = null): ApiResult<RecommendationHistoryPage> =
+        ApiResult.Failure("История рекомендаций не поддерживается этим клиентом")
     suspend fun getRecommendationJob(jobId: String): ApiResult<RecommendationJob> =
         ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
     suspend fun getRecommendationReport(jobId: String): ApiResult<RecommendationReport> =
@@ -1153,7 +1158,7 @@ class LiveFinanceApiClient(
 
     override suspend fun createPortfolioImport(
         idempotencyKey: String,
-        brokerage: Brokerage,
+        accountProfile: BrokerageAccountProfile,
         screenshotCount: Int,
         observedAt: String,
     ): ApiResult<PortfolioImport> = safeCall {
@@ -1163,7 +1168,10 @@ class LiveFinanceApiClient(
                 method = "POST",
                 body = JSONObject()
                     .put("idempotencyKey", idempotencyKey)
-                    .put("brokerage", brokerage.apiValue)
+                    .put("accountProfileId", accountProfile.id)
+                    .put("brokerage", accountProfile.brokerage.apiValue)
+                    .put("userLabel", accountProfile.userLabel)
+                    .put("accountType", accountProfile.accountType.apiValue)
                     .put("screenshotCount", screenshotCount)
                     .put("observedAt", observedAt)
                     .toString(),
@@ -1174,6 +1182,7 @@ class LiveFinanceApiClient(
 
     override suspend fun confirmPortfolioImport(
         importId: String,
+        accountProfileId: String,
         freeCash: String,
         monthlyContribution: String,
         positions: List<PortfolioPosition>,
@@ -1183,6 +1192,7 @@ class LiveFinanceApiClient(
                 path = "/api/v1/investments/portfolio-imports/${importId.urlEncodePath()}/confirm",
                 method = "POST",
                 body = JSONObject()
+                    .put("accountProfileId", accountProfileId)
                     .put("freeCash", freeCash)
                     .put("monthlyContribution", monthlyContribution)
                     .put("positions", JSONArray().apply { positions.forEach { put(it.toInputJson()) } })
@@ -1190,6 +1200,15 @@ class LiveFinanceApiClient(
                 expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
             ),
         )
+    }
+
+    override suspend fun discardPortfolioImport(importId: String): ApiResult<Unit> = safeCall {
+        request(
+            path = "/api/v1/investments/portfolio-imports/${importId.urlEncodePath()}",
+            method = "DELETE",
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
     }
 
     override suspend fun listPortfolioSnapshots(): ApiResult<List<PortfolioSnapshot>> = safeCall {
@@ -1223,6 +1242,22 @@ class LiveFinanceApiClient(
                     .put("snapshotIds", JSONArray(snapshotIds))
                     .toString(),
                 expectedCodes = setOf(HttpURLConnection.HTTP_ACCEPTED),
+            ),
+        )
+    }
+
+    override suspend fun listRecommendationJobs(
+        limit: Int,
+        cursor: String?,
+    ): ApiResult<RecommendationHistoryPage> = safeCall {
+        parseRecommendationHistoryPage(
+            request(
+                path = "/api/v1/investments/recommendation-jobs",
+                method = "GET",
+                query = buildMap {
+                    put("limit", limit.coerceIn(1, 100).toString())
+                    cursor?.takeIf(String::isNotBlank)?.let { put("cursor", it) }
+                },
             ),
         )
     }

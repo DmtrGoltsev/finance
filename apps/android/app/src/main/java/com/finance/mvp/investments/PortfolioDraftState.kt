@@ -1,9 +1,12 @@
 package com.finance.mvp.investments
 
 import com.finance.mvp.api.Brokerage
+import com.finance.mvp.api.BrokerageAccountProfile
 import com.finance.mvp.api.PortfolioPosition
+import com.finance.mvp.api.parseBrokerageAccountProfile
 import com.finance.mvp.api.parsePortfolioPositionForCache
 import com.finance.mvp.api.toInputJson
+import com.finance.mvp.api.toJson as toApiJson
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -15,6 +18,7 @@ data class PortfolioDraftState(
     val freeCash: String = "0",
     val monthlyContribution: String = "0",
     val createdAtEpochMillis: Long,
+    val accountProfile: BrokerageAccountProfile? = null,
 )
 
 internal fun PortfolioDraftState.toJson(): String = JSONObject()
@@ -25,6 +29,7 @@ internal fun PortfolioDraftState.toJson(): String = JSONObject()
     .put("freeCash", freeCash)
     .put("monthlyContribution", monthlyContribution)
     .put("createdAtEpochMillis", createdAtEpochMillis)
+    .put("accountProfile", accountProfile?.toApiJson() ?: JSONObject.NULL)
     .toString()
 
 internal fun portfolioDraftFromJson(payload: String): PortfolioDraftState = JSONObject(payload).let { json ->
@@ -38,5 +43,6 @@ internal fun portfolioDraftFromJson(payload: String): PortfolioDraftState = JSON
         freeCash = json.optString("freeCash", "0"),
         monthlyContribution = json.optString("monthlyContribution", "0"),
         createdAtEpochMillis = json.getLong("createdAtEpochMillis"),
+        accountProfile = json.optJSONObject("accountProfile")?.let(::parseBrokerageAccountProfile),
     )
 }

@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LocalInvestmentRecommendationEntity::class,
         LocalInvestmentDraftEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class FinanceLocalDatabase : RoomDatabase() {
@@ -49,7 +49,7 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                     context.applicationContext,
                     FinanceLocalDatabase::class.java,
                     DATABASE_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
             }
         }
 
@@ -302,6 +302,14 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_local_investment_drafts_userId_importId ON local_investment_drafts(userId, importId)")
+            }
+        }
+
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_investment_recommendations ADD COLUMN accountProfilesJson TEXT")
+                db.execSQL("ALTER TABLE local_investment_recommendations ADD COLUMN reportSummary TEXT")
+                db.execSQL("ALTER TABLE local_investment_recommendations ADD COLUMN reportPath TEXT")
             }
         }
     }

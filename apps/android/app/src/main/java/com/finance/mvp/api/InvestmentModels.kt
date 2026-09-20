@@ -14,6 +14,13 @@ enum class Brokerage(val apiValue: String, val title: String) {
     }
 }
 
+data class BrokerageAccountProfile(
+    val id: String,
+    val brokerage: Brokerage,
+    val userLabel: String,
+    val accountType: TaxAccountType,
+)
+
 enum class InvestmentInstrumentType(val apiValue: String, val title: String) {
     Stock("stock", "Акция"),
     Bond("bond", "Облигация"),
@@ -64,6 +71,7 @@ data class PortfolioImport(
     val observedAt: String,
     val status: String,
     val createdAt: String,
+    val accountProfile: BrokerageAccountProfile? = null,
 )
 
 data class PortfolioPosition(
@@ -97,6 +105,7 @@ data class PortfolioSnapshot(
     val totalValue: String,
     val positions: List<PortfolioPosition>,
     val createdAt: String,
+    val accountProfile: BrokerageAccountProfile? = null,
 )
 
 enum class RecommendationStatus(val apiValue: String, val title: String) {
@@ -171,6 +180,20 @@ data class RecommendationReport(
     val sources: List<RecommendationSource>,
 )
 
+data class RecommendationHistoryItem(
+    val job: RecommendationJob,
+    val accountProfiles: List<BrokerageAccountProfile>,
+    val reportSummary: String?,
+    val reportPath: String?,
+)
+
+data class RecommendationHistoryPage(
+    val items: List<RecommendationHistoryItem>,
+    val limit: Int,
+    val nextCursor: String?,
+    val hasMore: Boolean,
+)
+
 internal fun InvestmentPolicy.toPutJson(): JSONObject = JSONObject()
     .put("conservativePercent", conservativePercent)
     .put("moderatePercent", moderatePercent)
@@ -207,6 +230,7 @@ internal fun PortfolioSnapshot.toCacheJson(): String = JSONObject()
     .put("totalValue", totalValue)
     .put("positions", JSONArray().apply { positions.forEach { put(it.toInputJson().put("id", it.id)) } })
     .put("createdAt", createdAt)
+    .putNullable("accountProfile", accountProfile?.toJson())
     .toString()
 
 internal fun RecommendationJob.toCacheJson(): String = JSONObject()
@@ -246,21 +270,24 @@ internal fun parseInvestmentPolicy(json: JSONObject): InvestmentPolicy = json.da
 }
 
 internal fun parsePortfolioImport(json: JSONObject): PortfolioImport = json.dataObjectForInvestment().let {
+    val profile = it.optJSONObject("accountProfile")?.let(::parseBrokerageAccountProfile)
     PortfolioImport(
         id = it.getString("id"),
-        brokerage = Brokerage.fromApi(it.getString("brokerage")),
+        brokerage = profile?.brokerage ?: Brokerage.fromApi(it.optString("brokerage", Brokerage.Sinara.apiValue)),
         screenshotCount = it.getInt("screenshotCount"),
         observedAt = it.getString("observedAt"),
         status = it.getString("status"),
         createdAt = it.getString("createdAt"),
+        accountProfile = profile,
     )
 }
 
 internal fun parsePortfolioSnapshot(json: JSONObject): PortfolioSnapshot = json.dataObjectForInvestment().let { data ->
+    val profile = data.optJSONObject("accountProfile")?.let(::parseBrokerageAccountProfile)
     PortfolioSnapshot(
         id = data.getString("id"),
         importId = data.getString("importId"),
-        brokerage = Brokerage.fromApi(data.getString("brokerage")),
+        brokerage = profile?.brokerage ?: Brokerage.fromApi(data.optString("brokerage", Brokerage.Sinara.apiValue)),
         observedAt = data.getString("observedAt"),
         currency = data.optString("currency", "RUB"),
         freeCash = data.optString("freeCash", "0"),
@@ -268,8 +295,34 @@ internal fun parsePortfolioSnapshot(json: JSONObject): PortfolioSnapshot = json.
         totalValue = data.optString("totalValue", "0"),
         positions = data.optJSONArray("positions").objects().map(::parsePortfolioPositionForCache),
         createdAt = data.getString("createdAt"),
+        accountProfile = profile,
     )
 }
+
+internal fun parseRecommendationHistoryPage(json: JSONObject): RecommendationHistoryPage {
+    val items = json.optJSONArray("items") ?: json.optJSONObject("data")?.optJSONArray("items") ?: JSONArray()
+    val page = json.optJSONObject("page") ?: json.optJSONObject("data")?.optJSONObject("page") ?: JSONObject()
+    return RecommendationHistoryPage(
+        items = items.objects().map { item ->
+            RecommendationHistoryItem(
+                job = parseRecommendationJob(item.getJSONObject("job")),
+                accountProfiles = item.optJSONArray("accountProfiles").objects().map(::parseBrokerageAccountProfile),
+                reportSummary = item.optNullableInvestmentString("reportSummary"),
+                reportPath = item.optNullableInvestmentString("reportPath"),
+            )
+        },
+        limit = page.optInt("limit", 20),
+        nextCursor = page.optNullableInvestmentString("nextCursor"),
+        hasMore = page.optBoolean("hasMore"),
+    )
+}
+
+internal fun parseBrokerageAccountProfile(json: JSONObject): BrokerageAccountProfile = BrokerageAccountProfile(
+    id = json.getString("id"),
+    brokerage = Brokerage.fromApi(json.getString("brokerage")),
+    userLabel = json.getString("userLabel"),
+    accountType = TaxAccountType.fromApi(json.getString("accountType")),
+)
 
 internal fun parseRecommendationJob(json: JSONObject): RecommendationJob = json.dataObjectForInvestment().let { data ->
     RecommendationJob(
@@ -371,6 +424,12 @@ private fun RecommendationAction.toJson() = JSONObject()
 private fun RecommendationSource.toJson() = JSONObject()
     .put("title", title).put("url", url).put("publisher", publisher)
     .putNullable("publishedAt", publishedAt).put("fetchedAt", fetchedAt).put("trustTier", trustTier)
+
+internal fun BrokerageAccountProfile.toJson() = JSONObject()
+    .put("id", id)
+    .put("brokerage", brokerage.apiValue)
+    .put("userLabel", userLabel)
+    .put("accountType", accountType.apiValue)
 
 private fun JSONObject.putNullable(name: String, value: Any?): JSONObject = put(name, value ?: JSONObject.NULL)
 private fun JSONObject.dataObjectForInvestment(): JSONObject = optJSONObject("data") ?: this

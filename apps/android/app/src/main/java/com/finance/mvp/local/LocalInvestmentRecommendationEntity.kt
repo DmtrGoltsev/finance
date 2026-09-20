@@ -18,5 +18,8 @@ data class LocalInvestmentRecommendationEntity(
     val status: String,
     val jobJson: String,
     val reportJson: String?,
+    val accountProfilesJson: String? = null,
+    val reportSummary: String? = null,
+    val reportPath: String? = null,
     val updatedAtEpochMillis: Long,
 )

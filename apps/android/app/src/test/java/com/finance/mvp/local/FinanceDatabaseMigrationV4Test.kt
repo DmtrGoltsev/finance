@@ -74,4 +74,35 @@ class FinanceDatabaseMigrationV4Test {
         }
         helper.close()
     }
+
+    @Test
+    fun migration5To6PreservesRecommendationsAndAddsHistoryMetadata() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(null)
+                .callback(object : SupportSQLiteOpenHelper.Callback(5) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        FinanceLocalDatabase.MIGRATION_3_4.migrate(db)
+                        FinanceLocalDatabase.MIGRATION_4_5.migrate(db)
+                        db.execSQL("INSERT INTO local_investment_recommendations VALUES ('u:j','u','j','ready','{}',NULL,3)")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                })
+                .build(),
+        )
+        val db = helper.writableDatabase
+
+        FinanceLocalDatabase.MIGRATION_5_6.migrate(db)
+
+        db.execSQL(
+            "UPDATE local_investment_recommendations SET accountProfilesJson='[]', reportSummary='summary', reportPath='/report' WHERE jobId='j'",
+        )
+        db.query("SELECT reportSummary, reportPath FROM local_investment_recommendations WHERE jobId='j'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("summary", cursor.getString(0))
+            assertEquals("/report", cursor.getString(1))
+        }
+        helper.close()
+    }
 }

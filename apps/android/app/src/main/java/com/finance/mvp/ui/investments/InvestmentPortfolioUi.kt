@@ -64,7 +64,7 @@ import com.finance.mvp.investments.PortfolioOcrParser
 import com.finance.mvp.investments.PortfolioDraftState
 import com.finance.mvp.investments.PortfolioScreenshotRecognizer
 import com.finance.mvp.investments.needsRecommendationPolling
-import com.finance.mvp.investments.newestSnapshotsPerBroker
+import com.finance.mvp.investments.newestSnapshotsPerAccount
 import com.finance.mvp.investments.recommendationStatus
 import com.finance.mvp.local.CachedInvestmentRecommendation
 import com.finance.mvp.local.FinanceLocalDatabase
@@ -94,6 +94,8 @@ fun InvestmentPortfolioPanel(
     var message by rememberSaveable(userId) { mutableStateOf<String?>(null) }
     var brokerDialog by rememberSaveable { mutableStateOf(false) }
     var selectedBroker by rememberSaveable { mutableStateOf(Brokerage.Sinara) }
+    var selectedAccountType by rememberSaveable { mutableStateOf(TaxAccountType.Brokerage) }
+    var accountLabel by rememberSaveable { mutableStateOf("") }
     var draft by remember { mutableStateOf<PortfolioDraftState?>(null) }
     var showDraftSheet by rememberSaveable(userId) { mutableStateOf(false) }
     var activeJobId by rememberSaveable(userId) { mutableStateOf<String?>(null) }
@@ -138,7 +140,7 @@ fun InvestmentPortfolioPanel(
             message = "Создаём импорт и распознаём ${uris.size} скриншотов"
             when (
                 val importResult = withContext(Dispatchers.IO) {
-                    repository.beginImport(selectedBroker, uris.size)
+                    repository.beginImport(selectedBroker, accountLabel, selectedAccountType, uris.size)
                 }
             ) {
                 is ApiResult.Failure -> {
@@ -156,6 +158,7 @@ fun InvestmentPortfolioPanel(
                         screenshotCount = uris.size,
                         positions = positions,
                         createdAtEpochMillis = System.currentTimeMillis(),
+                        accountProfile = importResult.value.accountProfile,
                     )
                     withContext(Dispatchers.IO) { repository.saveDraft(userId, persistentDraft) }
                     draft = persistentDraft
@@ -177,7 +180,11 @@ fun InvestmentPortfolioPanel(
         message = message,
         modifier = modifier,
         onRefresh = { scope.launch { reload() } },
-        onAddPortfolio = { brokerDialog = true },
+        onAddPortfolio = {
+            accountLabel = ""
+            selectedAccountType = TaxAccountType.Brokerage
+            brokerDialog = true
+        },
         hasDraft = draft != null,
         onResumeDraft = { showDraftSheet = true },
         onUpdatePolicy = { policy ->
@@ -194,7 +201,7 @@ fun InvestmentPortfolioPanel(
             }
         },
         onStartRecommendation = {
-            val snapshotIds = newestSnapshotsPerBroker(overview.snapshots).map { it.id }
+            val snapshotIds = newestSnapshotsPerAccount(overview.snapshots).map { it.id }
             scope.launch {
                 loading = true
                 when (val result = withContext(Dispatchers.IO) { repository.startRecommendation(userId, snapshotIds) }) {
@@ -214,6 +221,10 @@ fun InvestmentPortfolioPanel(
         BrokerPickerDialog(
             selected = selectedBroker,
             onSelected = { selectedBroker = it },
+            accountLabel = accountLabel,
+            onAccountLabelChanged = { accountLabel = it },
+            accountType = selectedAccountType,
+            onAccountTypeChanged = { selectedAccountType = it },
             onDismiss = { brokerDialog = false },
             onContinue = {
                 brokerDialog = false
@@ -236,10 +247,16 @@ fun InvestmentPortfolioPanel(
             },
             onDiscard = {
                 scope.launch {
-                    withContext(Dispatchers.IO) { repository.deleteDraft(userId, current.importId) }
-                    draft = null
-                    showDraftSheet = false
-                    message = "Локальный черновик удалён"
+                    loading = true
+                    when (val result = withContext(Dispatchers.IO) { repository.discardDraft(userId, current.importId) }) {
+                        is ApiResult.Success -> {
+                            draft = null
+                            showDraftSheet = false
+                            message = "Черновик импорта удалён"
+                        }
+                        is ApiResult.Failure -> message = "Не удалось удалить черновик: ${result.message}"
+                    }
+                    loading = false
                 }
             },
             onConfirm = {
@@ -255,6 +272,7 @@ fun InvestmentPortfolioPanel(
                             repository.confirmImport(
                                 userId = userId,
                                 importId = current.importId,
+                                accountProfileId = current.accountProfile?.id.orEmpty(),
                                 freeCash = current.freeCash.normalizedMoney(),
                                 monthlyContribution = current.monthlyContribution.normalizedMoney(),
                                 positions = current.positions,
@@ -290,7 +308,7 @@ internal fun InvestmentPortfolioContent(
     onUpdatePolicy: (InvestmentPolicy) -> Unit,
     onStartRecommendation: () -> Unit,
 ) {
-    val latest = newestSnapshotsPerBroker(overview.snapshots)
+    val latest = newestSnapshotsPerAccount(overview.snapshots)
     Column(
         modifier = modifier.fillMaxWidth().testTag("investment-portfolio-panel"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -337,7 +355,7 @@ private fun CombinedPortfolioCard(snapshots: List<PortfolioSnapshot>) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Объединённый портфель", fontWeight = FontWeight.SemiBold)
             Text("${total.money()} RUB", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("${snapshots.size} брокеров • ${snapshots.sumOf { it.positions.size }} позиций", style = MaterialTheme.typography.bodySmall)
+            Text("${snapshots.size.accountCountTitle()} • ${snapshots.sumOf { it.positions.size }} позиций", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -349,7 +367,10 @@ private fun PortfolioSnapshotCard(snapshot: PortfolioSnapshot) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text(snapshot.brokerage.title, fontWeight = FontWeight.SemiBold)
+                    Text(snapshot.accountProfile?.userLabel ?: snapshot.brokerage.title, fontWeight = FontWeight.SemiBold)
+                    snapshot.accountProfile?.let { profile ->
+                        Text("${profile.brokerage.title} • ${profile.accountType.title}", style = MaterialTheme.typography.bodySmall)
+                    }
                     Text("${snapshot.positions.size} позиций • ${snapshot.observedAt.displayTimestamp()}", style = MaterialTheme.typography.bodySmall)
                 }
                 Text("${snapshot.totalValue.toDecimal().money()} ${snapshot.currency}", fontWeight = FontWeight.SemiBold)
@@ -434,6 +455,12 @@ private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
                 Text(status.title, color = statusColor(status), fontWeight = FontWeight.SemiBold)
             }
             Text("Создано: ${cached.job.createdAt.displayTimestamp()}", style = MaterialTheme.typography.bodySmall)
+            if (cached.accountProfiles.isNotEmpty()) {
+                Text(
+                    cached.accountProfiles.joinToString(" • ") { "${it.brokerage.title}: ${it.userLabel}" },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             cached.job.cashFirstAdjustments.forEach { adjustment ->
                 Text("${adjustment.riskBucket.title}: ${adjustment.currentPercent}% → ${adjustment.projectedPercent}% (цель ${adjustment.targetPercent}%)", style = MaterialTheme.typography.bodySmall)
             }
@@ -441,7 +468,11 @@ private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Скрыть отчёт" else "Открыть отчёт") }
                 if (expanded) RecommendationReportBody(report)
             }
-            if (cached.job.status == RecommendationStatus.Ready && cached.report == null) {
+            if (cached.report == null && cached.reportSummary != null) {
+                Text("Краткий итог", fontWeight = FontWeight.SemiBold)
+                Text(cached.reportSummary, style = MaterialTheme.typography.bodySmall)
+            }
+            if (cached.job.status == RecommendationStatus.Ready && cached.report == null && cached.reportSummary == null) {
                 Text(
                     "Статус готов, но отчёт ещё не получен. Приложение повторит загрузку; можно нажать «Обновить» выше.",
                     style = MaterialTheme.typography.bodySmall,
@@ -491,7 +522,8 @@ private fun SnapshotHistoryCard(snapshots: List<PortfolioSnapshot>) {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Скрыть" else "Показать") }
             }
             if (expanded) snapshots.sortedByDescending { it.observedAt }.forEach {
-                Text("${it.brokerage.title} • ${it.observedAt.displayTimestamp()} • ${it.totalValue.toDecimal().money()} RUB", style = MaterialTheme.typography.bodySmall)
+                val accountTitle = it.accountProfile?.userLabel ?: it.brokerage.title
+                Text("$accountTitle • ${it.observedAt.displayTimestamp()} • ${it.totalValue.toDecimal().money()} RUB", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -501,14 +533,40 @@ private fun SnapshotHistoryCard(snapshots: List<PortfolioSnapshot>) {
 private fun BrokerPickerDialog(
     selected: Brokerage,
     onSelected: (Brokerage) -> Unit,
+    accountLabel: String,
+    onAccountLabelChanged: (String) -> Unit,
+    accountType: TaxAccountType,
+    onAccountTypeChanged: (TaxAccountType) -> Unit,
     onDismiss: () -> Unit,
     onContinue: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Выберите брокера") },
-        text = { Column { Brokerage.entries.forEach { broker -> FilterChip(selected == broker, { onSelected(broker) }, { Text(broker.title) }) } } },
-        confirmButton = { TextButton(onClick = onContinue) { Text("Выбрать скриншоты") } },
+        title = { Text("Брокерский счёт") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Брокер", fontWeight = FontWeight.SemiBold)
+                Brokerage.entries.forEach { broker ->
+                    FilterChip(selected == broker, { onSelected(broker) }, { Text(broker.title) })
+                }
+                OutlinedTextField(
+                    value = accountLabel,
+                    onValueChange = { onAccountLabelChanged(it.take(60)) },
+                    label = { Text("Название счёта") },
+                    placeholder = { Text("Например, Основной ИИС") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("Тип счёта", fontWeight = FontWeight.SemiBold)
+                EnumChips(TaxAccountType.entries, accountType, onAccountTypeChanged) { it.title }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onContinue,
+                enabled = accountLabel.trim().matches(Regex("^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$")),
+            ) { Text("Выбрать скриншоты") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
 }
@@ -626,6 +684,7 @@ private fun <T> EnumChips(values: List<T>, selected: T, onSelected: (T) -> Unit,
 }
 
 private fun validateDraft(draft: PortfolioDraftState): String? {
+    if (draft.accountProfile == null) return "Старый черновик не связан с профилем счёта. Удалите его и загрузите скриншоты заново."
     if (draft.positions.isEmpty()) return "Добавьте хотя бы одну позицию"
     if (draft.freeCash.toDecimalOrNull() == null || draft.monthlyContribution.toDecimalOrNull() == null) return "Проверьте свободные деньги и пополнение"
     draft.positions.forEachIndexed { index, position ->
@@ -648,4 +707,10 @@ private fun statusColor(status: RecommendationStatus): Color = when (status) {
     RecommendationStatus.Ready -> Color(0xFF2E7D32)
     RecommendationStatus.Stale -> Color(0xFF8D6E00)
     else -> Color(0xFF1565C0)
+}
+
+private fun Int.accountCountTitle(): String = when {
+    this % 10 == 1 && this % 100 != 11 -> "$this счёт"
+    this % 10 in 2..4 && this % 100 !in 12..14 -> "$this счёта"
+    else -> "$this счетов"
 }
