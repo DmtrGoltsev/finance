@@ -129,6 +129,7 @@ import com.finance.mvp.sync.SyncIssueSummary
 import com.finance.mvp.sync.SyncManager
 import com.finance.mvp.sync.TransactionSyncWorker
 import com.finance.mvp.ui.theme.FinanceTheme
+import com.finance.mvp.ui.investments.InvestmentPortfolioPanel
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
@@ -172,20 +173,29 @@ fun FinanceApp(
     syncManager: SyncManager? = null,
     initialOpenPlanning: Boolean = false,
     openPlanningRequestKey: Int = if (initialOpenPlanning) 1 else 0,
+    initialOpenInvestmentRecommendations: Boolean = false,
+    openInvestmentRecommendationsRequestKey: Int = if (initialOpenInvestmentRecommendations) 1 else 0,
 ) {
     val context = LocalContext.current
+    val localDatabase = remember(context) { FinanceLocalDatabase.getInstance(context) }
     val categoryAggregateMappingStore = remember(context) { AndroidCategoryAggregateMappingStore(context) }
     val planningRepository = remember(context, apiClient, syncManager) {
         syncManager?.let { manager ->
             PlanningRepository(
-                database = FinanceLocalDatabase.getInstance(context),
+                database = localDatabase,
                 apiClient = apiClient,
                 syncManager = manager,
             )
         }
     }
     var selectedSection by rememberSaveable {
-        mutableStateOf(if (initialOpenPlanning) AppSection.Analytics else AppSection.Home)
+        mutableStateOf(
+            when {
+                initialOpenInvestmentRecommendations -> AppSection.Assets
+                initialOpenPlanning -> AppSection.Analytics
+                else -> AppSection.Home
+            },
+        )
     }
     val selectedMode = FinanceMode.Personal
     var selectedAnalyticsSubsection by rememberSaveable {
@@ -221,6 +231,10 @@ fun FinanceApp(
             selectedSection = AppSection.Analytics
             selectedAnalyticsSubsection = AnalyticsSubsection.Planning
         }
+    }
+
+    LaunchedEffect(openInvestmentRecommendationsRequestKey) {
+        if (openInvestmentRecommendationsRequestKey > 0) selectedSection = AppSection.Assets
     }
 
     fun processScreenshotCapture(uri: Uri) {
@@ -1185,6 +1199,9 @@ fun FinanceApp(
                     },
                 )
                 AppSection.Assets -> assetsContent(
+                    apiClient = apiClient,
+                    database = localDatabase,
+                    investmentUserId = uiState.session?.syncUserIdOrNull(),
                     dashboard = dashboard,
                     selectedMode = selectedMode,
                     onModeSelected = {},
@@ -2250,6 +2267,9 @@ private fun CaptureDraftRow(
 }
 
 private fun LazyListScope.assetsContent(
+    apiClient: FinanceApiClient,
+    database: FinanceLocalDatabase,
+    investmentUserId: String?,
     dashboard: FinanceDashboard?,
     selectedMode: FinanceMode,
     onModeSelected: (FinanceMode) -> Unit,
@@ -2274,6 +2294,15 @@ private fun LazyListScope.assetsContent(
         summary.count > 0 || summary.kind.apiValue !in representedAssetTypes
     }
     item { Text("Активы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+    if (!investmentUserId.isNullOrBlank()) {
+        item {
+            InvestmentPortfolioPanel(
+                apiClient = apiClient,
+                database = database,
+                userId = investmentUserId,
+            )
+        }
+    }
     item {
         OutlinedButton(onClick = onCreateAssetCategory, modifier = Modifier.fillMaxWidth()) {
             Text("Добавить категорию активов")

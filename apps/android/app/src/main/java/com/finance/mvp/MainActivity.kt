@@ -25,6 +25,7 @@ import com.finance.mvp.ui.theme.FinanceTheme
 
 class MainActivity : ComponentActivity() {
     private var openPlanningRequestKey by mutableStateOf(0)
+    private var openInvestmentRecommendationsRequestKey by mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
         if (shouldOpenPlanning(intent)) {
             openPlanningRequestKey += 1
         }
+        if (shouldOpenInvestmentRecommendations(intent)) {
+            openInvestmentRecommendationsRequestKey += 1
+        }
 
         setContent {
             FinanceTheme {
@@ -53,6 +57,8 @@ class MainActivity : ComponentActivity() {
                         syncManager = syncManager,
                         initialOpenPlanning = openPlanningRequestKey > 0,
                         openPlanningRequestKey = openPlanningRequestKey,
+                        initialOpenInvestmentRecommendations = openInvestmentRecommendationsRequestKey > 0,
+                        openInvestmentRecommendationsRequestKey = openInvestmentRecommendationsRequestKey,
                     )
                 }
             }
@@ -65,6 +71,9 @@ class MainActivity : ComponentActivity() {
         if (shouldOpenPlanning(intent)) {
             openPlanningRequestKey += 1
         }
+        if (shouldOpenInvestmentRecommendations(intent)) {
+            openInvestmentRecommendationsRequestKey += 1
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -76,6 +85,11 @@ class MainActivity : ComponentActivity() {
     private fun shouldOpenPlanning(intent: android.content.Intent?): Boolean =
         intent?.getBooleanExtra("openPlanning", false) == true ||
             intent?.getStringExtra("openSection") == "analytics"
+
+    private fun shouldOpenInvestmentRecommendations(intent: android.content.Intent?): Boolean =
+        intent?.getBooleanExtra("openInvestmentRecommendations", false) == true ||
+            intent?.getStringExtra("openSection") == "investment_recommendations" ||
+            intent?.data?.let { it.scheme == "finance" && it.host == "investments" && it.path == "/recommendations" } == true
 
     private companion object {
         const val POST_NOTIFICATIONS_REQUEST_CODE = 1301

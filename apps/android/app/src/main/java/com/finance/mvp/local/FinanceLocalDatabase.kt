@@ -18,8 +18,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LocalPlanningAllocationEntity::class,
         PendingMutationEntity::class,
         SyncStateEntity::class,
+        LocalInvestmentSnapshotEntity::class,
+        LocalInvestmentRecommendationEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class FinanceLocalDatabase : RoomDatabase() {
@@ -32,6 +34,7 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
     abstract fun localPlanningAllocationDao(): LocalPlanningAllocationDao
     abstract fun pendingMutationDao(): PendingMutationDao
     abstract fun syncStateDao(): SyncStateDao
+    abstract fun localInvestmentDao(): LocalInvestmentDao
 
     companion object {
         private const val DATABASE_NAME = "finance_local.db"
@@ -45,7 +48,7 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                     context.applicationContext,
                     FinanceLocalDatabase::class.java,
                     DATABASE_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
             }
         }
 
@@ -246,6 +249,41 @@ abstract class FinanceLocalDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_local_planning_allocations_userId_planServerId ON local_planning_allocations(userId, planServerId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_local_planning_allocations_userId_syncStatus ON local_planning_allocations(userId, syncStatus)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_local_planning_allocations_userId_targetType_targetId ON local_planning_allocations(userId, targetType, targetId)")
+            }
+        }
+
+        internal val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS local_investment_snapshots (
+                        cacheKey TEXT NOT NULL PRIMARY KEY,
+                        userId TEXT NOT NULL,
+                        serverId TEXT NOT NULL,
+                        brokerage TEXT NOT NULL,
+                        observedAtEpochMillis INTEGER NOT NULL,
+                        payloadJson TEXT NOT NULL,
+                        cachedAtEpochMillis INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_local_investment_snapshots_userId_serverId ON local_investment_snapshots(userId, serverId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_investment_snapshots_userId_brokerage_observedAtEpochMillis ON local_investment_snapshots(userId, brokerage, observedAtEpochMillis)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS local_investment_recommendations (
+                        cacheKey TEXT NOT NULL PRIMARY KEY,
+                        userId TEXT NOT NULL,
+                        jobId TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        jobJson TEXT NOT NULL,
+                        reportJson TEXT,
+                        updatedAtEpochMillis INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_local_investment_recommendations_userId_jobId ON local_investment_recommendations(userId, jobId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_investment_recommendations_userId_updatedAtEpochMillis ON local_investment_recommendations(userId, updatedAtEpochMillis)")
             }
         }
     }
