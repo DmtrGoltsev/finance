@@ -1,0 +1,23 @@
+# Dockerfile-specific policy applies to the repository-root build context.
+**
+!apps/
+!apps/backend/
+!apps/backend/pyproject.toml
+!apps/backend/README.md
+!apps/backend/src/
+!apps/backend/src/**/
+!apps/backend/src/**/*.py
+**/.env
+**/.env.*
+**/*credential*
+**/*service-account*
+**/*service_account*
+**/google-services.json
+**/*.pem
+**/*.key
+**/.git/**
+**/.venv/**
+**/venv/**
+**/__pycache__/**
+**/.pytest_cache/**
+**/.ruff_cache/**

@@ -6,6 +6,8 @@ on:
       - 'apps/android/**'
       - 'db/migrations/**'
       - 'ops/finance-delivery/**'
+      - 'ops/finance-n8n/**'
+      - 'api/openapi/**'
       - '.github/workflows/investment-delivery-ci.yml'
   workflow_dispatch:
 permissions:
@@ -30,12 +32,25 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -e 'apps/backend[dev]' pyyaml
-      - run: python -m ruff check apps/backend/src/app/delivery apps/backend/tests/delivery db/migrations/versions/20260920_0024_delivery.py
+      - working-directory: apps/backend
+        run: python -m ruff check src/app/delivery tests/delivery ../../db/migrations/versions/20260920_0024_delivery.py
       - name: Concurrent claims and mocked deliveries on PostgreSQL
         working-directory: apps/backend
         env:
           FINANCE_DELIVERY_TEST_POSTGRES_URL: postgresql+psycopg://delivery_test:ci-only-password@localhost:5432/delivery_test
         run: python -m pytest tests/delivery -q
+      - name: Investment API contract
+        working-directory: apps/backend
+        run: python -m pytest tests/investments/test_openapi_exhaustive.py -q
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - working-directory: ops/finance-n8n
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Gateway deduplication and lost ACK regression
+        working-directory: ops/finance-n8n
+        env:
+          BACKEND_HMAC_MODULE: ${{ github.workspace }}/apps/backend/src/app/investments/hmac_auth.py
+        run: npm test
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 25

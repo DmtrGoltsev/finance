@@ -1,18 +1,24 @@
+import importlib.util
 import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
+from app.api.auth_context import require_authenticated_actor
 from app.auth.db_stores import SqlAlchemySessionTokenStore
 from app.authz import Actor
 from app.config import Settings
@@ -24,7 +30,12 @@ from app.delivery.router import PushDeviceRequest, register_device, revoke_devic
 from app.delivery.transports import DeliveryError, FcmTransport, InvalidToken, N8nTransport
 from app.delivery.worker import READY, REQUESTED, Dispatcher, claim, refresh_due_catalog
 from app.investments.hmac_auth import sign_callback
-from app.investments.models import MoexInstrumentModel
+from app.investments.models import MoexInstrumentModel, RecommendationJobModel
+from app.investments.repository import InvestmentRepository
+from app.investments.router import investment_service_for_request
+from app.investments.schemas import RecommendationJobCreateRequest
+from app.investments.service import DeliveryRetryRequired, InvestmentService
+from app.main import create_app
 
 
 @pytest.fixture
@@ -172,6 +183,209 @@ def test_exhausted_transport_is_dead_not_delivered(factory):
     worker.tick()
     with factory() as s:
         assert s.get(OutboxEvent, item.id).status == "dead"
+
+
+def linked_job(factory, actor, status="queued"):
+    item = event(factory, UUID(actor.user_id))
+    with factory.begin() as s:
+        job = RecommendationJobModel(
+            id=item.aggregate_id,
+            owner_user_id=UUID(actor.user_id),
+            idempotency_key=uuid4().hex,
+            request_hash="original-hash",
+            status=status,
+            attempt_count=1,
+            version=1,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        s.add(job)
+    return item, job
+
+
+def exhaust(factory):
+    worker = dispatcher(factory, delivery_max_attempts=1)
+    worker.n8n.send.side_effect = OSError("offline")
+    assert worker.tick()
+    return worker
+
+
+def test_exhaustion_and_authenticated_retry_keep_identity(factory):
+    actor, outsider = identity(factory), identity(factory)
+    item, job = linked_job(factory, actor)
+    exhaust(factory)
+    with factory() as s:
+        saved = s.get(RecommendationJobModel, job.id)
+        assert (saved.status, saved.last_error_code) == ("failed", "delivery_failed")
+        assert saved.completed_at is not None
+        assert saved.version == 2
+        with pytest.raises(DeliveryRetryRequired):
+            InvestmentService(InvestmentRepository(s)).create_job(
+                actor,
+                RecommendationJobCreateRequest(idempotencyKey=uuid4().hex, snapshotIds=[uuid4()]),
+            )
+
+    app = create_app(Settings())
+
+    def service():
+        with factory.begin() as s:
+            yield InvestmentService(InvestmentRepository(s))
+
+    app.dependency_overrides[investment_service_for_request] = service
+    path = f"/api/v1/investments/recommendation-jobs/{job.id}/retry-delivery"
+    with TestClient(app) as client:
+        assert client.post(path).status_code == 401
+        app.dependency_overrides[require_authenticated_actor] = lambda: outsider
+        assert client.post(path).status_code == 404
+        app.dependency_overrides[require_authenticated_actor] = lambda: actor
+        response = client.post(path)
+        assert response.status_code == 202, response.text
+        assert response.json()["data"]["status"] == "queued"
+        assert response.json()["data"]["lastErrorCode"] is None
+        leased = claim(factory)
+        assert client.post(path).status_code == 202
+        with factory() as s:
+            saved_event, saved_job = (
+                s.get(OutboxEvent, item.id),
+                s.get(RecommendationJobModel, job.id),
+            )
+            assert saved_event.status == "processing"
+            assert saved_event.lease_token == leased.lease_token
+            assert saved_event.delivery_attempts == 1
+            assert saved_event.deduplication_key == item.deduplication_key
+            assert saved_event.payload_safe == item.payload_safe
+            assert saved_job.idempotency_key == job.idempotency_key
+            assert saved_job.request_hash == job.request_hash
+            assert saved_job.attempt_count == 1 and saved_job.version == 3
+            assert len(list(s.scalars(select(RecommendationJobModel)))) == 1
+            assert len(list(s.scalars(select(OutboxEvent)))) == 1
+
+
+@pytest.mark.parametrize("status", ["collecting", "analyzing", "ready", "failed"])
+def test_transport_exhaustion_does_not_overwrite_progress(factory, status):
+    actor = identity(factory)
+    item, job = linked_job(factory, actor, status)
+    exhaust(factory)
+    with factory() as s:
+        assert s.get(OutboxEvent, item.id).status == "dead"
+        saved = s.get(RecommendationJobModel, job.id)
+        assert saved.status == status and saved.last_error_code is None and saved.version == 1
+
+
+def test_concurrent_delivery_retry_only_resets_once(factory):
+    actor = identity(factory)
+    item, job = linked_job(factory, actor)
+    exhaust(factory)
+    barrier = threading.Barrier(2)
+
+    def retry(_):
+        barrier.wait()
+        with factory.begin() as s:
+            return InvestmentService(InvestmentRepository(s)).retry_delivery(actor, job.id).id
+
+    with ThreadPoolExecutor(2) as pool:
+        assert list(pool.map(retry, range(2))) == [job.id, job.id]
+    with factory() as s:
+        assert s.get(RecommendationJobModel, job.id).version == 3
+        assert s.get(OutboxEvent, item.id).status == "pending"
+    assert claim(factory).id == item.id
+    assert claim(factory) is None
+
+
+def test_lost_acceptance_retries_same_gateway_generation(factory):
+    actor = identity(factory)
+    item, job = linked_job(factory, actor)
+    accepted, bodies = set(), []
+
+    def respond(request):
+        data = json.loads(request.content)
+        bodies.append(request.content)
+        accepted.add((data["eventId"], data["jobId"], data["attempt"]))
+        if len(bodies) == 1:
+            raise httpx.ReadTimeout("lost ACK")
+        return httpx.Response(202, json={"accepted": True, "eventId": data["eventId"]})
+
+    worker = dispatcher(factory, delivery_max_attempts=1)
+    worker.n8n = N8nTransport(
+        Settings(delivery_ingress_secret="test-" * 8),
+        httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    assert worker.tick()
+    with factory.begin() as s:
+        InvestmentService(InvestmentRepository(s)).retry_delivery(actor, job.id)
+    assert worker.tick()
+    assert not worker.tick()
+    assert len(accepted) == 1 and bodies[0] == bodies[1]
+    with factory() as s:
+        assert s.get(OutboxEvent, item.id).status == "processed"
+
+
+def test_0024_downgrade_upgrade_reclaims_processing_identity(factory):
+    item = event(factory)
+    claimed = claim(factory)
+    root = Path(__file__).resolve().parents[4]
+    path = root / "db/migrations/versions/20260920_0024_delivery.py"
+    spec = importlib.util.spec_from_file_location("delivery_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with factory.kw["bind"].begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            row = connection.execute(
+                text("SELECT status, deduplication_key FROM outbox_events")
+            ).one()
+            assert row.status == "pending" and row.deduplication_key == item.deduplication_key
+            migration.upgrade()
+    recovered = claim(factory)
+    assert recovered.id == claimed.id
+    assert recovered.aggregate_id == claimed.aggregate_id
+    assert recovered.deduplication_key == claimed.deduplication_key
+    assert recovered.payload_safe == claimed.payload_safe
+    assert recovered.attempt_count == claimed.attempt_count
+    assert recovered.lease_token != claimed.lease_token
+    assert claim(factory) is None
+
+
+def test_worker_docker_context_is_allowlisted():
+    root = Path(__file__).resolve().parents[4]
+    dockerfile = (root / "ops/finance-delivery/Dockerfile").read_text()
+    copies = [line for line in dockerfile.splitlines() if line.startswith("COPY ")]
+    assert copies == [
+        "COPY apps/backend/pyproject.toml apps/backend/README.md ./apps/backend/",
+        "COPY apps/backend/src ./apps/backend/src",
+    ]
+    rules = [
+        line
+        for line in (root / "ops/finance-delivery/Dockerfile.dockerignore").read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert rules[0] == "**"
+    assert [line for line in rules if line.startswith("!")] == [
+        "!apps/",
+        "!apps/backend/",
+        "!apps/backend/pyproject.toml",
+        "!apps/backend/README.md",
+        "!apps/backend/src/",
+        "!apps/backend/src/**/",
+        "!apps/backend/src/**/*.py",
+    ]
+    for denied in [
+        "**/.env",
+        "**/.env.*",
+        "**/*credential*",
+        "**/*service-account*",
+        "**/*service_account*",
+        "**/.venv/**",
+        "**/venv/**",
+        "**/.git/**",
+        "**/__pycache__/**",
+        "**/.pytest_cache/**",
+        "**/.ruff_cache/**",
+        "**/google-services.json",
+        "**/*.pem",
+        "**/*.key",
+    ]:
+        assert denied in rules and rules.index(denied) > rules.index("!apps/backend/src/**/*.py")
 
 
 @pytest.mark.parametrize(

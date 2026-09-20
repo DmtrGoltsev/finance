@@ -167,6 +167,7 @@ def test_openapi_contains_manual_first_mvp_route_families() -> None:
         "/investments/portfolio-snapshots/{snapshotId}",
         "/investments/recommendation-jobs",
         "/investments/recommendation-jobs/{jobId}",
+        "/investments/recommendation-jobs/{jobId}/retry-delivery",
         "/investments/recommendation-jobs/{jobId}/report",
         "/investments/internal/recommendation-jobs/{jobId}/callback",
     }

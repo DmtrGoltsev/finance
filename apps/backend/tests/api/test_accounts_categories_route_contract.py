@@ -124,6 +124,10 @@ EXPECTED_APPROVED_INVESTMENT_OPERATIONS = {
         "/api/v1/investments/recommendation-jobs/{jobId}",
     ): "getRecommendationJob",
     (
+        "POST",
+        "/api/v1/investments/recommendation-jobs/{jobId}/retry-delivery",
+    ): "retryRecommendationDelivery",
+    (
         "GET",
         "/api/v1/investments/recommendation-jobs/{jobId}/report",
     ): "getRecommendationReport",

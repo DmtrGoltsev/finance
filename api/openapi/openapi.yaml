@@ -1618,6 +1618,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
         default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}/retry-delivery:
+    post:
+      tags: [Investments]
+      operationId: retryRecommendationDelivery
+      summary: Возобновить доставку того же запроса владельца без новой генерации.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Доставка возобновлена или запрос уже принят.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
   /investments/recommendation-jobs/{jobId}/report:
     get:
       tags: [Investments]
@@ -2469,6 +2486,10 @@ components:
       - data
     RecommendationJobDto:
       properties:
+        lastErrorCode:
+          anyOf:
+          - type: string
+          - type: 'null'
         id:
           type: string
           maxLength: 128

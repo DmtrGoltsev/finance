@@ -8,6 +8,16 @@ import org.junit.Test
 
 class InvestmentModelsTest {
     @Test
+    fun deliveryFailureSurvivesCacheAndOnlyEnablesRetryForDeliveryFailure() {
+        val job = parseRecommendationJob(JSONObject("""{"id":"same-job","snapshotIds":[],"status":"failed","attemptCount":1,"createdAt":"2026-09-20T10:00:00Z","updatedAt":"2026-09-20T10:00:00Z","lastErrorCode":"delivery_failed"}"""))
+        assertTrue(job.needsDeliveryRetry)
+        assertEquals(job, parseRecommendationJob(JSONObject(job.toCacheJson())))
+        assertTrue(!job.copy(lastErrorCode = "analysis_failed").needsDeliveryRetry)
+        assertTrue(!job.copy(status = RecommendationStatus.Queued).needsDeliveryRetry)
+        assertTrue(!job.copy(lastErrorCode = null).needsDeliveryRetry)
+    }
+
+    @Test
     fun portfolioInputContainsEveryEditableContractFieldAndNoImageData() {
         val json = PortfolioPosition(
             instrumentName = "ОФЗ 26238",

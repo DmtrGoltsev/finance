@@ -11,6 +11,20 @@ import org.junit.Test
 
 class ApiClientInvestmentContractTest {
     @Test
+    fun deliveryRetryPostsSameJobWithoutNewIdempotencyKey() = runBlocking {
+        val store = InMemorySecureTokenStore()
+        store.saveSessionTokens("access", "refresh", "session", "owner")
+        withJsonServer(202, """{"data":{"id":"same-job","snapshotIds":[],"status":"queued","attemptCount":1,"createdAt":"2026-09-20T10:00:00Z","updatedAt":"2026-09-20T10:00:00Z","lastErrorCode":null}}""") { baseUrl, request ->
+            val result = LiveFinanceApiClient(ApiConfig(baseUrl), store).retryRecommendationDelivery("same-job")
+            assertTrue(result is ApiResult.Success)
+            assertEquals("same-job", (result as ApiResult.Success).value.id)
+            assertTrue(request.get().startsWith("POST /api/v1/investments/recommendation-jobs/same-job/retry-delivery "))
+            assertTrue(request.get().contains("Authorization: Bearer access", ignoreCase = true))
+            assertTrue(!request.get().contains("idempotency", ignoreCase = true))
+        }
+    }
+
+    @Test
     fun pushRegistrationUsesAuthenticatedDeviceEndpoint() = runBlocking {
         val store = InMemorySecureTokenStore()
         store.saveSessionTokens("access", "refresh", "session", "owner")

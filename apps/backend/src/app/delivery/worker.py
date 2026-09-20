@@ -18,7 +18,11 @@ from app.db.session import sync_session_factory_for_settings
 from app.delivery.models import PushDelivery, PushDevice
 from app.delivery.transports import FcmTransport, InvalidToken, N8nTransport
 from app.investments.instrument_resolver import is_valid_secid
-from app.investments.models import MoexInstrumentModel, PortfolioPositionModel
+from app.investments.models import (
+    MoexInstrumentModel,
+    PortfolioPositionModel,
+    RecommendationJobModel,
+)
 from app.investments.moex_catalog import CatalogRefreshError, refresh_catalog
 
 REQUESTED = "investment.recommendation.requested.v1"
@@ -108,6 +112,23 @@ class Dispatcher:
                     + timedelta(seconds=min(3600, 5 * 2 ** min(event.delivery_attempts, 10))),
                 )
             )
+            if status == "dead" and event.event_type == REQUESTED:
+                session.execute(
+                    update(RecommendationJobModel)
+                    .where(
+                        RecommendationJobModel.id == event.aggregate_id,
+                        RecommendationJobModel.owner_user_id == event.owner_user_id,
+                        RecommendationJobModel.status == "queued",
+                        RecommendationJobModel.attempt_count == event.attempt_count + 1,
+                    )
+                    .values(
+                        status="failed",
+                        last_error_code="delivery_failed",
+                        completed_at=now,
+                        updated_at=now,
+                        version=RecommendationJobModel.version + 1,
+                    )
+                )
             self.metrics[status] += 1
 
     def push(self, event):

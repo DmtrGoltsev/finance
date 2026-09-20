@@ -5,7 +5,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select, update
+
 from app.authz import Actor
+from app.db.models import OutboxEvent
 
 from .allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from .instrument_resolver import MoexInstrumentResolver
@@ -52,6 +55,10 @@ class IdempotencyConflict(InvestmentServiceError):
 
 class InvalidTransition(InvestmentServiceError):
     code = "INVALID_RECOMMENDATION_TRANSITION"
+
+
+class DeliveryRetryRequired(InvestmentServiceError):
+    code = "DELIVERY_RETRY_REQUIRED"
 
 
 class StalePortfolio(InvestmentServiceError):
@@ -236,6 +243,17 @@ class InvestmentService:
                 raise IdempotencyConflict()
             return existing
 
+        if self.repo.session.scalar(
+            select(RecommendationJobModel.id)
+            .where(
+                RecommendationJobModel.owner_user_id == owner,
+                RecommendationJobModel.status == "failed",
+                RecommendationJobModel.last_error_code == "delivery_failed",
+            )
+            .limit(1)
+        ):
+            raise DeliveryRetryRequired()
+
         snapshots: list[PortfolioSnapshotModel] = []
         for snapshot_id in request.snapshot_ids:
             snapshot = self.repo.get_snapshot(snapshot_id)
@@ -264,6 +282,65 @@ class InvestmentService:
         if model is None or model.owner_user_id != owner:
             raise ResourceNotFoundOrInaccessible()
         return model
+
+    def retry_delivery(self, actor: Actor, job_id: UUID) -> RecommendationJobModel:
+        owner = _actor_uuid(actor)
+        # Match dispatcher lock order: event first, job second. Never allocate a new event.
+        event = self.repo.session.scalar(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_id == job_id,
+                OutboxEvent.owner_user_id == owner,
+                OutboxEvent.event_type == "investment.recommendation.requested.v1",
+            )
+            .order_by(OutboxEvent.attempt_count.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if event is None:
+            raise ResourceNotFoundOrInaccessible()
+        job = self.repo.get_job_for_update(job_id)
+        if job is None or job.owner_user_id != owner:
+            raise ResourceNotFoundOrInaccessible()
+        if job.status != "failed" or job.last_error_code != "delivery_failed":
+            # Repeated clicks cannot reset an active lease/backoff or create another job.
+            if job.status in {"queued", "collecting", "analyzing", "ready"}:
+                return job
+            raise InvalidTransition()
+        if event.status != "dead" or event.attempt_count + 1 != job.attempt_count:
+            raise InvalidTransition()
+        changed = self.repo.session.execute(
+            update(OutboxEvent)
+            .where(
+                OutboxEvent.id == event.id,
+                OutboxEvent.status == "dead",
+            )
+            .values(
+                status="pending",
+                delivery_attempts=0,
+                available_at=self.now,
+                processed_at=None,
+                lease_token=None,
+                lease_until=None,
+            )
+        )
+        if changed.rowcount != 1:
+            self.repo.session.refresh(job)
+            return job
+        updated = self.repo.conditional_update_job(
+            job_id=job.id,
+            expected_version=job.version,
+            values={
+                "status": "queued",
+                "last_error_code": None,
+                "completed_at": None,
+                "updated_at": self.now,
+            },
+        )
+        if updated is None:
+            self.repo.session.rollback()
+            raise InvalidTransition()
+        return updated
 
     def jobs(
         self, actor: Actor, *, limit: int, cursor: str | None

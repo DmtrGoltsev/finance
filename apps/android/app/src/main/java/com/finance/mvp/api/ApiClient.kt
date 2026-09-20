@@ -142,6 +142,8 @@ interface FinanceApiClient {
         ApiResult.Failure("История рекомендаций не поддерживается этим клиентом")
     suspend fun getRecommendationJob(jobId: String): ApiResult<RecommendationJob> =
         ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
+    suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> =
+        ApiResult.Failure("Повтор доставки не поддерживается этим клиентом")
     suspend fun getRecommendationReport(jobId: String): ApiResult<RecommendationReport> =
         ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
     suspend fun listPlanningPlans(scope: String, month: String, householdId: String? = null): ApiResult<PlanningPlan?> =
@@ -1290,6 +1292,16 @@ class LiveFinanceApiClient(
             request(
                 path = "/api/v1/investments/recommendation-jobs/${jobId.urlEncodePath()}",
                 method = "GET",
+            ),
+        )
+    }
+
+    override suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> = safeCall {
+        parseRecommendationJob(
+            request(
+                path = "/api/v1/investments/recommendation-jobs/${jobId.urlEncodePath()}/retry-delivery",
+                method = "POST",
+                expectedCodes = setOf(HttpURLConnection.HTTP_ACCEPTED),
             ),
         )
     }

@@ -99,6 +99,38 @@ test('DB claim rejects nonce replay, conflicting event and fourth attempt', asyn
   await assert.rejects(storeWithRows({ previous: [{ attempt: 1, state: 'ready' }] }).store.claim({ ...job, attempt: 2 }, 'hash', 'nonce'), /ATTEMPT_CONFLICT/);
   assert.deepEqual(await storeWithRows({ previous: [{ attempt: 1, state: 'failed' }] }).store.claim({ ...job, attempt: 2 }, 'hash', 'nonce'), { duplicate: false });
 });
+
+test('late lost-ACK retry keeps immutable event and never inserts a second generation', async () => {
+  const job = validEnvelope();
+  job.createdAt = '2020-01-01T00:00:00Z';
+  assert.equal(validateJobEnvelope(job), job);
+  for (const state of ['queued', 'running', 'ready', 'failed']) {
+    const { store, queries } = storeWithRows({ existing: [{ event_id: job.eventId,
+      job_id: job.jobId, attempt: job.attempt, payload_hash: 'stable-hash', state, payload: null, callback: null }] });
+    assert.deepEqual(await store.claim(job, 'stable-hash', 'fresh-nonce'), { duplicate: true });
+    assert.equal(queries.some(([sql]) => /INSERT INTO gateway_runs|UPDATE gateway_runs/.test(sql)), false);
+  }
+});
+
+test('retry revives only encrypted saved callback; expired result never regenerates', async () => {
+  const job = validEnvelope();
+  const row = { event_id: job.eventId, job_id: job.jobId, attempt: job.attempt,
+    payload_hash: 'stable-hash', state: 'delivery_failed', payload: Buffer.from('saved'), callback: Buffer.from('saved') };
+  const { store, queries } = storeWithRows({ existing: [row] });
+  assert.deepEqual(await store.claim(job, 'stable-hash', 'fresh-nonce'), { duplicate: true });
+  assert.ok(queries.some(([sql]) => sql.includes("SET state='callback',callback_attempts=0")));
+  assert.equal(queries.some(([sql]) => sql.includes("'queued'")), false);
+  await assert.rejects(storeWithRows({ existing: [{ ...row, callback: null, payload: null }] }).store.claim(job, 'stable-hash', 'fresh-nonce'), /DELIVERY_RESULT_EXPIRED/);
+});
+
+test('retention clears content but keeps permanent dedup identities', async () => {
+  const queries = [];
+  const store = Object.create(Store.prototype);
+  store.pool = { query: async (sql) => { queries.push(sql); } };
+  await store.prune();
+  assert.ok(queries.some((sql) => sql.startsWith('UPDATE gateway_runs SET payload=NULL,callback=NULL')));
+  assert.equal(queries.some((sql) => /DELETE FROM gateway_runs|TRUNCATE/.test(sql)), false);
+});
 test('network retries at most three; permanent validation errors never retried', async () => {
   let attempts = 0;
   await assert.rejects(retry3(async () => { attempts++; throw new GatewayError('TEMPORARY', 502, true); }, async () => {}), /TEMPORARY/);

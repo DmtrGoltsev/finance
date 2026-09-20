@@ -41,6 +41,26 @@ class InvestmentRepositoryHistoryTest {
 
     @After fun tearDown() = database.close()
 
+    @Test fun retryDeliveryCachesSameJobAndPreservesProfilesWithoutNewIdentity() = runTest {
+        val original = job("same-job", "2026-09-20T12:00:00Z")
+            .copy(status = RecommendationStatus.Failed, lastErrorCode = "delivery_failed")
+        val store = InvestmentStore(database)
+        val profiles = listOf(profile("profile-1", "Основной"))
+        store.cacheRecommendation("owner", original, accountProfiles = profiles)
+        val remote = FakeInvestmentRemote()
+        remote.retryResult = ApiResult.Success(original.copy(status = RecommendationStatus.Queued, lastErrorCode = null))
+        val repository = InvestmentRepository(remote, store, uuid = { error("Retry must not allocate a new identity") })
+        assertTrue(repository.retryDelivery("owner", original.id) is ApiResult.Success)
+        assertEquals(listOf(original.id), remote.retriedJobs)
+        val cached = store.recommendations("owner").single()
+        assertEquals(original.id, cached.job.id)
+        assertEquals(RecommendationStatus.Queued, cached.job.status)
+        assertEquals(profiles, cached.accountProfiles)
+        remote.retryResult = ApiResult.Failure("offline")
+        assertTrue(repository.retryDelivery("owner", original.id) is ApiResult.Failure)
+        assertEquals(cached, store.recommendations("owner").single())
+    }
+
     @Test fun cleanLoginRestoresAllHistoryPagesNewestFirstWithSummaries() = runTest {
         val main = profile("11111111-1111-4111-8111-111111111111", "Основной")
         val iis = profile("22222222-2222-4222-8222-222222222222", "ИИС")
@@ -132,6 +152,12 @@ class InvestmentRepositoryHistoryTest {
     ) : InvestmentRemoteDataSource {
         val historyCursors = mutableListOf<String?>()
         val discardedImports = mutableListOf<String>()
+        val retriedJobs = mutableListOf<String>()
+        var retryResult: ApiResult<RecommendationJob> = ApiResult.Failure("unused")
+        override suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> {
+            retriedJobs += jobId
+            return retryResult
+        }
 
         override suspend fun getInvestmentPolicy() = ApiResult.Success(InvestmentPolicy())
         override suspend fun putInvestmentPolicy(policy: InvestmentPolicy) = ApiResult.Success(policy)

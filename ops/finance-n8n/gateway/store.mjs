@@ -39,6 +39,11 @@ export class Store {
       if (existing.rowCount) {
         const row = existing.rows[0];
         if (row.event_id !== job.eventId || row.payload_hash !== hash || row.job_id !== job.jobId || row.attempt !== job.attempt) fail('IDEMPOTENCY_CONFLICT', 409);
+        if (row.state === 'delivery_failed') {
+          if (!row.callback || !row.payload) fail('DELIVERY_RESULT_EXPIRED', 409);
+          // Resume only the saved callback, never the analysis or generation.
+          await client.query("UPDATE gateway_runs SET state='callback',callback_attempts=0,lease_until=NULL,completed_at=NULL WHERE event_id=$1", [job.eventId]);
+        }
         await client.query('COMMIT');
         return { duplicate: true };
       }
@@ -83,7 +88,8 @@ export class Store {
   }
   async prune() {
     await this.pool.query("DELETE FROM gateway_nonces WHERE created_at<now()-interval '10 minutes'");
-    await this.pool.query("DELETE FROM gateway_runs WHERE (state='ready' AND completed_at<now()-interval '7 days') OR (state IN ('failed','delivery_failed') AND completed_at<now()-interval '30 days')");
+    // Keep compact identity tombstones: a late retry after a lost ACK must not regenerate.
+    await this.pool.query("UPDATE gateway_runs SET payload=NULL,callback=NULL WHERE (payload IS NOT NULL OR callback IS NOT NULL) AND ((state='ready' AND completed_at<now()-interval '7 days') OR (state IN ('failed','delivery_failed') AND completed_at<now()-interval '30 days'))");
   }
   async close() { await this.pool.end(); }
 }

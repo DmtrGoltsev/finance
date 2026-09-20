@@ -48,6 +48,8 @@ internal interface InvestmentRemoteDataSource {
     suspend fun createRecommendationJob(idempotencyKey: String, snapshotIds: List<String>): ApiResult<RecommendationJob>
     suspend fun listRecommendationJobs(limit: Int, cursor: String?): ApiResult<RecommendationHistoryPage>
     suspend fun getRecommendationJob(jobId: String): ApiResult<RecommendationJob>
+    suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> =
+        ApiResult.Failure("Повтор доставки не поддерживается этим клиентом")
     suspend fun getRecommendationReport(jobId: String): ApiResult<RecommendationReport>
 }
 
@@ -66,6 +68,7 @@ private class FinanceInvestmentRemoteDataSource(
         client.createRecommendationJob(idempotencyKey, snapshotIds)
     override suspend fun listRecommendationJobs(limit: Int, cursor: String?) = client.listRecommendationJobs(limit, cursor)
     override suspend fun getRecommendationJob(jobId: String) = client.getRecommendationJob(jobId)
+    override suspend fun retryRecommendationDelivery(jobId: String) = client.retryRecommendationDelivery(jobId)
     override suspend fun getRecommendationReport(jobId: String) = client.getRecommendationReport(jobId)
 }
 
@@ -167,6 +170,18 @@ class InvestmentRepository internal constructor(
     suspend fun startRecommendation(userId: String, snapshotIds: List<String>): ApiResult<RecommendationJob> {
         val result = remote.createRecommendationJob("android-analysis-${uuid()}", snapshotIds)
         if (result is ApiResult.Success) store.cacheRecommendation(userId, result.value)
+        return result
+    }
+
+    suspend fun retryDelivery(userId: String, jobId: String): ApiResult<RecommendationJob> {
+        val result = remote.retryRecommendationDelivery(jobId)
+        if (result is ApiResult.Success) {
+            val cached = store.recommendations(userId).firstOrNull { it.job.id == jobId }
+            store.cacheRecommendation(
+                userId, result.value, cached?.report, cached?.accountProfiles.orEmpty(),
+                cached?.reportSummary, cached?.reportPath,
+            )
+        }
         return result
     }
 

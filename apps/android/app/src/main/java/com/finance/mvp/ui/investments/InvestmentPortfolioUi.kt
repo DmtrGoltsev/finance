@@ -1,5 +1,7 @@
 package com.finance.mvp.ui.investments
 
+import com.finance.mvp.api.needsDeliveryRetry
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -228,6 +230,20 @@ fun InvestmentPortfolioPanel(
                 loading = false
             }
         },
+        onRetryDelivery = { jobId ->
+            scope.launch {
+                loading = true
+                when (val result = withContext(Dispatchers.IO) { repository.retryDelivery(userId, jobId) }) {
+                    is ApiResult.Success -> {
+                        activeJobId = result.value.id
+                        overview = overview.copy(recommendations = repository.cachedRecommendations(userId), isOffline = false)
+                        message = "Доставка запроса возобновлена"
+                    }
+                    is ApiResult.Failure -> message = "Не удалось повторить доставку: ${result.message}"
+                }
+                loading = false
+            }
+        },
     )
 
     if (brokerDialog) {
@@ -320,8 +336,10 @@ internal fun InvestmentPortfolioContent(
     onResumeDraft: () -> Unit,
     onUpdatePolicy: (InvestmentPolicy) -> Unit,
     onStartRecommendation: () -> Unit,
+    onRetryDelivery: (String) -> Unit = {},
 ) {
     val latest = newestSnapshotsPerAccount(overview.snapshots)
+    val deliveryRetry = overview.recommendations.firstOrNull { it.job.needsDeliveryRetry }?.job
     Column(
         modifier = modifier.fillMaxWidth().testTag("investment-portfolio-panel"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -350,13 +368,13 @@ internal fun InvestmentPortfolioContent(
         }
         InvestmentPolicyCard(overview.policy, loading, onUpdatePolicy)
         Button(
-            onClick = onStartRecommendation,
-            enabled = latest.isNotEmpty() && !loading && !overview.isOffline && overview.recommendations.none {
+            onClick = { if (deliveryRetry != null) onRetryDelivery(deliveryRetry.id) else onStartRecommendation() },
+            enabled = (deliveryRetry != null || latest.isNotEmpty()) && !loading && !overview.isOffline && overview.recommendations.none {
                 it.job.status in setOf(RecommendationStatus.Queued, RecommendationStatus.Collecting, RecommendationStatus.Analyzing)
             },
             modifier = Modifier.fillMaxWidth().testTag("refresh-investment-recommendations"),
-        ) { Text("Обновить рекомендации") }
-        overview.recommendations.forEach { RecommendationCard(it) }
+        ) { Text(if (deliveryRetry != null) "Повторить доставку" else "Обновить рекомендации") }
+        overview.recommendations.forEach { RecommendationCard(it, !loading && !overview.isOffline, onRetryDelivery) }
         if (overview.snapshots.size > latest.size) SnapshotHistoryCard(overview.snapshots)
     }
 }
@@ -453,7 +471,7 @@ private fun PercentField(label: String, value: String, onValue: (String) -> Unit
 }
 
 @Composable
-private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
+private fun RecommendationCard(cached: CachedInvestmentRecommendation, retryEnabled: Boolean, onRetryDelivery: (String) -> Unit) {
     val status = recommendationStatus(cached.job, cached.report)
     var expanded by rememberSaveable(cached.job.id) { mutableStateOf(status in setOf(RecommendationStatus.Ready, RecommendationStatus.Stale)) }
     ElevatedCard(
@@ -468,6 +486,11 @@ private fun RecommendationCard(cached: CachedInvestmentRecommendation) {
                 Text(status.title, color = statusColor(status), fontWeight = FontWeight.SemiBold)
             }
             Text("Создано: ${cached.job.createdAt.displayTimestamp()}", style = MaterialTheme.typography.bodySmall)
+            if (cached.job.needsDeliveryRetry) {
+                Text("Не удалось доставить запрос на анализ", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { onRetryDelivery(cached.job.id) }, enabled = retryEnabled,
+                    modifier = Modifier.testTag("retry-delivery-${cached.job.id}")) { Text("Повторить доставку") }
+            }
             if (cached.accountProfiles.isNotEmpty()) {
                 Text(
                     cached.accountProfiles.joinToString(" • ") { "${it.brokerage.title}: ${it.userLabel}" },

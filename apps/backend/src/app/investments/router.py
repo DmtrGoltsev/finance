@@ -45,6 +45,7 @@ from .service import (
     AccountProfileConflict,
     ConcurrentTransition,
     ConfirmedImportNotDiscardable,
+    DeliveryRetryRequired,
     IdempotencyConflict,
     InvalidObservedAt,
     InvalidPagination,
@@ -116,6 +117,7 @@ def _error(error: InvestmentServiceError, request_id: str | None = None) -> JSON
             ConcurrentTransition,
             AccountProfileConflict,
             ConfirmedImportNotDiscardable,
+            DeliveryRetryRequired,
         ),
     ):
         status_code = status.HTTP_409_CONFLICT
@@ -229,6 +231,7 @@ def _snapshot_dto(
 def _job_dto(service: InvestmentService, model: Any) -> RecommendationJobDto:
     return RecommendationJobDto(
         id=str(model.id),
+        last_error_code=model.last_error_code,
         snapshot_ids=[str(item) for item in service.repo.job_snapshot_ids(model.id)],
         status=model.status,
         attempt_count=model.attempt_count,
@@ -385,6 +388,25 @@ async def create_recommendation_job(
 ) -> RecommendationJobEnvelope | JSONResponse:
     try:
         return RecommendationJobEnvelope(data=_job_dto(service, service.create_job(actor, request)))
+    except InvestmentServiceError as error:
+        return _error(error, actor.request_id)
+
+
+@router.post(
+    "/recommendation-jobs/{jobId}/retry-delivery",
+    response_model=RecommendationJobEnvelope,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="retryRecommendationDelivery",
+)
+async def retry_recommendation_delivery(
+    jobId: UUID,
+    actor: CurrentActor,
+    service: InvestmentServiceDependency,
+) -> RecommendationJobEnvelope | JSONResponse:
+    try:
+        return RecommendationJobEnvelope(
+            data=_job_dto(service, service.retry_delivery(actor, jobId))
+        )
     except InvestmentServiceError as error:
         return _error(error, actor.request_id)
 

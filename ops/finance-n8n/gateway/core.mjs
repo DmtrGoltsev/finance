@@ -116,7 +116,8 @@ function validateJobEnvelope(envelope, now = new Date()) {
   if (envelope.schemaVersion !== 1 || !UUID_RE.test(envelope.eventId) || !UUID_RE.test(envelope.jobId)) throw new Error('INVALID_JOB_ID');
   if (!Number.isInteger(envelope.attempt) || envelope.attempt < 1 || envelope.attempt > 3) throw new Error('INVALID_ATTEMPT');
   const createdAt = new Date(envelope.createdAt);
-  if (!Number.isFinite(createdAt.getTime()) || createdAt > new Date(now.getTime() + 5 * 60 * 1000) || createdAt < new Date(now.getTime() - 24 * 60 * 60 * 1000)) throw new Error('STALE_JOB');
+  // Event creation is immutable on redelivery; freshness/replay protection uses signed timestamp + nonce.
+  if (!Number.isFinite(createdAt.getTime()) || createdAt > new Date(now.getTime() + 5 * 60 * 1000)) throw new Error('STALE_JOB');
   validateAnalysisPackage(envelope.analysisPackage);
   return envelope;
 }

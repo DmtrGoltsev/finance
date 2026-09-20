@@ -37,6 +37,13 @@ def upgrade():
 
 
 def downgrade():
+    # Stop workers before rollback. Preserve identity while discarding the lease mechanism.
+    op.execute(
+        sa.text(
+            "UPDATE outbox_events SET status='pending', available_at=CURRENT_TIMESTAMP "
+            "WHERE status='processing'"
+        )
+    )
     op.drop_table("push_deliveries")
     op.drop_table("push_devices")
     for name in ("delivery_attempts", "lease_until", "lease_token"):

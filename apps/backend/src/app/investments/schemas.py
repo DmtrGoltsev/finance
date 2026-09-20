@@ -246,6 +246,7 @@ class RecommendationJobDto(ApiModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    last_error_code: str | None = None
 
 
 class RecommendationHistoryItemDto(ApiModel):

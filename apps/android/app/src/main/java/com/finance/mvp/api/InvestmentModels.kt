@@ -142,7 +142,11 @@ data class RecommendationJob(
     val createdAt: String,
     val updatedAt: String,
     val completedAt: String?,
+    val lastErrorCode: String? = null,
 )
+
+internal val RecommendationJob.needsDeliveryRetry: Boolean
+    get() = status == RecommendationStatus.Failed && lastErrorCode == "delivery_failed"
 
 data class RecommendationAction(
     val instrumentName: String,
@@ -243,6 +247,7 @@ internal fun RecommendationJob.toCacheJson(): String = JSONObject()
     .put("createdAt", createdAt)
     .put("updatedAt", updatedAt)
     .putNullable("completedAt", completedAt)
+    .putNullable("lastErrorCode", lastErrorCode)
     .toString()
 
 internal fun RecommendationReport.toCacheJson(): String = JSONObject()
@@ -345,6 +350,7 @@ internal fun parseRecommendationJob(json: JSONObject): RecommendationJob = json.
         createdAt = data.getString("createdAt"),
         updatedAt = data.getString("updatedAt"),
         completedAt = data.optNullableInvestmentString("completedAt"),
+        lastErrorCode = data.optNullableInvestmentString("lastErrorCode"),
     )
 }
 
