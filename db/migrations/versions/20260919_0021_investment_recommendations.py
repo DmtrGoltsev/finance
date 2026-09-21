@@ -7,6 +7,7 @@ Create Date: 2026-09-19
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -23,11 +24,16 @@ MONEY = sa.Numeric(20, 4)
 PERCENT = sa.Numeric(7, 4)
 OWNERSHIP_TABLE = "finance_alembic_object_ownership"
 OWNERSHIP_REVISION = revision
-BASE_OUTBOX_INDEXES = {
-    "ix_outbox_events_status_available_created": ["status", "available_at", "created_at"],
-    "ix_outbox_events_event_type_created": ["event_type", "created_at"],
-    "ix_outbox_events_owner_created": ["owner_user_id", "created_at"],
-    "ix_outbox_events_household_created": ["household_id", "created_at"],
+BASE_OUTBOX_INDEX_COLUMNS = {
+    ("status", "available_at", "created_at"),
+    ("event_type", "created_at"),
+    ("owner_user_id", "created_at"),
+    ("household_id", "created_at"),
+}
+OUTBOX_STATUSES = {"pending", "processing", "processed", "failed", "dead"}
+EXPECTED_FOREIGN_KEYS = {
+    ("owner_user_id",): ("users", ("id",)),
+    ("household_id",): ("households", ("id",)),
 }
 
 
@@ -66,7 +72,57 @@ def _type_matches(actual: sa.types.TypeEngine, expected: str) -> bool:
     return False
 
 
-def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], set[str]]:
+def _normalized_sql(value: object | None) -> str:
+    if value is None:
+        return ""
+    normalized = str(value).lower().replace('"', "")
+    normalized = re.sub(r"\s+", "", normalized)
+    return normalized
+
+
+def _default_matches(value: object | None, expected: str) -> bool:
+    normalized = _normalized_sql(value)
+    while normalized.startswith("(") and normalized.endswith(")"):
+        normalized = normalized[1:-1]
+    if expected == "empty_json":
+        return normalized in {"'{}'::json", "'{}'::jsonb"}
+    if expected == "now":
+        return normalized in {"now()", "current_timestamp"}
+    if expected == "zero":
+        return normalized in {"0", "0::integer"}
+    return False
+
+
+def _status_check_matches(sqltext: object | None) -> bool:
+    normalized = _normalized_sql(sqltext)
+    while normalized.startswith("(") and normalized.endswith(")"):
+        normalized = normalized[1:-1]
+    literals = set(re.findall(r"'([^']+)'(?:::[a-z ]+)?", normalized))
+    if literals != OUTBOX_STATUSES:
+        return False
+    without_literals = re.sub(r"'[^']+'(?:::[a-z ]+)?", "?", normalized)
+    return bool(
+        re.fullmatch(r"statusin\(\?(?:,\?){4}\)", without_literals)
+        or re.fullmatch(r"status=any\(array\[\?(?:,\?){4}\]\)", without_literals)
+    )
+
+
+def _index_predicate(index: dict[str, object]) -> object | None:
+    dialect_options = index.get("dialect_options") or {}
+    if isinstance(dialect_options, dict):
+        return dialect_options.get("postgresql_where")
+    return None
+
+
+def _dedup_predicate_matches(index: dict[str, object]) -> bool:
+    normalized = _normalized_sql(_index_predicate(index))
+    normalized = normalized.replace("outbox_events.", "")
+    while normalized.startswith("(") and normalized.endswith(")"):
+        normalized = normalized[1:-1]
+    return normalized == "deduplication_keyisnotnull"
+
+
+def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
     expected_columns = {
         "id": ("uuid", False),
         "event_type": ("text", False),
@@ -95,37 +151,82 @@ def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], set[st
         if bool(column["nullable"]) != nullable:
             problems.append(f"column {name} has incompatible nullability")
 
+    for name, expected_default in {
+        "payload_safe": "empty_json",
+        "created_at": "now",
+        "attempt_count": "zero",
+    }.items():
+        column = columns.get(name)
+        if column is not None and not _default_matches(column.get("default"), expected_default):
+            problems.append(f"column {name} has incompatible server default")
+
     primary_key = inspector.get_pk_constraint("outbox_events").get("constrained_columns") or []
     if primary_key != ["id"]:
         problems.append(f"primary key must be (id), got {primary_key}")
 
-    indexes = {index["name"]: index for index in inspector.get_indexes("outbox_events")}
-    for name, expected_columns_for_index in BASE_OUTBOX_INDEXES.items():
-        index = indexes.get(name)
-        if index is None:
-            problems.append(f"missing index {name}")
-        elif index.get("column_names") != expected_columns_for_index or index.get("unique"):
-            problems.append(f"index {name} has incompatible definition")
+    foreign_keys = inspector.get_foreign_keys("outbox_events")
+    for constrained_columns, (target_table, target_columns) in EXPECTED_FOREIGN_KEYS.items():
+        matching = [
+            foreign_key
+            for foreign_key in foreign_keys
+            if tuple(foreign_key.get("constrained_columns") or ()) == constrained_columns
+            and foreign_key.get("referred_table") == target_table
+            and tuple(foreign_key.get("referred_columns") or ()) == target_columns
+            and (foreign_key.get("options") or {}).get("ondelete") in {None, "NO ACTION"}
+        ]
+        if not matching:
+            problems.append(
+                f"missing foreign key {constrained_columns[0]} -> {target_table}.id "
+                "ON DELETE NO ACTION"
+            )
+
+    checks = inspector.get_check_constraints("outbox_events")
+    if not any(_status_check_matches(check.get("sqltext")) for check in checks):
+        problems.append("missing exact status CHECK for the outbox status model")
+
+    indexes = inspector.get_indexes("outbox_events")
+    for expected_columns_for_index in BASE_OUTBOX_INDEX_COLUMNS:
+        matching = [
+            index
+            for index in indexes
+            if tuple(index.get("column_names") or ()) == expected_columns_for_index
+            and not index.get("unique")
+            and _index_predicate(index) is None
+        ]
+        if not matching:
+            problems.append(
+                f"missing non-partial runtime index on {expected_columns_for_index}"
+            )
 
     dedup_column = columns.get("deduplication_key")
-    dedup_index = indexes.get("uq_outbox_events_deduplication_key")
     if dedup_column is not None and (
         not _type_matches(dedup_column["type"], "text") or not dedup_column["nullable"]
     ):
         problems.append("column deduplication_key must be nullable text")
-    if dedup_index is not None and (
-        dedup_column is None
-        or dedup_index.get("column_names") != ["deduplication_key"]
-        or not dedup_index.get("unique")
-    ):
-        problems.append("index uq_outbox_events_deduplication_key has incompatible definition")
+    dedup_indexes = [
+        index
+        for index in indexes
+        if tuple(index.get("column_names") or ()) == ("deduplication_key",)
+    ]
+    exact_dedup_indexes = [
+        index
+        for index in dedup_indexes
+        if index.get("unique") and _dedup_predicate_matches(index)
+    ]
+    if dedup_indexes and not exact_dedup_indexes:
+        problems.append(
+            "deduplication index must be unique on deduplication_key with predicate "
+            "deduplication_key IS NOT NULL"
+        )
+    if exact_dedup_indexes and dedup_column is None:
+        problems.append("deduplication index exists without deduplication_key column")
 
     if problems:
         details = "; ".join(problems)
         raise RuntimeError(
             f"Migration {revision}: incompatible preexisting outbox_events: {details}"
         )
-    return set(columns), set(indexes)
+    return set(columns), bool(exact_dedup_indexes)
 
 
 def _create_outbox_events() -> None:
@@ -232,9 +333,9 @@ def upgrade() -> None:
         raise RuntimeError(f"Migration {revision}: ownership table already exists")
     outbox_exists = inspector.has_table("outbox_events")
     if outbox_exists:
-        columns, indexes = _validate_existing_outbox(inspector)
+        columns, has_dedup_index = _validate_existing_outbox(inspector)
     else:
-        columns, indexes = set(), set()
+        columns, has_dedup_index = set(), False
 
     _create_ownership_table()
     if not outbox_exists:
@@ -243,7 +344,7 @@ def upgrade() -> None:
     if "deduplication_key" not in columns:
         op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
         _record_owned("column", "outbox_events.deduplication_key")
-    if "uq_outbox_events_deduplication_key" not in indexes:
+    if not has_dedup_index:
         op.create_index(
             "uq_outbox_events_deduplication_key",
             "outbox_events",
@@ -435,7 +536,64 @@ def _create_recommendation_tables() -> None:
     )
 
 
+def _downgrade_targets_0020_only() -> bool:
+    target = context.get_revision_argument()
+    if isinstance(target, (tuple, list)):
+        return tuple(target) == (down_revision,)
+    return target == down_revision
+
+
+def _guard_outbox_downgrade() -> None:
+    targets_0020_only = _downgrade_targets_0020_only()
+    if context.is_offline_mode():
+        below_0020_guard = ""
+        if not targets_0020_only:
+            below_0020_guard = (
+                "IF NOT EXISTS (SELECT 1 FROM finance_alembic_object_ownership "
+                "WHERE revision_id='20260919_0021' AND object_type='table' "
+                "AND object_name='outbox_events') THEN "
+                "RAISE EXCEPTION 'Migration 20260919_0021 cannot downgrade below 0020: "
+                "preexisting outbox_events is not owned by this revision'; END IF; "
+            )
+        op.execute(
+            sa.text(
+                "DO $finance_0021_guard$ BEGIN "
+                "IF to_regclass(current_schema() || '.finance_alembic_object_ownership') "
+                "IS NULL THEN "
+                "RAISE EXCEPTION 'Migration 20260919_0021 cannot safely downgrade: "
+                "ownership metadata is unavailable for a legacy-applied revision'; "
+                "END IF; "
+                f"{below_0020_guard}"
+                "END $finance_0021_guard$;"
+            )
+        )
+        return
+
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table(OWNERSHIP_TABLE):
+        raise RuntimeError(
+            f"Migration {revision} cannot safely downgrade: ownership metadata is "
+            "unavailable for a legacy-applied revision"
+        )
+    if targets_0020_only:
+        return
+    owns_table = op.get_bind().scalar(
+        sa.text(
+            f"SELECT EXISTS (SELECT 1 FROM {OWNERSHIP_TABLE} "
+            "WHERE revision_id=:revision_id AND object_type='table' "
+            "AND object_name='outbox_events')"
+        ),
+        {"revision_id": OWNERSHIP_REVISION},
+    )
+    if not owns_table:
+        raise RuntimeError(
+            f"Migration {revision} cannot downgrade below {down_revision}: preexisting "
+            "outbox_events is not owned by this revision"
+        )
+
+
 def downgrade() -> None:
+    _guard_outbox_downgrade()
     op.drop_index(
         "ix_recommendation_callback_nonces_expires", table_name="recommendation_callback_nonces"
     )
@@ -461,8 +619,8 @@ def downgrade() -> None:
                 "owns_index boolean; BEGIN "
                 "IF to_regclass(current_schema() || '.finance_alembic_object_ownership') "
                 "IS NULL THEN "
-                "RAISE NOTICE 'Migration 20260919_0021 ownership is unknown; preserving "
-                "outbox_events and deduplication objects'; RETURN; END IF; "
+                "RAISE EXCEPTION 'Migration 20260919_0021 ownership metadata disappeared "
+                "during downgrade'; END IF; "
                 "SELECT EXISTS (SELECT 1 FROM finance_alembic_object_ownership "
                 "WHERE revision_id='20260919_0021' AND object_type='table' "
                 "AND object_name='outbox_events') INTO owns_table; "
@@ -484,9 +642,7 @@ def downgrade() -> None:
 
     inspector = sa.inspect(op.get_bind())
     if not inspector.has_table(OWNERSHIP_TABLE):
-        # Revisions applied before ownership tracking have no reliable provenance.
-        # Preserve their outbox objects rather than risk deleting a preexisting table.
-        return
+        raise RuntimeError(f"Migration {revision}: ownership metadata disappeared during downgrade")
     owned = {
         (row.object_type, row.object_name)
         for row in op.get_bind()
