@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -39,6 +40,85 @@ DISCLAIMER = (
     "Персональная аналитическая подсказка для владельца Finance. "
     "Не является индивидуальной инвестиционной рекомендацией и не исполняет сделки."
 )
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def _canonical_datetime(value: datetime) -> str:
+    return _utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return _canonical_decimal(value)
+    if isinstance(value, datetime):
+        return _canonical_datetime(value)
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_value(item) for item in value]
+    return value
+
+
+def _unordered(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=canonical_hash)
+
+
+def ready_callback_hash(request: RecommendationCallbackRequest) -> str:
+    """Hash the semantic ready result, independent of transport formatting and list order."""
+    payload = {
+        "status": str(request.status),
+        "marketDataAsOf": _canonical_datetime(request.market_data_as_of),
+        "summary": request.summary,
+        "assumptions": _canonical_value(request.assumptions),
+        "aggregates": _unordered(
+            [
+                {
+                    "riskBucket": str(item.risk_bucket),
+                    "currentPercent": _canonical_decimal(item.current_percent),
+                    "proposedPercent": _canonical_decimal(item.proposed_percent),
+                }
+                for item in request.aggregates
+            ]
+        ),
+        "actions": _unordered(
+            [
+                {
+                    "instrumentName": item.instrument_name,
+                    "ticker": item.ticker,
+                    "isin": item.isin,
+                    "riskBucket": str(item.risk_bucket),
+                    "action": str(item.action),
+                    "currentPercent": _canonical_decimal(item.current_percent),
+                    "targetPercent": _canonical_decimal(item.target_percent),
+                    "amount": _canonical_decimal(item.amount),
+                    "priority": item.priority,
+                    "rationale": item.rationale,
+                    "risks": item.risks,
+                }
+                for item in request.actions
+            ]
+        ),
+        "sources": _unordered(
+            [
+                {
+                    "title": item.title,
+                    "url": str(item.url),
+                    "publisher": item.publisher,
+                    "publishedAt": (
+                        _canonical_datetime(item.published_at) if item.published_at else None
+                    ),
+                    "fetchedAt": _canonical_datetime(item.fetched_at),
+                }
+                for item in request.sources
+            ]
+        ),
+    }
+    return canonical_hash(payload)
 
 
 class InvestmentServiceError(Exception):
@@ -403,14 +483,18 @@ class InvestmentService:
         if status not in allowed[job.status] and not recovered_ready and not repeated_ready:
             raise InvalidTransition()
 
-        ready_hash = (
-            canonical_hash(request.model_dump(mode="json", by_alias=True))
-            if status == "ready"
-            else None
-        )
+        ready_hash = ready_callback_hash(request) if status == "ready" else None
         if repeated_ready:
             report = self.repo.report_for_job(job.id)
-            if report is None or report.callback_hash != ready_hash:
+            if report is None:
+                raise InvalidTransition()
+            if report.callback_hash is None:
+                legacy_hash = self._legacy_ready_hash(job, report)
+                if legacy_hash is None or legacy_hash != ready_hash:
+                    raise InvalidTransition()
+                report.callback_hash = ready_hash
+                self.repo.session.flush()
+            elif report.callback_hash != ready_hash:
                 raise InvalidTransition()
             self._complete_requested_delivery(job)
             return job
@@ -507,10 +591,94 @@ class InvestmentService:
             )
         )
 
+    def _legacy_ready_hash(
+        self,
+        job: RecommendationJobModel,
+        report: RecommendationReportModel,
+    ) -> str | None:
+        policy = self._original_analysis_policy(job)
+        if policy is None or job.market_data_as_of is None:
+            return None
+        try:
+            legacy = RecommendationCallbackRequest(
+                status="ready",
+                market_data_as_of=job.market_data_as_of,
+                summary=report.summary,
+                assumptions=report.assumptions,
+                aggregates=[
+                    {
+                        "risk_bucket": str(item.bucket),
+                        "current_percent": item.current_percent,
+                        "proposed_percent": item.projected_percent,
+                    }
+                    for item in self._cash_first_adjustments(job, policy)
+                ],
+                actions=[
+                    {
+                        "instrument_name": item.instrument_name,
+                        "ticker": item.ticker,
+                        "isin": item.isin,
+                        "risk_bucket": item.risk_bucket,
+                        "action": item.action,
+                        "current_percent": item.current_percent,
+                        "target_percent": item.target_percent,
+                        "amount": item.amount,
+                        "priority": item.priority,
+                        "rationale": item.rationale,
+                        "risks": item.risks,
+                    }
+                    for item in self.repo.report_actions(report.id)
+                ],
+                sources=[
+                    {
+                        "title": item.title,
+                        "url": item.url,
+                        "publisher": item.publisher,
+                        "published_at": item.published_at,
+                        "fetched_at": item.fetched_at,
+                    }
+                    for item in self.repo.report_sources(report.id)
+                ],
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        return ready_callback_hash(legacy)
+
+    def _original_analysis_policy(self, job: RecommendationJobModel) -> AllocationPolicy | None:
+        events = self.repo.session.scalars(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_id == job.id,
+                OutboxEvent.event_type == "investment.recommendation.requested.v1",
+            )
+            .order_by(OutboxEvent.attempt_count, OutboxEvent.created_at)
+        )
+        for event in events:
+            payload = event.payload_safe if isinstance(event.payload_safe, dict) else {}
+            policy = payload.get("policy")
+            if not isinstance(policy, dict):
+                continue
+            try:
+                return AllocationPolicy(
+                    conservative=Decimal(str(policy["conservativePercent"])),
+                    moderate=Decimal(str(policy["moderatePercent"])),
+                    aggressive=Decimal(str(policy["aggressivePercent"])),
+                    tolerance=Decimal(str(policy["tolerancePercent"])),
+                )
+            except (KeyError, ValueError):
+                return None
+        return None
+
     def cash_first_adjustments(self, job: RecommendationJobModel) -> list[Any]:
+        return self._cash_first_adjustments(job, self._allocation_policy(job))
+
+    def _cash_first_adjustments(
+        self,
+        job: RecommendationJobModel,
+        policy: AllocationPolicy,
+    ) -> list[Any]:
         snapshots = [self.repo.get_snapshot(item) for item in self.repo.job_snapshot_ids(job.id)]
         snapshots = [item for item in snapshots if item is not None]
-        policy = self._allocation_policy(job)
         current = {bucket: Decimal("0") for bucket in RiskBucket}
         for snapshot in snapshots:
             for position in self.repo.positions(snapshot.id):

@@ -107,8 +107,10 @@ test('late lost-ACK retry keeps immutable event and never inserts a second gener
   for (const state of ['queued', 'running', 'ready', 'failed']) {
     const { store, queries } = storeWithRows({ existing: [{ event_id: job.eventId,
       job_id: job.jobId, attempt: job.attempt, payload_hash: 'stable-hash', state, payload: null, callback: null }] });
-    assert.deepEqual(await store.claim(job, 'stable-hash', 'fresh-nonce'), { duplicate: true });
+    assert.deepEqual(await store.claim(job, 'stable-hash', `fresh-nonce-${state}-1`), { duplicate: true });
+    assert.deepEqual(await store.claim(job, 'stable-hash', `fresh-nonce-${state}-2`), { duplicate: true });
     assert.equal(queries.some(([sql]) => /INSERT INTO gateway_runs|UPDATE gateway_runs/.test(sql)), false);
+    assert.equal(queries.filter(([sql]) => sql.startsWith('SELECT *')).length, 2);
   }
 });
 

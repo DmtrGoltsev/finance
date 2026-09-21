@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,9 +11,11 @@ from uuid import UUID, uuid4
 import pytest
 import yaml
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.db.models  # noqa: F401
@@ -60,6 +63,7 @@ from app.investments.service import (
     ResourceNotFoundOrInaccessible,
     StaleMarketData,
     StalePortfolio,
+    ready_callback_hash,
 )
 from app.investments.source_validation import (
     UntrustedRecommendationSource,
@@ -239,6 +243,103 @@ def ready_callback(
     )
 
 
+def test_ready_callback_hash_is_semantic_and_order_independent() -> None:
+    plus_three = timezone(timedelta(hours=3))
+    base = RecommendationCallbackRequest(
+        status="ready",
+        marketDataAsOf=datetime(2026, 9, 19, 11, 0, tzinfo=UTC),
+        summary="Одинаковый результат.",
+        assumptions={"cashFirst": True, "nested": {"ratio": Decimal("1.00")}},
+        aggregates=[
+            {"riskBucket": "conservative", "currentPercent": "40", "proposedPercent": "40"},
+            {"riskBucket": "moderate", "currentPercent": "30", "proposedPercent": "30"},
+            {"riskBucket": "aggressive", "currentPercent": "30", "proposedPercent": "30"},
+        ],
+        actions=[
+            {
+                "instrumentName": "Сбербанк",
+                "ticker": "SBER",
+                "riskBucket": "aggressive",
+                "action": "increase",
+                "currentPercent": "30",
+                "targetPercent": "30",
+                "amount": "1000",
+                "priority": 2,
+                "rationale": "Причина 2.",
+                "risks": "Риск 2.",
+            },
+            {
+                "instrumentName": "Фонд денежного рынка",
+                "ticker": "LQDT",
+                "riskBucket": "moderate",
+                "action": "add",
+                "currentPercent": "30",
+                "targetPercent": "30",
+                "amount": "2000",
+                "priority": 1,
+                "rationale": "Причина 1.",
+                "risks": "Риск 1.",
+            },
+        ],
+        sources=[
+            {
+                "title": "MOEX ISS",
+                "url": "https://iss.moex.com/iss/securities.json",
+                "publisher": "Московская биржа",
+                "publishedAt": datetime(2026, 9, 19, 9, 0, tzinfo=UTC),
+                "fetchedAt": datetime(2026, 9, 19, 10, 0, tzinfo=UTC),
+            },
+            {
+                "title": "Банк России",
+                "url": "https://cbr.ru/hd_base/keyrate/",
+                "publisher": "Банк России",
+                "fetchedAt": datetime(2026, 9, 19, 10, 30, tzinfo=UTC),
+            },
+        ],
+    )
+    equivalent_payload = base.model_dump(mode="python", by_alias=True)
+    equivalent_payload["marketDataAsOf"] = datetime(2026, 9, 19, 14, 0, tzinfo=plus_three)
+    equivalent_payload["aggregates"] = list(reversed(equivalent_payload["aggregates"]))
+    equivalent_payload["actions"] = list(reversed(equivalent_payload["actions"]))
+    equivalent_payload["sources"] = list(reversed(equivalent_payload["sources"]))
+    for aggregate in equivalent_payload["aggregates"]:
+        aggregate["currentPercent"] = Decimal(aggregate["currentPercent"]).quantize(
+            Decimal("0.000")
+        )
+        aggregate["proposedPercent"] = Decimal(aggregate["proposedPercent"]).quantize(
+            Decimal("0.00")
+        )
+    for action in equivalent_payload["actions"]:
+        action["amount"] = Decimal(action["amount"]).quantize(Decimal("0.000"))
+    equivalent_payload["sources"][0]["fetchedAt"] = datetime(
+        2026, 9, 19, 13, 30, tzinfo=plus_three
+    )
+    equivalent = RecommendationCallbackRequest(**equivalent_payload)
+
+    assert ready_callback_hash(equivalent) == ready_callback_hash(base)
+
+    changes = [
+        ("summary", "Другой результат."),
+        ("assumptions", {"cashFirst": False}),
+    ]
+    for field, value in changes:
+        changed_payload = base.model_dump(mode="python", by_alias=True)
+        changed_payload[field] = value
+        assert ready_callback_hash(
+            RecommendationCallbackRequest(**changed_payload)
+        ) != ready_callback_hash(base)
+    for collection, field, value in (
+        ("aggregates", "currentPercent", Decimal("40.01")),
+        ("actions", "amount", Decimal("1000.01")),
+        ("sources", "url", "https://cbr.ru/different/"),
+    ):
+        changed_payload = base.model_dump(mode="python", by_alias=True)
+        changed_payload[collection][0][field] = value
+        assert ready_callback_hash(
+            RecommendationCallbackRequest(**changed_payload)
+        ) != ready_callback_hash(base)
+
+
 def test_migrations_have_one_head_and_sequential_revisions() -> None:
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
@@ -254,6 +355,53 @@ def test_migrations_have_one_head_and_sequential_revisions() -> None:
     assert scripts.get_revision("20260920_0022").down_revision == "20260919_0021"
     assert scripts.get_revision("20260919_0021").down_revision == "20260919_0020"
     assert scripts.get_revision("20260919_0020").down_revision == "20260822_0019"
+
+
+def test_0025_upgrade_downgrade_reupgrade_preserves_legacy_report(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[4]
+    path = root / "db/migrations/versions/20260921_0025_ready_callback_hash.py"
+    spec = importlib.util.spec_from_file_location("ready_hash_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(migration)
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'ready-hash.sqlite'}")
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE recommendation_reports ("
+                "id TEXT PRIMARY KEY, summary TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO recommendation_reports(id, summary) VALUES ('legacy', 'saved')")
+        )
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+            assert {
+                item["name"]
+                for item in inspect(connection).get_columns("recommendation_reports")
+            } == {"id", "summary", "callback_hash"}
+            row = connection.execute(
+                text("SELECT summary, callback_hash FROM recommendation_reports")
+            ).one()
+            assert row == ("saved", None)
+            connection.execute(
+                text("UPDATE recommendation_reports SET callback_hash='canonical'")
+            )
+
+            migration.downgrade()
+            assert {
+                item["name"]
+                for item in inspect(connection).get_columns("recommendation_reports")
+            } == {"id", "summary"}
+            assert connection.scalar(text("SELECT summary FROM recommendation_reports")) == "saved"
+
+            migration.upgrade()
+            row = connection.execute(
+                text("SELECT summary, callback_hash FROM recommendation_reports")
+            ).one()
+            assert row == ("saved", None)
 
 
 def test_policy_boundaries_and_cash_first_use_new_money_before_reductions() -> None:
@@ -973,10 +1121,19 @@ def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Ses
         InvestmentRepository(session), now=NOW + timedelta(days=30)
     )
 
+    repeat_payload = callback.model_dump(mode="python", by_alias=True)
+    repeat_payload["marketDataAsOf"] = callback.market_data_as_of.astimezone(
+        timezone(timedelta(hours=3))
+    )
+    repeat_payload["aggregates"] = list(reversed(repeat_payload["aggregates"]))
+    for aggregate in repeat_payload["aggregates"]:
+        aggregate["currentPercent"] = Decimal(aggregate["currentPercent"]).quantize(
+            Decimal("0.00")
+        )
     repeated = late_service.apply_callback(
         job_id=job.id,
         nonce="lost-ack-ready-repeat",
-        request=callback,
+        request=RecommendationCallbackRequest(**repeat_payload),
     )
     assert repeated.id == job.id
     assert repeated.status == "ready"
@@ -1009,6 +1166,86 @@ def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Ses
             nonce="normal-queued-ready-is-forbidden",
             request=callback,
         )
+
+
+def test_legacy_ready_report_accepts_only_semantically_identical_replay(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    snapshot_id = balanced_snapshot(service, owner)
+    job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="legacy-ready-hash-job-key",
+            snapshotIds=[snapshot_id],
+        ),
+    )
+    service.apply_callback(
+        job_id=job.id,
+        nonce="legacy-ready-collecting",
+        request=RecommendationCallbackRequest(status="collecting"),
+    )
+    service.apply_callback(
+        job_id=job.id,
+        nonce="legacy-ready-analyzing",
+        request=RecommendationCallbackRequest(status="analyzing"),
+    )
+    original = ready_callback()
+    service.apply_callback(
+        job_id=job.id,
+        nonce="legacy-ready-first",
+        request=original,
+    )
+    report = service.report(owner, job.id)
+    report.callback_hash = None
+    service.put_policy(
+        owner,
+        InvestmentPolicyPutRequest(
+            conservativePercent="50",
+            moderatePercent="25",
+            aggressivePercent="25",
+            tolerancePercent="5",
+        ),
+    )
+    session.flush()
+    late_service = InvestmentService(
+        InvestmentRepository(session), now=NOW + timedelta(days=30)
+    )
+
+    with pytest.raises(InvalidTransition):
+        late_service.apply_callback(
+            job_id=job.id,
+            nonce="legacy-ready-different",
+            request=ready_callback(summary="Подменённый legacy результат."),
+        )
+    assert report.callback_hash is None
+
+    plus_three = timezone(timedelta(hours=3))
+    equivalent_payload = original.model_dump(mode="python", by_alias=True)
+    equivalent_payload["marketDataAsOf"] = (
+        original.market_data_as_of.astimezone(plus_three)
+    )
+    equivalent_payload["aggregates"] = list(reversed(equivalent_payload["aggregates"]))
+    for aggregate in equivalent_payload["aggregates"]:
+        aggregate["currentPercent"] = Decimal(aggregate["currentPercent"]).quantize(
+            Decimal("0.00")
+        )
+        aggregate["proposedPercent"] = Decimal(aggregate["proposedPercent"]).quantize(
+            Decimal("0.000")
+        )
+    equivalent_payload["sources"][0]["fetchedAt"] = NOW.astimezone(plus_three)
+    equivalent = RecommendationCallbackRequest(**equivalent_payload)
+    repeated = late_service.apply_callback(
+        job_id=job.id,
+        nonce="legacy-ready-identical",
+        request=equivalent,
+    )
+
+    assert repeated.status == "ready"
+    assert report.callback_hash == ready_callback_hash(original)
+    assert len(session.scalars(select(RecommendationReportModel)).all()) == 1
+    assert len(session.scalars(select(OutboxEvent).where(
+        OutboxEvent.event_type == "investment.recommendation.ready.v1"
+    )).all()) == 1
 
 
 def test_callback_contract_reserves_delivery_failure_and_terminal_ready_fields() -> None:
