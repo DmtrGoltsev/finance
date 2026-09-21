@@ -231,7 +231,7 @@ def _snapshot_dto(
 def _job_dto(service: InvestmentService, model: Any) -> RecommendationJobDto:
     return RecommendationJobDto(
         id=str(model.id),
-        last_error_code=model.last_error_code,
+        last_error_code=model.last_error_code if model.status == "failed" else None,
         snapshot_ids=[str(item) for item in service.repo.job_snapshot_ids(model.id)],
         status=model.status,
         attempt_count=model.attempt_count,

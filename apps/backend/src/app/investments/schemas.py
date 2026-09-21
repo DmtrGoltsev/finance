@@ -361,7 +361,11 @@ class RecommendationCallbackRequest(ApiModel):
 
     @model_validator(mode="after")
     def validate_terminal_payload(self) -> RecommendationCallbackRequest:
+        if self.error_code == "delivery_failed":
+            raise ValueError("delivery_failed is reserved for the internal dispatcher")
         if self.status == RecommendationStatus.READY:
+            if self.retryable or self.error_code is not None:
+                raise ValueError("ready callback cannot be retryable or contain errorCode")
             if (
                 self.market_data_as_of is None
                 or self.summary is None

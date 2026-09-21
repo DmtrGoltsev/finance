@@ -259,6 +259,7 @@ class RecommendationReportModel(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     disclaimer: Mapped[str] = mapped_column(Text, nullable=False)
+    callback_hash: Mapped[str | None] = mapped_column(Text)
 
 
 class RecommendationActionModel(Base):

@@ -158,7 +158,8 @@ def test_atomic_claim_race_and_lease_recovery(factory):
 
 
 def test_retry_backoff_and_no_duplicate_after_ack(factory):
-    item = event(factory)
+    actor = identity(factory)
+    item, _ = linked_job(factory, actor)
     worker = dispatcher(factory)
     worker.n8n.send.side_effect = OSError("must not be logged")
     assert worker.tick()
@@ -177,7 +178,8 @@ def test_retry_backoff_and_no_duplicate_after_ack(factory):
 
 
 def test_exhausted_transport_is_dead_not_delivered(factory):
-    item = event(factory)
+    actor = identity(factory)
+    item, _ = linked_job(factory, actor)
     worker = dispatcher(factory, delivery_max_attempts=1)
     worker.n8n.send.side_effect = ValueError()
     worker.tick()
@@ -201,6 +203,21 @@ def linked_job(factory, actor, status="queued"):
         )
         s.add(job)
     return item, job
+
+
+def test_dispatcher_cancels_requested_event_for_terminal_job_before_network(factory):
+    actor = identity(factory)
+    item, _ = linked_job(factory, actor, status="ready")
+    worker = dispatcher(factory)
+
+    assert worker.tick()
+    worker.n8n.send.assert_not_called()
+    with factory() as session:
+        saved = session.get(OutboxEvent, item.id)
+        assert saved.status == "processed"
+        assert saved.lease_token is None
+        assert saved.lease_until is None
+    assert worker.metrics["cancelled"] == 1
 
 
 def exhaust(factory):
@@ -241,7 +258,7 @@ def test_exhaustion_and_authenticated_retry_keep_identity(factory):
         response = client.post(path)
         assert response.status_code == 202, response.text
         assert response.json()["data"]["status"] == "queued"
-        assert response.json()["data"]["lastErrorCode"] == "delivery_failed"
+        assert response.json()["data"]["lastErrorCode"] is None
         leased = claim(factory)
         assert client.post(path).status_code == 202
         with factory() as s:
@@ -257,17 +274,19 @@ def test_exhaustion_and_authenticated_retry_keep_identity(factory):
             assert saved_job.idempotency_key == job.idempotency_key
             assert saved_job.request_hash == job.request_hash
             assert saved_job.attempt_count == 1 and saved_job.version == 3
+            assert saved_job.last_error_code == "delivery_failed"
             assert len(list(s.scalars(select(RecommendationJobModel)))) == 1
             assert len(list(s.scalars(select(OutboxEvent)))) == 1
 
 
 @pytest.mark.parametrize("status", ["collecting", "analyzing", "ready", "failed"])
-def test_transport_exhaustion_does_not_overwrite_progress(factory, status):
+def test_dispatcher_cancels_stale_request_without_overwriting_progress(factory, status):
     actor = identity(factory)
     item, job = linked_job(factory, actor, status)
-    exhaust(factory)
+    worker = exhaust(factory)
+    worker.n8n.send.assert_not_called()
     with factory() as s:
-        assert s.get(OutboxEvent, item.id).status == "dead"
+        assert s.get(OutboxEvent, item.id).status == "processed"
         saved = s.get(RecommendationJobModel, job.id)
         assert saved.status == status and saved.last_error_code is None and saved.version == 1
 

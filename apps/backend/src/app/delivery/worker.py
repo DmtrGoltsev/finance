@@ -131,6 +131,44 @@ class Dispatcher:
                 )
             self.metrics[status] += 1
 
+    def request_is_current(self, event):
+        """Fence immediately before n8n without holding a transaction over the network."""
+        now = datetime.now(UTC)
+        with self.factory.begin() as session:
+            if not self.fence(session, event):
+                return False
+            job = session.execute(
+                select(
+                    RecommendationJobModel.status,
+                    RecommendationJobModel.attempt_count,
+                ).where(
+                    RecommendationJobModel.id == event.aggregate_id,
+                    RecommendationJobModel.owner_user_id == event.owner_user_id,
+                )
+            ).one_or_none()
+            if (
+                job is not None
+                and job.status == "queued"
+                and job.attempt_count == event.attempt_count + 1
+            ):
+                return True
+            cancelled = session.execute(
+                update(OutboxEvent)
+                .where(
+                    OutboxEvent.id == event.id,
+                    OutboxEvent.lease_token == event.lease_token,
+                    OutboxEvent.status == "processing",
+                )
+                .values(
+                    status="processed",
+                    lease_token=None,
+                    lease_until=None,
+                    processed_at=now,
+                )
+            ).rowcount
+            self.metrics["cancelled"] += cancelled
+            return False
+
     def push(self, event):
         now = datetime.now(UTC)
         with self.factory.begin() as session:
@@ -243,7 +281,8 @@ class Dispatcher:
         self.metrics["claimed"] += 1
         try:
             if event.event_type == REQUESTED:
-                self.n8n.send(event)
+                if self.request_is_current(event):
+                    self.n8n.send(event)
                 success = True
             else:
                 success = self.push(event)

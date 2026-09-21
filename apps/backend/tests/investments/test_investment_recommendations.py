@@ -13,7 +13,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 import app.db.models  # noqa: F401
 from app.api.auth_context import require_authenticated_actor
@@ -21,6 +21,7 @@ from app.authz import Actor
 from app.config import Settings
 from app.db.base import Base
 from app.db.models import OutboxEvent, User
+from app.delivery.worker import Dispatcher, claim
 from app.investments.allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from app.investments.hmac_auth import HmacVerificationError, sign_callback, verify_callback
 from app.investments.instrument_resolver import ResolvedInstrument
@@ -238,7 +239,7 @@ def ready_callback(
     )
 
 
-def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
+def test_migrations_have_one_head_and_sequential_revisions() -> None:
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
     config.set_main_option(
@@ -246,7 +247,8 @@ def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
         str(backend_root.parents[1] / "db" / "migrations"),
     )
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260920_0024"]
+    assert scripts.get_heads() == ["20260921_0025"]
+    assert scripts.get_revision("20260921_0025").down_revision == "20260920_0024"
     assert scripts.get_revision("20260920_0024").down_revision == "20260920_0023"
     assert scripts.get_revision("20260920_0023").down_revision == "20260920_0022"
     assert scripts.get_revision("20260920_0022").down_revision == "20260919_0021"
@@ -953,16 +955,32 @@ def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Ses
         request=callback,
     )
     assert ready.status == "ready"
+    assert requested.status == "processed"
+    assert requested.lease_token is None
+    assert requested.lease_until is None
     report = service.report(owner, job.id)
 
-    repeated = service.apply_callback(
+    service.put_policy(
+        owner,
+        InvestmentPolicyPutRequest(
+            conservativePercent="50",
+            moderatePercent="25",
+            aggressivePercent="25",
+            tolerancePercent="5",
+        ),
+    )
+    late_service = InvestmentService(
+        InvestmentRepository(session), now=NOW + timedelta(days=30)
+    )
+
+    repeated = late_service.apply_callback(
         job_id=job.id,
         nonce="lost-ack-ready-repeat",
         request=callback,
     )
     assert repeated.id == job.id
     assert repeated.status == "ready"
-    assert service.report(owner, job.id).id == report.id
+    assert late_service.report(owner, job.id).id == report.id
     assert session.get(OutboxEvent, event_id).deduplication_key == event_idempotency_key
     assert len(session.scalars(select(RecommendationJobModel)).all()) == 1
     assert len(session.scalars(select(RecommendationReportModel)).all()) == 1
@@ -971,12 +989,12 @@ def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Ses
     )).all()) == 1
 
     with pytest.raises(InvalidTransition):
-        service.apply_callback(
+        late_service.apply_callback(
             job_id=job.id,
             nonce="lost-ack-ready-conflict",
             request=ready_callback(summary="Другой результат не должен быть принят."),
         )
-    assert service.report(owner, job.id).id == report.id
+    assert late_service.report(owner, job.id).id == report.id
 
     normal_job = service.create_job(
         owner,
@@ -991,6 +1009,20 @@ def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Ses
             nonce="normal-queued-ready-is-forbidden",
             request=callback,
         )
+
+
+def test_callback_contract_reserves_delivery_failure_and_terminal_ready_fields() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        RecommendationCallbackRequest(
+            status="failed",
+            retryable=True,
+            errorCode="delivery_failed",
+        )
+    for invalid in ({"retryable": True}, {"errorCode": "UNEXPECTED"}):
+        payload = ready_callback().model_dump(mode="json", by_alias=True)
+        payload.update(invalid)
+        with pytest.raises(ValueError, match="ready callback"):
+            RecommendationCallbackRequest(**payload)
 
 
 def test_concurrent_same_ready_callback_serializes_to_one_result(session: Session) -> None:
@@ -1013,6 +1045,11 @@ def test_concurrent_same_ready_callback_serializes_to_one_result(session: Sessio
     service.retry_delivery(owner, job.id)
     session.commit()
 
+    factory = sessionmaker(session.bind, expire_on_commit=False)
+    leased = claim(factory)
+    assert leased.id == requested.id
+    assert leased.status == "processing"
+
     with Session(session.bind, expire_on_commit=False) as competing_session:
         competing_service = InvestmentService(InvestmentRepository(competing_session), now=NOW)
         stale = competing_service.job(owner, job.id)
@@ -1025,6 +1062,15 @@ def test_concurrent_same_ready_callback_serializes_to_one_result(session: Sessio
         )
         session.commit()
         assert first.status == "ready"
+
+        worker = Dispatcher(factory, Settings(), Mock(), Mock())
+        assert worker.request_is_current(leased) is False
+        worker.n8n.send.assert_not_called()
+        with factory() as check:
+            completed_request = check.get(OutboxEvent, requested.id)
+            assert completed_request.status == "processed"
+            assert completed_request.lease_token is None
+            assert completed_request.lease_until is None
 
         with pytest.raises(ConcurrentTransition):
             competing_service.apply_callback(

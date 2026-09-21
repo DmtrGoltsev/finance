@@ -493,6 +493,7 @@ class InvestmentRepository:
         generated_at: datetime,
         valid_until: datetime,
         disclaimer: str,
+        callback_hash: str,
         actions: list[RecommendationActionInput],
         sources: list[ValidatedRecommendationSource],
     ) -> RecommendationReportModel:
@@ -504,6 +505,7 @@ class InvestmentRepository:
             generated_at=generated_at,
             valid_until=valid_until,
             disclaimer=disclaimer,
+            callback_hash=callback_hash,
         )
         self.session.add(report)
         self.session.flush()

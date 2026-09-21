@@ -403,6 +403,18 @@ class InvestmentService:
         if status not in allowed[job.status] and not recovered_ready and not repeated_ready:
             raise InvalidTransition()
 
+        ready_hash = (
+            canonical_hash(request.model_dump(mode="json", by_alias=True))
+            if status == "ready"
+            else None
+        )
+        if repeated_ready:
+            report = self.repo.report_for_job(job.id)
+            if report is None or report.callback_hash != ready_hash:
+                raise InvalidTransition()
+            self._complete_requested_delivery(job)
+            return job
+
         if request.market_data_as_of is not None:
             market_time = _utc(request.market_data_as_of)
             if market_time < self.now - SNAPSHOT_FRESHNESS or market_time > self.now + timedelta(
@@ -423,10 +435,6 @@ class InvestmentService:
             except UntrustedRecommendationSource as exc:
                 raise InvalidRecommendationPayload() from exc
             self._validate_ready_payload(job, request)
-            if repeated_ready:
-                if not self._same_ready_result(job, request, validated_sources):
-                    raise InvalidTransition()
-                return job
 
         if status == "failed" and request.retryable and job.attempt_count < 3:
             updated = self.repo.conditional_update_job(
@@ -472,82 +480,32 @@ class InvestmentService:
                 generated_at=generated_at,
                 valid_until=generated_at + RECOMMENDATION_VALIDITY,
                 disclaimer=DISCLAIMER,
+                callback_hash=ready_hash,
                 actions=request.actions,
                 sources=validated_sources,
             )
             self.repo.enqueue_ready_notification(updated, report)
+            self._complete_requested_delivery(updated)
         self.repo.session.flush()
         return updated
 
-    def _same_ready_result(
-        self,
-        job: RecommendationJobModel,
-        request: RecommendationCallbackRequest,
-        validated_sources: list[Any],
-    ) -> bool:
-        report = self.repo.report_for_job(job.id)
-        if (
-            report is None
-            or report.summary != request.summary
-            or report.assumptions != request.assumptions
-            or job.market_data_as_of is None
-            or request.market_data_as_of is None
-            or _utc(job.market_data_as_of) != _utc(request.market_data_as_of)
-        ):
-            return False
-
-        def action_key(item: Any) -> tuple[Any, ...]:
-            return (
-                item.instrument_name,
-                item.ticker,
-                item.isin,
-                str(item.risk_bucket),
-                str(item.action),
-                item.current_percent,
-                item.target_percent,
-                item.amount,
-                item.priority,
-                item.rationale,
-                item.risks,
+    def _complete_requested_delivery(self, job: RecommendationJobModel) -> None:
+        self.repo.session.execute(
+            update(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_id == job.id,
+                OutboxEvent.owner_user_id == job.owner_user_id,
+                OutboxEvent.event_type == "investment.recommendation.requested.v1",
+                OutboxEvent.attempt_count == job.attempt_count - 1,
+                OutboxEvent.status != "processed",
             )
-
-        existing_actions = sorted(
-            (action_key(item) for item in self.repo.report_actions(report.id)),
-            key=repr,
+            .values(
+                status="processed",
+                lease_token=None,
+                lease_until=None,
+                processed_at=self.now,
+            )
         )
-        requested_actions = sorted((action_key(item) for item in request.actions), key=repr)
-        if existing_actions != requested_actions:
-            return False
-
-        existing_sources = sorted(
-            [
-                (
-                    item.title,
-                    item.url,
-                    item.publisher,
-                    item.trust_tier,
-                    _utc(item.published_at) if item.published_at else None,
-                    _utc(item.fetched_at),
-                )
-                for item in self.repo.report_sources(report.id)
-            ],
-            key=repr,
-        )
-        requested_sources = sorted(
-            [
-                (
-                    validated.source.title,
-                    str(validated.source.url),
-                    validated.source.publisher,
-                    validated.trust_tier,
-                    _utc(validated.source.published_at) if validated.source.published_at else None,
-                    _utc(validated.source.fetched_at),
-                )
-                for validated in validated_sources
-            ],
-            key=repr,
-        )
-        return existing_sources == requested_sources
 
     def cash_first_adjustments(self, job: RecommendationJobModel) -> list[Any]:
         snapshots = [self.repo.get_snapshot(item) for item in self.repo.job_snapshot_ids(job.id)]

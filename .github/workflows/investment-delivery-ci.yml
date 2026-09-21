@@ -33,7 +33,10 @@ jobs:
         with: {python-version: '3.12'}
       - run: pip install -e 'apps/backend[dev]' pyyaml
       - working-directory: apps/backend
-        run: python -m ruff check src/app/delivery tests/delivery ../../db/migrations/versions/20260920_0024_delivery.py
+        run: >-
+          python -m ruff check src/app/delivery tests/delivery
+          ../../db/migrations/versions/20260920_0024_delivery.py
+          ../../db/migrations/versions/20260921_0025_ready_callback_hash.py
       - name: Concurrent claims and mocked deliveries on PostgreSQL
         working-directory: apps/backend
         env:
