@@ -35,8 +35,18 @@ def upgrade() -> None:
         sa.Column("moderate_percent", PERCENT, nullable=False),
         sa.Column("aggressive_percent", PERCENT, nullable=False),
         sa.Column("tolerance_percent", PERCENT, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.Column("version", sa.BigInteger(), nullable=False, server_default=sa.text("1")),
         sa.CheckConstraint(
             "conservative_percent + moderate_percent + aggressive_percent = 100",
@@ -50,7 +60,9 @@ def upgrade() -> None:
             "tolerance_percent >= 0 AND tolerance_percent <= 25",
             name=op.f("ck_investment_policies_tolerance_range"),
         ),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name=op.f("fk_investment_policies_owner_user_id_users")),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"], ["users.id"], name=op.f("fk_investment_policies_owner_user_id_users")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_investment_policies")),
         sa.UniqueConstraint("owner_user_id", name=op.f("uq_investment_policies_owner_user_id")),
     )
@@ -66,16 +78,43 @@ def upgrade() -> None:
         sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'pending'")),
         sa.Column("confirmed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.CheckConstraint("brokerage IN ('sinara', 'sber_investments', 'finam')", name=op.f("ck_portfolio_imports_brokerage_valid")),
-        sa.CheckConstraint("status IN ('pending', 'confirmed')", name=op.f("ck_portfolio_imports_status_valid")),
-        sa.CheckConstraint("screenshot_count > 0", name=op.f("ck_portfolio_imports_screenshot_count_positive")),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name=op.f("fk_portfolio_imports_owner_user_id_users")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.CheckConstraint(
+            "brokerage IN ('sinara', 'sber_investments', 'finam')",
+            name=op.f("ck_portfolio_imports_brokerage_valid"),
+        ),
+        sa.CheckConstraint(
+            "status IN ('pending', 'confirmed')", name=op.f("ck_portfolio_imports_status_valid")
+        ),
+        sa.CheckConstraint(
+            "screenshot_count > 0", name=op.f("ck_portfolio_imports_screenshot_count_positive")
+        ),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"], ["users.id"], name=op.f("fk_portfolio_imports_owner_user_id_users")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_portfolio_imports")),
-        sa.UniqueConstraint("owner_user_id", "idempotency_key", name=op.f("uq_portfolio_imports_owner_idempotency_key")),
+        sa.UniqueConstraint(
+            "owner_user_id",
+            "idempotency_key",
+            name=op.f("uq_portfolio_imports_owner_idempotency_key"),
+        ),
     )
-    op.create_index("ix_portfolio_imports_owner_created", "portfolio_imports", ["owner_user_id", sa.text("created_at DESC")])
+    op.create_index(
+        "ix_portfolio_imports_owner_created",
+        "portfolio_imports",
+        ["owner_user_id", sa.text("created_at DESC")],
+    )
 
     op.create_table(
         "portfolio_snapshots",
@@ -88,17 +127,41 @@ def upgrade() -> None:
         sa.Column("free_cash", MONEY, nullable=False),
         sa.Column("monthly_contribution", MONEY, nullable=False),
         sa.Column("total_value", MONEY, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.CheckConstraint("currency = 'RUB'", name=op.f("ck_portfolio_snapshots_currency_rub_only")),
-        sa.CheckConstraint("free_cash >= 0", name=op.f("ck_portfolio_snapshots_free_cash_non_negative")),
-        sa.CheckConstraint("monthly_contribution >= 0", name=op.f("ck_portfolio_snapshots_monthly_contribution_non_negative")),
-        sa.CheckConstraint("total_value >= 0", name=op.f("ck_portfolio_snapshots_total_value_non_negative")),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name=op.f("fk_portfolio_snapshots_owner_user_id_users")),
-        sa.ForeignKeyConstraint(["import_id"], ["portfolio_imports.id"], name=op.f("fk_portfolio_snapshots_import_id_portfolio_imports")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.CheckConstraint(
+            "currency = 'RUB'", name=op.f("ck_portfolio_snapshots_currency_rub_only")
+        ),
+        sa.CheckConstraint(
+            "free_cash >= 0", name=op.f("ck_portfolio_snapshots_free_cash_non_negative")
+        ),
+        sa.CheckConstraint(
+            "monthly_contribution >= 0",
+            name=op.f("ck_portfolio_snapshots_monthly_contribution_non_negative"),
+        ),
+        sa.CheckConstraint(
+            "total_value >= 0", name=op.f("ck_portfolio_snapshots_total_value_non_negative")
+        ),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"], ["users.id"], name=op.f("fk_portfolio_snapshots_owner_user_id_users")
+        ),
+        sa.ForeignKeyConstraint(
+            ["import_id"],
+            ["portfolio_imports.id"],
+            name=op.f("fk_portfolio_snapshots_import_id_portfolio_imports"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_portfolio_snapshots")),
         sa.UniqueConstraint("import_id", name=op.f("uq_portfolio_snapshots_import_id")),
     )
-    op.create_index("ix_portfolio_snapshots_owner_observed", "portfolio_snapshots", ["owner_user_id", sa.text("observed_at DESC")])
+    op.create_index(
+        "ix_portfolio_snapshots_owner_observed",
+        "portfolio_snapshots",
+        ["owner_user_id", sa.text("observed_at DESC")],
+    )
 
     op.create_table(
         "portfolio_positions",
@@ -118,15 +181,33 @@ def upgrade() -> None:
         sa.Column("accrued_interest", MONEY, nullable=True),
         sa.Column("coupon_rate", PERCENT, nullable=True),
         sa.Column("maturity_date", sa.Date(), nullable=True),
-        sa.Column("tax_account_type", sa.Text(), nullable=False, server_default=sa.text("'brokerage'")),
+        sa.Column(
+            "tax_account_type", sa.Text(), nullable=False, server_default=sa.text("'brokerage'")
+        ),
         sa.Column("holding_started_at", sa.Date(), nullable=True),
         sa.Column("estimated_fee_rate", PERCENT, nullable=True),
-        sa.CheckConstraint("instrument_type IN ('stock', 'bond', 'fund')", name=op.f("ck_portfolio_positions_instrument_type_valid")),
-        sa.CheckConstraint("risk_bucket IN ('conservative', 'moderate', 'aggressive')", name=op.f("ck_portfolio_positions_risk_bucket_valid")),
-        sa.CheckConstraint("currency = 'RUB'", name=op.f("ck_portfolio_positions_currency_rub_only")),
-        sa.CheckConstraint("quantity >= 0", name=op.f("ck_portfolio_positions_quantity_non_negative")),
-        sa.CheckConstraint("market_value >= 0", name=op.f("ck_portfolio_positions_market_value_non_negative")),
-        sa.ForeignKeyConstraint(["snapshot_id"], ["portfolio_snapshots.id"], name=op.f("fk_portfolio_positions_snapshot_id_portfolio_snapshots")),
+        sa.CheckConstraint(
+            "instrument_type IN ('stock', 'bond', 'fund')",
+            name=op.f("ck_portfolio_positions_instrument_type_valid"),
+        ),
+        sa.CheckConstraint(
+            "risk_bucket IN ('conservative', 'moderate', 'aggressive')",
+            name=op.f("ck_portfolio_positions_risk_bucket_valid"),
+        ),
+        sa.CheckConstraint(
+            "currency = 'RUB'", name=op.f("ck_portfolio_positions_currency_rub_only")
+        ),
+        sa.CheckConstraint(
+            "quantity >= 0", name=op.f("ck_portfolio_positions_quantity_non_negative")
+        ),
+        sa.CheckConstraint(
+            "market_value >= 0", name=op.f("ck_portfolio_positions_market_value_non_negative")
+        ),
+        sa.ForeignKeyConstraint(
+            ["snapshot_id"],
+            ["portfolio_snapshots.id"],
+            name=op.f("fk_portfolio_positions_snapshot_id_portfolio_snapshots"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_portfolio_positions")),
     )
     op.create_index("ix_portfolio_positions_snapshot", "portfolio_positions", ["snapshot_id"])

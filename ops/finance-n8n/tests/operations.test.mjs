@@ -38,3 +38,10 @@ test('gateway has no published port; n8n contains no provider/HMAC/queue key', a
   assert.match(n8n, /N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"/);
   assert.match(n8n, /n8n-nodes-base.code/);
 });
+test('gateway Docker context is a deny-by-default allowlist', async () => {
+  const dockerignore = (await text('.dockerignore')).trim().split(/\r?\n/);
+  assert.deepEqual(dockerignore, ['**', '!package.json', '!package-lock.json', '!gateway/', '!gateway/**']);
+  for (const forbidden of ['.env', 'credentials', 'service-account', '.git', 'node_modules', 'venv', '__pycache__']) {
+    assert.ok(!dockerignore.some((entry) => entry.startsWith('!') && entry.includes(forbidden)));
+  }
+});
