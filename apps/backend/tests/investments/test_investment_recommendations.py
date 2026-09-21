@@ -357,6 +357,19 @@ def test_migrations_have_one_head_and_sequential_revisions() -> None:
     assert scripts.get_revision("20260919_0020").down_revision == "20260822_0019"
 
 
+def test_0021_bootstraps_the_core_outbox_before_extending_it() -> None:
+    root = Path(__file__).resolve().parents[4]
+    source = (
+        root / "db/migrations/versions/20260919_0021_investment_recommendations.py"
+    ).read_text(encoding="utf-8")
+
+    create_at = source.index("def _create_outbox_events")
+    extend_at = source.index('sa.Column("deduplication_key"')
+    assert create_at < extend_at
+    assert 'sa.inspect(op.get_bind()).has_table("outbox_events")' in source
+    assert 'op.drop_table("outbox_events")' not in source
+
+
 def test_0025_upgrade_downgrade_reupgrade_preserves_legacy_report(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[4]
     path = root / "db/migrations/versions/20260921_0025_ready_callback_hash.py"

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "20260919_0021"
@@ -23,16 +23,109 @@ MONEY = sa.Numeric(20, 4)
 PERCENT = sa.Numeric(7, 4)
 
 
-def upgrade() -> None:
-    op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
-    op.create_index(
-        "uq_outbox_events_deduplication_key",
+def _create_outbox_events() -> None:
+    op.create_table(
         "outbox_events",
-        ["deduplication_key"],
-        unique=True,
-        postgresql_where=sa.text("deduplication_key IS NOT NULL"),
-        sqlite_where=sa.text("deduplication_key IS NOT NULL"),
+        sa.Column("id", UUID, nullable=False),
+        sa.Column("event_type", sa.Text(), nullable=False),
+        sa.Column("aggregate_type", sa.Text(), nullable=False),
+        sa.Column("aggregate_id", UUID, nullable=False),
+        sa.Column("scope_type", sa.Text(), nullable=True),
+        sa.Column("owner_user_id", UUID, nullable=True),
+        sa.Column("household_id", UUID, nullable=True),
+        sa.Column("membership_version", sa.BigInteger(), nullable=True),
+        sa.Column(
+            "payload_safe",
+            postgresql.JSONB(astext_type=sa.Text()).with_variant(sa.JSON(), "sqlite"),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column("available_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("processed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'processed', 'failed', 'dead')",
+            name=op.f("ck_outbox_events_status_valid"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"], ["users.id"], name=op.f("fk_outbox_events_owner_user_id_users")
+        ),
+        sa.ForeignKeyConstraint(
+            ["household_id"],
+            ["households.id"],
+            name=op.f("fk_outbox_events_household_id_households"),
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_outbox_events")),
     )
+    op.create_index(
+        "ix_outbox_events_status_available_created",
+        "outbox_events",
+        ["status", "available_at", "created_at"],
+    )
+    op.create_index(
+        "ix_outbox_events_event_type_created",
+        "outbox_events",
+        ["event_type", "created_at"],
+    )
+    op.create_index(
+        "ix_outbox_events_owner_created",
+        "outbox_events",
+        ["owner_user_id", "created_at"],
+    )
+    op.create_index(
+        "ix_outbox_events_household_created",
+        "outbox_events",
+        ["household_id", "created_at"],
+    )
+
+
+def _ensure_outbox_events() -> None:
+    if context.is_offline_mode():
+        _create_outbox_events()
+        return
+    if not sa.inspect(op.get_bind()).has_table("outbox_events"):
+        _create_outbox_events()
+
+
+def upgrade() -> None:
+    _ensure_outbox_events()
+    if context.is_offline_mode():
+        op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
+        op.create_index(
+            "uq_outbox_events_deduplication_key",
+            "outbox_events",
+            ["deduplication_key"],
+            unique=True,
+            postgresql_where=sa.text("deduplication_key IS NOT NULL"),
+            sqlite_where=sa.text("deduplication_key IS NOT NULL"),
+        )
+        _create_recommendation_tables()
+        return
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("outbox_events")}
+    if "deduplication_key" not in columns:
+        op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
+    indexes = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("outbox_events")}
+    if "uq_outbox_events_deduplication_key" not in indexes:
+        op.create_index(
+            "uq_outbox_events_deduplication_key",
+            "outbox_events",
+            ["deduplication_key"],
+            unique=True,
+            postgresql_where=sa.text("deduplication_key IS NOT NULL"),
+            sqlite_where=sa.text("deduplication_key IS NOT NULL"),
+        )
+    _create_recommendation_tables()
+
+
+def _create_recommendation_tables() -> None:
     op.create_table(
         "recommendation_jobs",
         sa.Column("id", UUID, nullable=False),
@@ -228,3 +321,4 @@ def downgrade() -> None:
     op.drop_table("recommendation_jobs")
     op.drop_index("uq_outbox_events_deduplication_key", table_name="outbox_events")
     op.drop_column("outbox_events", "deduplication_key")
+    # The core outbox table is retained because it is not owned by the investment slice.
