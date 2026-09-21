@@ -107,22 +107,60 @@ def _status_check_matches(sqltext: object | None) -> bool:
     )
 
 
-def _index_predicate(index: dict[str, object]) -> object | None:
+def _inspected_index_predicate(index: dict[str, object]) -> object | None:
     dialect_options = index.get("dialect_options") or {}
     if isinstance(dialect_options, dict):
         return dialect_options.get("postgresql_where")
     return None
 
 
-def _dedup_predicate_matches(index: dict[str, object]) -> bool:
-    normalized = _normalized_sql(_index_predicate(index))
+def _postgres_index_predicates(bind: sa.Connection) -> dict[str, str | None] | None:
+    if bind.dialect.name != "postgresql":
+        return None
+    rows = bind.execute(
+        sa.text(
+            "SELECT index_class.relname AS index_name, "
+            "pg_get_expr(index_info.indpred, index_info.indrelid, true) AS predicate "
+            "FROM pg_index AS index_info "
+            "JOIN pg_class AS table_class ON table_class.oid=index_info.indrelid "
+            "JOIN pg_namespace AS table_namespace "
+            "ON table_namespace.oid=table_class.relnamespace "
+            "JOIN pg_class AS index_class ON index_class.oid=index_info.indexrelid "
+            "WHERE table_namespace.nspname=current_schema() "
+            "AND table_class.relname='outbox_events'"
+        )
+    )
+    return {row.index_name: row.predicate for row in rows}
+
+
+def _index_predicate(
+    index: dict[str, object], catalog_predicates: dict[str, str | None] | None
+) -> object | None:
+    index_name = index.get("name")
+    if catalog_predicates is not None:
+        if isinstance(index_name, str) and index_name in catalog_predicates:
+            return catalog_predicates[index_name]
+        return "missing from pg_catalog"
+    return _inspected_index_predicate(index)
+
+
+def _dedup_predicate_matches(
+    index: dict[str, object], catalog_predicates: dict[str, str | None] | None
+) -> bool:
+    normalized = _normalized_sql(_index_predicate(index, catalog_predicates))
     normalized = normalized.replace("outbox_events.", "")
     while normalized.startswith("(") and normalized.endswith(")"):
         normalized = normalized[1:-1]
-    return normalized == "deduplication_keyisnotnull"
+    return normalized in {
+        "deduplication_keyisnotnull",
+        "notdeduplication_keyisnull",
+        "not(deduplication_keyisnull)",
+    }
 
 
-def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
+def _validate_existing_outbox(
+    inspector: sa.Inspector, bind: sa.Connection
+) -> tuple[set[str], bool]:
     expected_columns = {
         "id": ("uuid", False),
         "event_type": ("text", False),
@@ -164,6 +202,11 @@ def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
     if primary_key != ["id"]:
         problems.append(f"primary key must be (id), got {primary_key}")
 
+    effective_schema = (
+        bind.scalar(sa.text("SELECT current_schema()"))
+        if bind.dialect.name == "postgresql"
+        else inspector.default_schema_name
+    )
     foreign_keys = inspector.get_foreign_keys("outbox_events")
     for constrained_columns, (target_table, target_columns) in EXPECTED_FOREIGN_KEYS.items():
         matching = [
@@ -172,11 +215,13 @@ def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
             if tuple(foreign_key.get("constrained_columns") or ()) == constrained_columns
             and foreign_key.get("referred_table") == target_table
             and tuple(foreign_key.get("referred_columns") or ()) == target_columns
+            and (foreign_key.get("referred_schema") or effective_schema) == effective_schema
             and (foreign_key.get("options") or {}).get("ondelete") in {None, "NO ACTION"}
         ]
         if not matching:
             problems.append(
-                f"missing foreign key {constrained_columns[0]} -> {target_table}.id "
+                f"missing foreign key {constrained_columns[0]} -> "
+                f"{effective_schema}.{target_table}.id "
                 "ON DELETE NO ACTION"
             )
 
@@ -185,13 +230,14 @@ def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
         problems.append("missing exact status CHECK for the outbox status model")
 
     indexes = inspector.get_indexes("outbox_events")
+    catalog_predicates = _postgres_index_predicates(bind)
     for expected_columns_for_index in BASE_OUTBOX_INDEX_COLUMNS:
         matching = [
             index
             for index in indexes
             if tuple(index.get("column_names") or ()) == expected_columns_for_index
             and not index.get("unique")
-            and _index_predicate(index) is None
+            and _index_predicate(index, catalog_predicates) is None
         ]
         if not matching:
             problems.append(
@@ -211,7 +257,7 @@ def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], bool]:
     exact_dedup_indexes = [
         index
         for index in dedup_indexes
-        if index.get("unique") and _dedup_predicate_matches(index)
+        if index.get("unique") and _dedup_predicate_matches(index, catalog_predicates)
     ]
     if dedup_indexes and not exact_dedup_indexes:
         problems.append(
@@ -333,7 +379,7 @@ def upgrade() -> None:
         raise RuntimeError(f"Migration {revision}: ownership table already exists")
     outbox_exists = inspector.has_table("outbox_events")
     if outbox_exists:
-        columns, has_dedup_index = _validate_existing_outbox(inspector)
+        columns, has_dedup_index = _validate_existing_outbox(inspector, op.get_bind())
     else:
         columns, has_dedup_index = set(), False
 
@@ -539,8 +585,14 @@ def _create_recommendation_tables() -> None:
 def _downgrade_targets_0020_only() -> bool:
     target = context.get_revision_argument()
     if isinstance(target, (tuple, list)):
-        return tuple(target) == (down_revision,)
-    return target == down_revision
+        targets = tuple(target)
+    else:
+        targets = (target,)
+    # Alembic 1.20 resolves named revisions but intentionally leaves relative
+    # destinations unchanged. While this revision is executing, -1 can only
+    # mean its direct parent (0020); broader relative and absolute targets stay
+    # guarded as below-0020 downgrades.
+    return targets in {(down_revision,), ("-1",)}
 
 
 def _guard_outbox_downgrade() -> None:

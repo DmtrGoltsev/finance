@@ -190,6 +190,31 @@ def test_preexisting_outbox_and_dedup_survive_head_to_0020(
             is None
         )
 
+
+def test_equivalent_dedup_predicate_is_accepted(
+    disposable_database: tuple[str, str],
+) -> None:
+    database_dsn, database_url = disposable_database
+    _alembic(database_url, "upgrade", "20260919_0020")
+    with psycopg.connect(database_dsn, autocommit=True) as connection:
+        event_id = _create_compatible_preexisting_outbox(connection)
+        connection.execute("DROP INDEX uq_outbox_events_deduplication_key")
+        connection.execute(
+            "CREATE UNIQUE INDEX preexisting_equivalent_dedup "
+            "ON outbox_events(deduplication_key) "
+            "WHERE NOT (deduplication_key IS NULL)"
+        )
+
+    _alembic(database_url, "upgrade", "20260919_0021")
+    with psycopg.connect(database_dsn) as connection:
+        assert connection.execute(
+            "SELECT deduplication_key FROM outbox_events WHERE id=%s", (event_id,)
+        ).fetchone() == ("preexisting-key",)
+        assert connection.execute(
+            "SELECT object_type, object_name FROM finance_alembic_object_ownership"
+        ).fetchall() == []
+
+
 def test_incompatible_preexisting_outbox_fails_fast(
     disposable_database: tuple[str, str],
 ) -> None:
@@ -224,7 +249,28 @@ def test_incompatible_preexisting_outbox_fails_fast(
             "deduplication index must be unique",
         ),
         (
+            "DROP INDEX uq_outbox_events_deduplication_key; "
+            "CREATE UNIQUE INDEX uq_outbox_events_deduplication_key "
+            "ON outbox_events(deduplication_key) WHERE deduplication_key IS NULL",
+            "deduplication index must be unique",
+        ),
+        (
             "ALTER TABLE outbox_events DROP CONSTRAINT fk_preexisting_outbox_owner",
+            "missing foreign key owner_user_id",
+        ),
+        (
+            "CREATE SCHEMA other_schema; "
+            "CREATE TABLE other_schema.users (id uuid PRIMARY KEY); "
+            "ALTER TABLE outbox_events DROP CONSTRAINT fk_preexisting_outbox_owner; "
+            "ALTER TABLE outbox_events ADD CONSTRAINT fk_wrong_schema_owner "
+            "FOREIGN KEY (owner_user_id) REFERENCES other_schema.users(id) "
+            "ON DELETE NO ACTION",
+            "missing foreign key owner_user_id",
+        ),
+        (
+            "ALTER TABLE outbox_events DROP CONSTRAINT fk_preexisting_outbox_owner; "
+            "ALTER TABLE outbox_events ADD CONSTRAINT fk_wrong_delete_owner "
+            "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE",
             "missing foreign key owner_user_id",
         ),
         (
@@ -236,7 +282,15 @@ def test_incompatible_preexisting_outbox_fails_fast(
             "column attempt_count has incompatible server default",
         ),
     ],
-    ids=("wrong-dedup-predicate", "missing-fk", "missing-status-check", "missing-default"),
+    ids=(
+        "false-dedup-predicate",
+        "other-dedup-predicate",
+        "missing-fk",
+        "wrong-fk-schema",
+        "wrong-fk-on-delete",
+        "missing-status-check",
+        "missing-default",
+    ),
 )
 def test_preexisting_outbox_contract_mismatches_fail_before_ddl(
     disposable_database: tuple[str, str],
@@ -265,8 +319,32 @@ def test_preexisting_outbox_contract_mismatches_fail_before_ddl(
         assert connection.execute("SELECT to_regclass('recommendation_jobs')").fetchone()[0] is None
 
 
+def test_preexisting_outbox_survives_relative_downgrade_to_0020(
+    disposable_database: tuple[str, str],
+) -> None:
+    database_dsn, database_url = disposable_database
+    _alembic(database_url, "upgrade", "20260919_0020")
+    with psycopg.connect(database_dsn, autocommit=True) as connection:
+        event_id = _create_compatible_preexisting_outbox(connection)
+    _alembic(database_url, "upgrade", "20260919_0021")
+
+    _alembic(database_url, "downgrade", "-1")
+    with psycopg.connect(database_dsn) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "20260919_0020",
+        )
+        assert connection.execute(
+            "SELECT deduplication_key FROM outbox_events WHERE id=%s", (event_id,)
+        ).fetchone() == ("preexisting-key",)
+        assert connection.execute(
+            "SELECT to_regclass('finance_alembic_object_ownership')"
+        ).fetchone()[0] is None
+
+
+@pytest.mark.parametrize("target", ["base", "20260822_0019"])
 def test_preexisting_outbox_blocks_direct_downgrade_below_0020_before_ddl(
     disposable_database: tuple[str, str],
+    target: str,
 ) -> None:
     database_dsn, database_url = disposable_database
     _alembic(database_url, "upgrade", "20260919_0020")
@@ -274,7 +352,7 @@ def test_preexisting_outbox_blocks_direct_downgrade_below_0020_before_ddl(
         _create_compatible_preexisting_outbox(connection)
     _alembic(database_url, "upgrade", "head")
 
-    result = _alembic(database_url, "downgrade", "base", check=False)
+    result = _alembic(database_url, "downgrade", target, check=False)
     assert result.returncode != 0
     assert "cannot downgrade below 20260919_0020" in result.stderr
     with psycopg.connect(database_dsn) as connection:
