@@ -332,7 +332,9 @@ class InvestmentService:
             expected_version=job.version,
             values={
                 "status": "queued",
-                "last_error_code": None,
+                # Keep the marker until the saved terminal callback arrives. It is the
+                # only condition under which queued -> ready is allowed directly.
+                "last_error_code": "delivery_failed",
                 "completed_at": None,
                 "updated_at": self.now,
             },
@@ -392,7 +394,13 @@ class InvestmentService:
             "ready": set(),
             "failed": set(),
         }
-        if status not in allowed[job.status]:
+        recovered_ready = (
+            job.status == "queued"
+            and job.last_error_code == "delivery_failed"
+            and status == "ready"
+        )
+        repeated_ready = job.status == "ready" and status == "ready"
+        if status not in allowed[job.status] and not recovered_ready and not repeated_ready:
             raise InvalidTransition()
 
         if request.market_data_as_of is not None:
@@ -415,6 +423,10 @@ class InvestmentService:
             except UntrustedRecommendationSource as exc:
                 raise InvalidRecommendationPayload() from exc
             self._validate_ready_payload(job, request)
+            if repeated_ready:
+                if not self._same_ready_result(job, request, validated_sources):
+                    raise InvalidTransition()
+                return job
 
         if status == "failed" and request.retryable and job.attempt_count < 3:
             updated = self.repo.conditional_update_job(
@@ -466,6 +478,76 @@ class InvestmentService:
             self.repo.enqueue_ready_notification(updated, report)
         self.repo.session.flush()
         return updated
+
+    def _same_ready_result(
+        self,
+        job: RecommendationJobModel,
+        request: RecommendationCallbackRequest,
+        validated_sources: list[Any],
+    ) -> bool:
+        report = self.repo.report_for_job(job.id)
+        if (
+            report is None
+            or report.summary != request.summary
+            or report.assumptions != request.assumptions
+            or job.market_data_as_of is None
+            or request.market_data_as_of is None
+            or _utc(job.market_data_as_of) != _utc(request.market_data_as_of)
+        ):
+            return False
+
+        def action_key(item: Any) -> tuple[Any, ...]:
+            return (
+                item.instrument_name,
+                item.ticker,
+                item.isin,
+                str(item.risk_bucket),
+                str(item.action),
+                item.current_percent,
+                item.target_percent,
+                item.amount,
+                item.priority,
+                item.rationale,
+                item.risks,
+            )
+
+        existing_actions = sorted(
+            (action_key(item) for item in self.repo.report_actions(report.id)),
+            key=repr,
+        )
+        requested_actions = sorted((action_key(item) for item in request.actions), key=repr)
+        if existing_actions != requested_actions:
+            return False
+
+        existing_sources = sorted(
+            [
+                (
+                    item.title,
+                    item.url,
+                    item.publisher,
+                    item.trust_tier,
+                    _utc(item.published_at) if item.published_at else None,
+                    _utc(item.fetched_at),
+                )
+                for item in self.repo.report_sources(report.id)
+            ],
+            key=repr,
+        )
+        requested_sources = sorted(
+            [
+                (
+                    validated.source.title,
+                    str(validated.source.url),
+                    validated.source.publisher,
+                    validated.trust_tier,
+                    _utc(validated.source.published_at) if validated.source.published_at else None,
+                    _utc(validated.source.fetched_at),
+                )
+                for validated in validated_sources
+            ],
+            key=repr,
+        )
+        return existing_sources == requested_sources
 
     def cash_first_adjustments(self, job: RecommendationJobModel) -> list[Any]:
         snapshots = [self.repo.get_snapshot(item) for item in self.repo.job_snapshot_ids(job.id)]

@@ -24,7 +24,11 @@ from app.db.models import OutboxEvent, User
 from app.investments.allocation import AllocationPolicy, RiskBucket, cash_first_rebalance
 from app.investments.hmac_auth import HmacVerificationError, sign_callback, verify_callback
 from app.investments.instrument_resolver import ResolvedInstrument
-from app.investments.models import MoexInstrumentModel, RecommendationReportModel
+from app.investments.models import (
+    MoexInstrumentModel,
+    RecommendationJobModel,
+    RecommendationReportModel,
+)
 from app.investments.moex_catalog import refresh_catalog
 from app.investments.repository import InvestmentRepository
 from app.investments.router import investment_service_for_request
@@ -43,6 +47,7 @@ from app.investments.schemas import (
 )
 from app.investments.service import (
     AccountProfileConflict,
+    ConcurrentTransition,
     ConfirmedImportNotDiscardable,
     IdempotencyConflict,
     InvalidObservedAt,
@@ -180,6 +185,57 @@ def confirmed_snapshot(
         ),
     )
     return snapshot.id
+
+
+def balanced_snapshot(service: InvestmentService, owner: Actor) -> UUID:
+    imported = service.create_import(
+        owner,
+        PortfolioImportCreateRequest(
+            idempotencyKey=f"balanced-import-{uuid4()}",
+            brokerage="finam",
+            screenshotCount=1,
+            observedAt=NOW,
+        ),
+    )
+    snapshot = service.confirm_import(
+        owner,
+        imported.id,
+        PortfolioImportConfirmRequest(
+            freeCash="0",
+            monthlyContribution="0",
+            positions=[
+                position(bucket="conservative", value="40000"),
+                position(bucket="moderate", value="30000"),
+                position(bucket="aggressive", value="30000"),
+            ],
+        ),
+    )
+    return snapshot.id
+
+
+def ready_callback(
+    *, summary: str = "Сохранённый результат анализа."
+) -> RecommendationCallbackRequest:
+    return RecommendationCallbackRequest(
+        status="ready",
+        marketDataAsOf=NOW - timedelta(hours=1),
+        summary=summary,
+        assumptions={"cashFirst": True},
+        aggregates=[
+            {"riskBucket": "conservative", "currentPercent": "40", "proposedPercent": "40"},
+            {"riskBucket": "moderate", "currentPercent": "30", "proposedPercent": "30"},
+            {"riskBucket": "aggressive", "currentPercent": "30", "proposedPercent": "30"},
+        ],
+        actions=[],
+        sources=[
+            {
+                "title": "MOEX ISS",
+                "url": "https://iss.moex.com/iss/securities.json",
+                "publisher": "Московская биржа",
+                "fetchedAt": NOW,
+            }
+        ],
+    )
 
 
 def test_migrations_have_one_head_and_two_sequential_revisions() -> None:
@@ -860,6 +916,139 @@ def test_transitions_three_attempts_ready_report_and_replay(session: Session) ->
             nonce="post-ready-nonce-unique",
             request=RecommendationCallbackRequest(status="collecting"),
         )
+
+
+def test_lost_ack_redelivery_moves_same_recovered_job_to_ready_once(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    snapshot_id = balanced_snapshot(service, owner)
+    job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="lost-ack-job-key",
+            snapshotIds=[snapshot_id],
+        ),
+    )
+    requested = session.scalar(select(OutboxEvent).where(OutboxEvent.aggregate_id == job.id))
+    event_id = requested.id
+    event_idempotency_key = requested.deduplication_key
+    requested.status = "dead"
+    requested.delivery_attempts = 12
+    job.status = "failed"
+    job.last_error_code = "delivery_failed"
+    job.completed_at = NOW
+    job.version += 1
+    session.flush()
+
+    recovered = service.retry_delivery(owner, job.id)
+    assert recovered.id == job.id
+    assert recovered.idempotency_key == "lost-ack-job-key"
+    assert recovered.status == "queued"
+    assert requested.status == "pending"
+
+    callback = ready_callback()
+    ready = service.apply_callback(
+        job_id=job.id,
+        nonce="lost-ack-ready-first",
+        request=callback,
+    )
+    assert ready.status == "ready"
+    report = service.report(owner, job.id)
+
+    repeated = service.apply_callback(
+        job_id=job.id,
+        nonce="lost-ack-ready-repeat",
+        request=callback,
+    )
+    assert repeated.id == job.id
+    assert repeated.status == "ready"
+    assert service.report(owner, job.id).id == report.id
+    assert session.get(OutboxEvent, event_id).deduplication_key == event_idempotency_key
+    assert len(session.scalars(select(RecommendationJobModel)).all()) == 1
+    assert len(session.scalars(select(RecommendationReportModel)).all()) == 1
+    assert len(session.scalars(select(OutboxEvent).where(
+        OutboxEvent.event_type == "investment.recommendation.ready.v1"
+    )).all()) == 1
+
+    with pytest.raises(InvalidTransition):
+        service.apply_callback(
+            job_id=job.id,
+            nonce="lost-ack-ready-conflict",
+            request=ready_callback(summary="Другой результат не должен быть принят."),
+        )
+    assert service.report(owner, job.id).id == report.id
+
+    normal_job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="normal-queued-job-key",
+            snapshotIds=[snapshot_id],
+        ),
+    )
+    with pytest.raises(InvalidTransition):
+        service.apply_callback(
+            job_id=normal_job.id,
+            nonce="normal-queued-ready-is-forbidden",
+            request=callback,
+        )
+
+
+def test_concurrent_same_ready_callback_serializes_to_one_result(session: Session) -> None:
+    owner = actor(session)
+    service = InvestmentService(InvestmentRepository(session), now=NOW)
+    snapshot_id = balanced_snapshot(service, owner)
+    job = service.create_job(
+        owner,
+        RecommendationJobCreateRequest(
+            idempotencyKey="concurrent-callback-job-key",
+            snapshotIds=[snapshot_id],
+        ),
+    )
+    requested = session.scalar(select(OutboxEvent).where(OutboxEvent.aggregate_id == job.id))
+    requested.status = "dead"
+    job.status = "failed"
+    job.last_error_code = "delivery_failed"
+    job.version += 1
+    session.flush()
+    service.retry_delivery(owner, job.id)
+    session.commit()
+
+    with Session(session.bind, expire_on_commit=False) as competing_session:
+        competing_service = InvestmentService(InvestmentRepository(competing_session), now=NOW)
+        stale = competing_service.job(owner, job.id)
+        assert stale.status == "queued"
+
+        first = service.apply_callback(
+            job_id=job.id,
+            nonce="concurrent-ready-first",
+            request=ready_callback(),
+        )
+        session.commit()
+        assert first.status == "ready"
+
+        with pytest.raises(ConcurrentTransition):
+            competing_service.apply_callback(
+                job_id=job.id,
+                nonce="concurrent-ready-stale",
+                request=ready_callback(),
+            )
+        competing_session.rollback()
+        repeated = competing_service.apply_callback(
+            job_id=job.id,
+            nonce="concurrent-ready-after-refresh",
+            request=ready_callback(),
+        )
+        assert repeated.status == "ready"
+        competing_session.commit()
+
+    session.expire_all()
+    report = service.report(owner, job.id)
+    assert len(session.scalars(select(RecommendationReportModel)).all()) == 1
+    assert len(service.repo.report_actions(report.id)) == 0
+    assert len(service.repo.report_sources(report.id)) == 1
+    assert len(session.scalars(select(OutboxEvent).where(
+        OutboxEvent.event_type == "investment.recommendation.ready.v1"
+    )).all()) == 1
 
 
 def test_ready_callback_rejects_arbitrary_sales_and_invalid_aggregates(

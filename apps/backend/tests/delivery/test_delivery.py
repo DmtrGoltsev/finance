@@ -241,7 +241,7 @@ def test_exhaustion_and_authenticated_retry_keep_identity(factory):
         response = client.post(path)
         assert response.status_code == 202, response.text
         assert response.json()["data"]["status"] == "queued"
-        assert response.json()["data"]["lastErrorCode"] is None
+        assert response.json()["data"]["lastErrorCode"] == "delivery_failed"
         leased = claim(factory)
         assert client.post(path).status_code == 202
         with factory() as s:
