@@ -357,7 +357,7 @@ def test_migrations_have_one_head_and_sequential_revisions() -> None:
     assert scripts.get_revision("20260919_0020").down_revision == "20260822_0019"
 
 
-def test_0021_bootstraps_the_core_outbox_before_extending_it() -> None:
+def test_0021_validates_and_tracks_ownership_of_outbox_objects() -> None:
     root = Path(__file__).resolve().parents[4]
     source = (
         root / "db/migrations/versions/20260919_0021_investment_recommendations.py"
@@ -366,8 +366,14 @@ def test_0021_bootstraps_the_core_outbox_before_extending_it() -> None:
     create_at = source.index("def _create_outbox_events")
     extend_at = source.index('sa.Column("deduplication_key"')
     assert create_at < extend_at
-    assert 'sa.inspect(op.get_bind()).has_table("outbox_events")' in source
-    assert 'op.drop_table("outbox_events")' not in source
+    assert "def _validate_existing_outbox" in source
+    assert 'incompatible preexisting outbox_events' in source
+    assert 'OWNERSHIP_TABLE = "finance_alembic_object_ownership"' in source
+    assert '_record_owned("table", "outbox_events")' in source
+    assert '_record_owned("column", "outbox_events.deduplication_key")' in source
+    assert '_record_owned("index", "uq_outbox_events_deduplication_key")' in source
+    assert "offline SQL supports only a fresh " in source
+    assert "outbox_events path; use online Alembic" in source
 
 
 def test_0025_upgrade_downgrade_reupgrade_preserves_legacy_report(tmp_path: Path) -> None:

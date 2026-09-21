@@ -21,6 +21,111 @@ depends_on: str | Sequence[str] | None = None
 UUID = postgresql.UUID(as_uuid=True)
 MONEY = sa.Numeric(20, 4)
 PERCENT = sa.Numeric(7, 4)
+OWNERSHIP_TABLE = "finance_alembic_object_ownership"
+OWNERSHIP_REVISION = revision
+BASE_OUTBOX_INDEXES = {
+    "ix_outbox_events_status_available_created": ["status", "available_at", "created_at"],
+    "ix_outbox_events_event_type_created": ["event_type", "created_at"],
+    "ix_outbox_events_owner_created": ["owner_user_id", "created_at"],
+    "ix_outbox_events_household_created": ["household_id", "created_at"],
+}
+
+
+def _create_ownership_table() -> None:
+    op.create_table(
+        OWNERSHIP_TABLE,
+        sa.Column("revision_id", sa.Text(), nullable=False),
+        sa.Column("object_type", sa.Text(), nullable=False),
+        sa.Column("object_name", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("revision_id", "object_type", "object_name"),
+    )
+
+
+def _record_owned(object_type: str, object_name: str) -> None:
+    op.execute(
+        sa.text(
+            f"INSERT INTO {OWNERSHIP_TABLE} (revision_id, object_type, object_name) "
+            f"VALUES ('{OWNERSHIP_REVISION}', '{object_type}', '{object_name}')"
+        )
+    )
+
+
+def _type_matches(actual: sa.types.TypeEngine, expected: str) -> bool:
+    if expected == "uuid":
+        return isinstance(actual, sa.Uuid)
+    if expected == "text":
+        return isinstance(actual, sa.Text)
+    if expected == "bigint":
+        return isinstance(actual, sa.BigInteger)
+    if expected == "integer":
+        return isinstance(actual, sa.Integer) and not isinstance(actual, sa.BigInteger)
+    if expected == "json":
+        return isinstance(actual, sa.JSON)
+    if expected == "datetime":
+        return isinstance(actual, sa.DateTime) and bool(actual.timezone)
+    return False
+
+
+def _validate_existing_outbox(inspector: sa.Inspector) -> tuple[set[str], set[str]]:
+    expected_columns = {
+        "id": ("uuid", False),
+        "event_type": ("text", False),
+        "aggregate_type": ("text", False),
+        "aggregate_id": ("uuid", False),
+        "scope_type": ("text", True),
+        "owner_user_id": ("uuid", True),
+        "household_id": ("uuid", True),
+        "membership_version": ("bigint", True),
+        "payload_safe": ("json", False),
+        "status": ("text", False),
+        "created_at": ("datetime", False),
+        "available_at": ("datetime", False),
+        "processed_at": ("datetime", True),
+        "attempt_count": ("integer", False),
+    }
+    columns = {column["name"]: column for column in inspector.get_columns("outbox_events")}
+    problems: list[str] = []
+    for name, (expected_type, nullable) in expected_columns.items():
+        column = columns.get(name)
+        if column is None:
+            problems.append(f"missing column {name}")
+            continue
+        if not _type_matches(column["type"], expected_type):
+            problems.append(f"column {name} has incompatible type {column['type']}")
+        if bool(column["nullable"]) != nullable:
+            problems.append(f"column {name} has incompatible nullability")
+
+    primary_key = inspector.get_pk_constraint("outbox_events").get("constrained_columns") or []
+    if primary_key != ["id"]:
+        problems.append(f"primary key must be (id), got {primary_key}")
+
+    indexes = {index["name"]: index for index in inspector.get_indexes("outbox_events")}
+    for name, expected_columns_for_index in BASE_OUTBOX_INDEXES.items():
+        index = indexes.get(name)
+        if index is None:
+            problems.append(f"missing index {name}")
+        elif index.get("column_names") != expected_columns_for_index or index.get("unique"):
+            problems.append(f"index {name} has incompatible definition")
+
+    dedup_column = columns.get("deduplication_key")
+    dedup_index = indexes.get("uq_outbox_events_deduplication_key")
+    if dedup_column is not None and (
+        not _type_matches(dedup_column["type"], "text") or not dedup_column["nullable"]
+    ):
+        problems.append("column deduplication_key must be nullable text")
+    if dedup_index is not None and (
+        dedup_column is None
+        or dedup_index.get("column_names") != ["deduplication_key"]
+        or not dedup_index.get("unique")
+    ):
+        problems.append("index uq_outbox_events_deduplication_key has incompatible definition")
+
+    if problems:
+        details = "; ".join(problems)
+        raise RuntimeError(
+            f"Migration {revision}: incompatible preexisting outbox_events: {details}"
+        )
+    return set(columns), set(indexes)
 
 
 def _create_outbox_events() -> None:
@@ -86,18 +191,30 @@ def _create_outbox_events() -> None:
     )
 
 
-def _ensure_outbox_events() -> None:
-    if context.is_offline_mode():
-        _create_outbox_events()
-        return
-    if not sa.inspect(op.get_bind()).has_table("outbox_events"):
-        _create_outbox_events()
-
-
 def upgrade() -> None:
-    _ensure_outbox_events()
     if context.is_offline_mode():
+        if op.get_context().dialect.name != "postgresql":
+            raise RuntimeError(
+                f"Migration {revision}: offline SQL is supported only for PostgreSQL"
+            )
+        op.execute(
+            sa.text(
+                "DO $finance_0021$ BEGIN "
+                "IF to_regclass(current_schema() || '.outbox_events') IS NOT NULL THEN "
+                "RAISE EXCEPTION 'Migration 20260919_0021 offline SQL supports only a fresh "
+                "outbox_events path; use online Alembic for a preexisting table'; "
+                "END IF; "
+                "IF to_regclass(current_schema() || '.finance_alembic_object_ownership') "
+                "IS NOT NULL THEN "
+                "RAISE EXCEPTION 'Migration 20260919_0021 ownership table already exists'; "
+                "END IF; END $finance_0021$;"
+            )
+        )
+        _create_ownership_table()
+        _create_outbox_events()
+        _record_owned("table", "outbox_events")
         op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
+        _record_owned("column", "outbox_events.deduplication_key")
         op.create_index(
             "uq_outbox_events_deduplication_key",
             "outbox_events",
@@ -106,13 +223,26 @@ def upgrade() -> None:
             postgresql_where=sa.text("deduplication_key IS NOT NULL"),
             sqlite_where=sa.text("deduplication_key IS NOT NULL"),
         )
+        _record_owned("index", "uq_outbox_events_deduplication_key")
         _create_recommendation_tables()
         return
+
     inspector = sa.inspect(op.get_bind())
-    columns = {column["name"] for column in inspector.get_columns("outbox_events")}
+    if inspector.has_table(OWNERSHIP_TABLE):
+        raise RuntimeError(f"Migration {revision}: ownership table already exists")
+    outbox_exists = inspector.has_table("outbox_events")
+    if outbox_exists:
+        columns, indexes = _validate_existing_outbox(inspector)
+    else:
+        columns, indexes = set(), set()
+
+    _create_ownership_table()
+    if not outbox_exists:
+        _create_outbox_events()
+        _record_owned("table", "outbox_events")
     if "deduplication_key" not in columns:
         op.add_column("outbox_events", sa.Column("deduplication_key", sa.Text(), nullable=True))
-    indexes = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("outbox_events")}
+        _record_owned("column", "outbox_events.deduplication_key")
     if "uq_outbox_events_deduplication_key" not in indexes:
         op.create_index(
             "uq_outbox_events_deduplication_key",
@@ -122,6 +252,7 @@ def upgrade() -> None:
             postgresql_where=sa.text("deduplication_key IS NOT NULL"),
             sqlite_where=sa.text("deduplication_key IS NOT NULL"),
         )
+        _record_owned("index", "uq_outbox_events_deduplication_key")
     _create_recommendation_tables()
 
 
@@ -319,6 +450,72 @@ def downgrade() -> None:
     op.drop_index("ix_recommendation_jobs_status_created", table_name="recommendation_jobs")
     op.drop_index("ix_recommendation_jobs_owner_created", table_name="recommendation_jobs")
     op.drop_table("recommendation_jobs")
-    op.drop_index("uq_outbox_events_deduplication_key", table_name="outbox_events")
-    op.drop_column("outbox_events", "deduplication_key")
-    # The core outbox table is retained because it is not owned by the investment slice.
+    if context.is_offline_mode():
+        if op.get_context().dialect.name != "postgresql":
+            raise RuntimeError(
+                f"Migration {revision}: offline SQL is supported only for PostgreSQL"
+            )
+        op.execute(
+            sa.text(
+                "DO $finance_0021$ DECLARE owns_table boolean; owns_column boolean; "
+                "owns_index boolean; BEGIN "
+                "IF to_regclass(current_schema() || '.finance_alembic_object_ownership') "
+                "IS NULL THEN "
+                "RAISE NOTICE 'Migration 20260919_0021 ownership is unknown; preserving "
+                "outbox_events and deduplication objects'; RETURN; END IF; "
+                "SELECT EXISTS (SELECT 1 FROM finance_alembic_object_ownership "
+                "WHERE revision_id='20260919_0021' AND object_type='table' "
+                "AND object_name='outbox_events') INTO owns_table; "
+                "SELECT EXISTS (SELECT 1 FROM finance_alembic_object_ownership "
+                "WHERE revision_id='20260919_0021' AND object_type='column' "
+                "AND object_name='outbox_events.deduplication_key') INTO owns_column; "
+                "SELECT EXISTS (SELECT 1 FROM finance_alembic_object_ownership "
+                "WHERE revision_id='20260919_0021' AND object_type='index' "
+                "AND object_name='uq_outbox_events_deduplication_key') INTO owns_index; "
+                "IF owns_table THEN DROP TABLE outbox_events; ELSE "
+                "IF owns_index THEN DROP INDEX IF EXISTS uq_outbox_events_deduplication_key; "
+                "END IF; "
+                "IF owns_column THEN ALTER TABLE outbox_events DROP COLUMN deduplication_key; "
+                "END IF; END IF; "
+                "DROP TABLE finance_alembic_object_ownership; END $finance_0021$;"
+            )
+        )
+        return
+
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table(OWNERSHIP_TABLE):
+        # Revisions applied before ownership tracking have no reliable provenance.
+        # Preserve their outbox objects rather than risk deleting a preexisting table.
+        return
+    owned = {
+        (row.object_type, row.object_name)
+        for row in op.get_bind()
+        .execute(
+            sa.text(
+                f"SELECT object_type, object_name FROM {OWNERSHIP_TABLE} "
+                "WHERE revision_id=:revision_id"
+            ),
+            {"revision_id": OWNERSHIP_REVISION},
+        )
+        .fetchall()
+    }
+    if ("table", "outbox_events") in owned:
+        op.drop_table("outbox_events")
+    else:
+        indexes = {
+            index["name"] for index in sa.inspect(op.get_bind()).get_indexes("outbox_events")
+        }
+        if (
+            ("index", "uq_outbox_events_deduplication_key") in owned
+            and "uq_outbox_events_deduplication_key" in indexes
+        ):
+            op.drop_index("uq_outbox_events_deduplication_key", table_name="outbox_events")
+        columns = {
+            column["name"] for column in sa.inspect(op.get_bind()).get_columns("outbox_events")
+        }
+        if (
+            ("column", "outbox_events.deduplication_key") in owned
+            and "deduplication_key" in columns
+        ):
+            op.drop_column("outbox_events", "deduplication_key")
+    op.drop_table(OWNERSHIP_TABLE)
