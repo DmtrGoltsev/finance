@@ -1,0 +1,183 @@
+name: Finance Production Read-Only Inventory
+run-name: finance-inventory-${{ inputs.phase || 'verify' }}-${{ inputs.bootstrap_run_id || 'none' }}
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/finance-prod-readonly-inventory.yml
+      - ops/finance-prod-inventory/**
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "bootstrap on main; inventory is dispatched only by GITHUB_TOKEN"
+        required: true
+        type: choice
+        default: bootstrap
+        options: [bootstrap, inventory]
+      confirm_readonly_inventory:
+        description: "For bootstrap, enter finance-readonly-inventory"
+        required: false
+        type: string
+      bootstrap_run_id:
+        description: "Set only by bootstrap dispatch"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML==6.0.3
+      - run: |
+          bash -n ops/finance-prod-inventory/bootstrap.sh
+          bash -n ops/finance-prod-inventory/inventory.sh
+      - run: python -m unittest discover -s ops/finance-prod-inventory -p 'test_*.py' -v
+
+  bootstrap:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.phase == 'bootstrap' &&
+          github.ref == 'refs/heads/main' &&
+          github.actor == 'DmtrGoltsev' &&
+          github.run_attempt == 1 &&
+          inputs.confirm_readonly_inventory == 'finance-readonly-inventory' &&
+          inputs.bootstrap_run_id == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Create temporary ref, dispatch inventory, wait, and clean up
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ops/finance-prod-inventory/bootstrap.sh
+
+  validate-inventory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.phase == 'inventory' &&
+          github.actor == 'github-actions[bot]' &&
+          github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify temporary ref and owner-started bootstrap run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINANCE_BOOTSTRAP_RUN_ID: ${{ inputs.bootstrap_run_id }}
+          FINANCE_PHASE: ${{ inputs.phase }}
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="${PYTHON_BIN:-python3}"
+          [[ "${FINANCE_PHASE}" == inventory ]]
+          [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch ]]
+          [[ "${GITHUB_ACTOR}" == 'github-actions[bot]' ]]
+          [[ "${GITHUB_RUN_ATTEMPT}" == 1 ]]
+          [[ "${FINANCE_BOOTSTRAP_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${GITHUB_REF}" == "refs/heads/prod/release-inventory-${FINANCE_BOOTSTRAP_RUN_ID}" ]]
+          workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/finance-prod-readonly-inventory.yml" --jq '.id')"
+          bootstrap_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FINANCE_BOOTSTRAP_RUN_ID}")"
+          inventory_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
+          "${PYTHON_BIN}" -c '
+          import json, sys
+          bootstrap, inventory = map(json.loads, sys.argv[1:3])
+          sha, workflow_id, bootstrap_id, inventory_id = sys.argv[3:]
+          valid = (
+              bootstrap.get("id") == int(bootstrap_id)
+              and bootstrap.get("event") == "workflow_dispatch"
+              and bootstrap.get("head_branch") == "main"
+              and bootstrap.get("head_sha") == sha
+              and bootstrap.get("actor", {}).get("login") == "DmtrGoltsev"
+              and bootstrap.get("status") == "in_progress"
+              and bootstrap.get("workflow_id") == int(workflow_id)
+              and bootstrap.get("display_title") == "finance-inventory-bootstrap-none"
+              and bootstrap.get("run_attempt") == 1
+              and inventory.get("id") == int(inventory_id)
+              and inventory.get("event") == "workflow_dispatch"
+              and inventory.get("head_branch") == "prod/release-inventory-" + bootstrap_id
+              and inventory.get("head_sha") == sha
+              and inventory.get("actor", {}).get("login") == "github-actions[bot]"
+              and inventory.get("workflow_id") == int(workflow_id)
+              and inventory.get("display_title") == "finance-inventory-inventory-" + bootstrap_id
+              and inventory.get("run_attempt") == 1
+          )
+          sys.exit(0 if valid else 1)
+          ' "${bootstrap_run}" "${inventory_run}" "${GITHUB_SHA}" "${workflow_id}" "${FINANCE_BOOTSTRAP_RUN_ID}" "${GITHUB_RUN_ID}"
+          echo 'Owner-started main bootstrap and exact temporary ref verified.'
+
+  inventory:
+    if: ${{ needs.validate-inventory.result == 'success' }}
+    needs: validate-inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment:
+      name: production
+      deployment: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run pinned read-only host inventory
+        shell: bash
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          [[ "${HEXCORE_PROD_SSH_PORT}" =~ ^[0-9]{1,5}$ ]]
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/finance_inventory_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/finance_inventory_key ~/.ssh/known_hosts' EXIT
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/finance_inventory_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+          if ! ssh -i ~/.ssh/finance_inventory_key \
+              -p "${HEXCORE_PROD_SSH_PORT}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ConnectTimeout=10 \
+              "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+              'bash -s' < ops/finance-prod-inventory/inventory.sh \
+              > finance-inventory.txt 2>/dev/null; then
+            echo '::error::Pinned read-only inventory failed; no host output published.'
+            exit 1
+          fi
+          python3 ops/finance-prod-inventory/validate_output.py finance-inventory.txt
+          cat finance-inventory.txt
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-readonly-inventory-${{ github.run_id }}
+          path: finance-inventory.txt
+          retention-days: 14
