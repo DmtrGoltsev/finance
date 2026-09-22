@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OPS = Path(__file__).resolve().parent
 WORKFLOW = ROOT / ".github/workflows/finance-prod-readonly-inventory.yml"
 DEPLOY_WORKFLOW = ROOT / ".github/workflows/finance-hexcore-prod-deploy.yml"
+REQUIRED_CI_WORKFLOW = ROOT / ".github/workflows/ios-build.yml"
 
 
 def bash() -> str:
@@ -101,6 +102,17 @@ class InventoryEvidenceTests(unittest.TestCase):
 
 
 class WorkflowGuardTests(unittest.TestCase):
+    def test_branch_protection_jobs_run_for_every_pull_request(self) -> None:
+        workflow = yaml.load(REQUIRED_CI_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        self.assertIn("pull_request", workflow["on"])
+        self.assertNotIn("paths", workflow["on"]["pull_request"] or {})
+        self.assertNotIn("paths-ignore", workflow["on"]["pull_request"] or {})
+        self.assertIn("backend-auth-and-migration-gates", workflow["jobs"])
+        self.assertEqual(
+            workflow["jobs"]["build-and-test"]["needs"],
+            "backend-auth-and-migration-gates",
+        )
+
     def test_deploy_blocks_inventory_ref_before_any_other_job(self) -> None:
         workflow = yaml.load(DEPLOY_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         jobs = workflow["jobs"]
