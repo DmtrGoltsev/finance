@@ -66,27 +66,49 @@ print(run_id)
 }
 
 echo "Inventory run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${inventory_id}"
-for attempt in {1..126}; do
-  run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${inventory_id}")"
-  status="$("$PYTHON_BIN" -c '
-import json, sys
-run = json.load(sys.stdin)
-valid = (run.get("id") == int(sys.argv[1])
-         and run.get("event") == "workflow_dispatch"
-         and run.get("head_branch") == sys.argv[2]
-         and run.get("head_sha") == sys.argv[3]
-         and run.get("actor", {}).get("login") == "github-actions[bot]"
-         and run.get("display_title") == "finance-inventory-inventory-" + sys.argv[4]
-         and run.get("run_attempt") == 1)
-if not valid:
-    sys.exit("dispatched run metadata mismatch")
-print(run["status"])
-' "$inventory_id" "$branch" "$GITHUB_SHA" "$GITHUB_RUN_ID" <<< "$run")" || {
-    echo "::error::Dispatched run metadata mismatch. Preserve ${ref} for verified teardown."
+poll_limit="${FINANCE_INVENTORY_POLL_LIMIT:-126}"
+poll_interval="${FINANCE_INVENTORY_POLL_INTERVAL_SECONDS:-10}"
+[[ "$poll_limit" =~ ^[1-9][0-9]*$ && "$poll_limit" -le 126 ]]
+[[ "$poll_interval" =~ ^[0-9]+$ && "$poll_interval" -le 10 ]]
+rejected=no
+terminal_seen=no
+last_issue=''
+for ((attempt=1; attempt<=poll_limit; attempt++)); do
+  if run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${inventory_id}" 2>/dev/null)"; then
+    if result="$(printf '%s' "$run" | "$PYTHON_BIN" ops/finance-prod-inventory/check_run_metadata.py \
+      "$inventory_id" "$branch" "$GITHUB_SHA" "$GITHUB_RUN_ID")"; then
+      IFS=$'\t' read -r state field terminal conclusion <<< "$result"
+    else
+      state=contradictory field=response terminal=unknown conclusion=unknown
+    fi
+  else
+    state=incomplete field=response terminal=unknown conclusion=unknown
+  fi
+
+  if [[ "$state" != ready ]]; then
+    if [[ "$state:$field" != "$last_issue" ]]; then
+      if [[ "$state" == contradictory ]]; then
+        echo "::error::Run metadata ${field}: ${state}."
+      else
+        echo "Run metadata ${field}: ${state}."
+      fi
+      last_issue="$state:$field"
+    fi
+    if [[ "$state" == contradictory ]]; then
+      rejected=yes
+    fi
+  else
+    last_issue=''
+  fi
+  if [[ "$terminal" == completed ]]; then
+    terminal_seen=yes
+  fi
+  if [[ "$terminal_seen" == yes && "$rejected" == yes ]]; then
+    cleanup_if_owned
+    echo '::error::Dispatched run provenance contradicted expected identity.'
     exit 1
-  }
-  if [[ "$status" == completed ]]; then
-    conclusion="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["conclusion"])' <<< "$run")"
+  fi
+  if [[ "$state" == ready && "$terminal" == completed ]]; then
     cleanup_if_owned
     if [[ "$conclusion" != success ]]; then
       echo "::error::Inventory concluded ${conclusion}."
@@ -95,8 +117,15 @@ print(run["status"])
     echo 'Inventory completed and temporary ref removed.'
     exit 0
   fi
-  sleep 10
+  if ((attempt < poll_limit)); then
+    sleep "$poll_interval"
+  fi
 done
 
-echo "::error::Inventory did not complete within the bounded wait. Preserve ${ref} for verified teardown."
+if [[ "$terminal_seen" == yes ]]; then
+  cleanup_if_owned
+  echo '::error::Inventory metadata stayed incomplete after terminal run; owned ref removed.'
+else
+  echo "::error::Inventory did not reach a verified terminal state. Preserve ${ref} for verified teardown."
+fi
 exit 1
