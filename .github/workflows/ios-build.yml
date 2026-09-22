@@ -68,7 +68,7 @@ jobs:
           set -o pipefail
           python -m alembic -c alembic.ini heads | tee /tmp/alembic-heads.txt
           test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
-          grep -q '^20260822_0019 ' /tmp/alembic-heads.txt
+          grep -q '^20260921_0025 ' /tmp/alembic-heads.txt
 
   build-and-test:
     runs-on: macos-15
