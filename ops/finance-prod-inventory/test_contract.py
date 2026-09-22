@@ -31,7 +31,7 @@ def bash() -> str:
 class InventoryEvidenceTests(unittest.TestCase):
     def valid_data(self) -> bytes:
         values = {key: next(iter(allowed)) for key, allowed in FIELDS.items()}
-        values["schema"] = "finance_inventory_v4"
+        values["schema"] = "finance_inventory_v5"
         return "".join(f"{key}={value}\n" for key, value in values.items()).encode()
 
     def test_host_script_emits_complete_fixed_schema(self) -> None:
@@ -76,8 +76,8 @@ class InventoryEvidenceTests(unittest.TestCase):
         valid = self.valid_data()
         for bad in (
             valid + b"extra_field=yes\n",
-            valid + b"schema=finance_inventory_v4\n",
-            valid.replace(b"schema=finance_inventory_v4\n", b""),
+            valid + b"schema=finance_inventory_v5\n",
+            valid.replace(b"schema=finance_inventory_v5\n", b""),
             valid.replace(b"provider_credential_presence=unknown", b"provider_credential_presence=secret"),
             valid.replace(b"backend_current_scope=", b"backend_current_scope=/opt/finance/"),
             valid + b"password=not-a-secret\n",
@@ -109,6 +109,19 @@ class InventoryEvidenceTests(unittest.TestCase):
             ("nginx_service_state", "not_found", "public"),
             ("listener_8000", "non_loopback", "0.0.0.0:8000"),
             ("backend_env_deepseek_name_present", "yes", "present:SECRET"),
+            ("node_version", "22.16.0", "v22;secret"),
+            ("npm_version", "11.4.2", "11.4.2 /tmp"),
+            ("apt_cached_node24_available", "yes", "24.0.0"),
+            ("opt_total_bytes", "4294967296", "4GiB"),
+            ("postgres_available_inodes", "12345", "12k"),
+            ("backup_available_bytes", "1073741824", "1GiB"),
+            ("opt_mount_target", "/", "/private/mount"),
+            ("postgres_mount_fstype", "ext4", "ext4;id"),
+            ("finance_prior_releases_bytes", "123456789", "../release"),
+            ("postgres_wal_bytes", "12345", "base64"),
+            ("finance_backend_main_cpu_percent", "0.4", "0.4;id"),
+            ("finance_db_size_bytes", "987654321", "DB_PASSWORD"),
+            ("postgres_max_connections", "100", "100;id"),
         ):
             old = f"{key}={next(iter(FIELDS[key]))}\n".encode()
             self.assertEqual(parse_inventory(valid.replace(old, f"{key}={accepted}\n".encode()))[key], accepted)
@@ -129,6 +142,10 @@ class InventoryEvidenceTests(unittest.TestCase):
             "sudo -n docker",
             "SELECT *",
             "pg_dump --format",
+            "SELECT * FROM",
+            "apt-get update",
+            "sudo -n apt",
+            "/proc/$pid/environ",
         ):
             self.assertNotIn(forbidden, source)
         for required in (
@@ -136,6 +153,8 @@ class InventoryEvidenceTests(unittest.TestCase):
             "to_regclass('public.outbox_events')",
             "PYTHONDONTWRITEBYTECODE=1",
             "dotenv_values('/etc/finance/backend.env')",
+            "pg_database_size(current_database())",
+            "SHOW max_connections",
         ):
             self.assertIn(required, source)
 
