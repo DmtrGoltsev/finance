@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from check_run_metadata import inspect_run
 from validate_output import FIELDS, parse_inventory
 
 
@@ -309,13 +310,20 @@ class WorkflowGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             calls = directory / "calls"
+            marker = directory / "first-run-read"
             fake_gh = directory / "gh"
             fake_gh.write_text(
                 "#!/usr/bin/env bash\n"
                 "printf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
                 "case \"$*\" in\n"
                 "  *'/dispatches'*) printf '%s\\n' \"$FAKE_DISPATCH_RESPONSE\" ;;\n"
-                "  *'/actions/runs/456'*) printf '%s\\n' \"$FAKE_INVENTORY_RUN_JSON\" ;;\n"
+                "  *'/actions/runs/456'*)\n"
+                "    if [[ -n \"${FAKE_FIRST_RUN_JSON:-}\" && ! -e \"$GH_RUN_MARKER\" ]]; then\n"
+                "      : > \"$GH_RUN_MARKER\"\n"
+                "      printf '%s\\n' \"$FAKE_FIRST_RUN_JSON\"\n"
+                "    else\n"
+                "      printf '%s\\n' \"$FAKE_INVENTORY_RUN_JSON\"\n"
+                "    fi ;;\n"
                 "  *'/git/ref/heads/prod/release-inventory-123'*) echo \"${FAKE_REMOTE_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}\" ;;\n"
                 "esac\n",
                 encoding="ascii",
@@ -325,6 +333,7 @@ class WorkflowGuardTests(unittest.TestCase):
             env.update(
                 {
                     "GH_CALLS": str(calls),
+                    "GH_RUN_MARKER": str(marker),
                     "GH_TOKEN": "ci-only",
                     "GITHUB_REF": "refs/heads/main",
                     "GITHUB_RUN_ID": "123",
@@ -332,6 +341,8 @@ class WorkflowGuardTests(unittest.TestCase):
                     "GITHUB_SHA": "a" * 40,
                     "GITHUB_REPOSITORY": "test/finance",
                     "PYTHON_BIN": sys.executable.replace("\\", "/"),
+                    "FINANCE_INVENTORY_POLL_LIMIT": "3",
+                    "FINANCE_INVENTORY_POLL_INTERVAL_SECONDS": "0",
                     "PATH": str(directory) + os.pathsep + env.get("PATH", ""),
                 }
             )
@@ -357,6 +368,22 @@ class WorkflowGuardTests(unittest.TestCase):
             self.assertIn("-X POST repos/test/finance/actions/workflows/finance-prod-readonly-inventory.yml/dispatches", text)
             self.assertIn("-X DELETE repos/test/finance/git/refs/heads/prod/release-inventory-123", text)
             self.assertNotIn("/runs?branch=", text)
+
+            calls.write_text("", encoding="ascii")
+            marker.unlink(missing_ok=True)
+            partial = json.loads(env["FAKE_INVENTORY_RUN_JSON"])
+            partial["actor"] = None
+            partial["status"] = "in_progress"
+            partial["conclusion"] = None
+            env["FAKE_FIRST_RUN_JSON"] = json.dumps(partial)
+            recovered = subprocess.run(
+                [bash(), str(OPS / "bootstrap.sh")], env=env,
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertIn("Run metadata actor: incomplete.", recovered.stdout)
+            self.assertIn("-X DELETE", calls.read_text(encoding="ascii"))
+            env.pop("FAKE_FIRST_RUN_JSON")
 
             calls.write_text("", encoding="ascii")
             env["FAKE_REMOTE_SHA"] = "b" * 40
@@ -395,7 +422,56 @@ class WorkflowGuardTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=15,
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertNotIn("-X DELETE", calls.read_text(encoding="ascii"))
+            self.assertIn("Run metadata actor: contradictory.", rejected.stdout)
+            self.assertNotIn("foreign-user", rejected.stdout)
+            self.assertIn("-X DELETE", calls.read_text(encoding="ascii"))
+
+            calls.write_text("", encoding="ascii")
+            marker.unlink(missing_ok=True)
+            env["FAKE_FIRST_RUN_JSON"] = json.dumps({**partial, "actor": {"login": "foreign-user"}})
+            env["FAKE_INVENTORY_RUN_JSON"] = json.dumps({**bad, "actor": {"login": "github-actions[bot]"}})
+            contradicted = subprocess.run(
+                [bash(), str(OPS / "bootstrap.sh")], env=env,
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertNotEqual(contradicted.returncode, 0)
+            self.assertIn("Run metadata actor: contradictory.", contradicted.stdout)
+            self.assertIn("-X DELETE", calls.read_text(encoding="ascii"))
+            env.pop("FAKE_FIRST_RUN_JSON")
+
+            for terminal, deletes in (("in_progress", False), ("completed", True)):
+                with self.subTest(terminal=terminal):
+                    calls.write_text("", encoding="ascii")
+                    incomplete = dict(partial)
+                    incomplete["status"] = terminal
+                    env["FAKE_INVENTORY_RUN_JSON"] = json.dumps(incomplete)
+                    timed_out = subprocess.run(
+                        [bash(), str(OPS / "bootstrap.sh")], env=env,
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertNotEqual(timed_out.returncode, 0)
+                    self.assertEqual("-X DELETE" in calls.read_text(encoding="ascii"), deletes)
+
+    def test_run_metadata_classifier_rejects_wrong_identity_and_malformed_values(self) -> None:
+        expected = (456, "prod/release-inventory-123", "a" * 40, "123")
+        base = {
+            "id": 456, "event": "workflow_dispatch", "head_branch": expected[1],
+            "head_sha": expected[2], "actor": {"login": "github-actions[bot]"},
+            "display_title": "finance-inventory-inventory-123", "run_attempt": 1,
+            "status": "completed", "conclusion": "success",
+        }
+        for field, value in (
+            ("id", 789), ("event", "push"), ("head_branch", "main"),
+            ("head_sha", "b" * 40), ("actor", {"login": "foreign-user"}),
+            ("display_title", "finance-inventory-bootstrap-none"), ("run_attempt", 2),
+        ):
+            with self.subTest(field=field):
+                changed = {**base, field: value}
+                self.assertEqual(inspect_run(json.dumps(changed), *expected)[:2], ("contradictory", field))
+        self.assertEqual(inspect_run('{"id":456,"id":456}', *expected)[:2], ("contradictory", "response"))
+        self.assertEqual(inspect_run(json.dumps({**base, "status": []}), *expected)[:2], ("contradictory", "status"))
+        mixed = {**base, "event": None, "actor": {"login": "foreign-user"}}
+        self.assertEqual(inspect_run(json.dumps(mixed), *expected)[:2], ("contradictory", "actor"))
 
 
 if __name__ == "__main__":
