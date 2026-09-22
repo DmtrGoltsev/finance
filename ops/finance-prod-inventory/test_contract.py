@@ -31,7 +31,7 @@ def bash() -> str:
 class InventoryEvidenceTests(unittest.TestCase):
     def valid_data(self) -> bytes:
         values = {key: next(iter(allowed)) for key, allowed in FIELDS.items()}
-        values["schema"] = "finance_inventory_v2"
+        values["schema"] = "finance_inventory_v3"
         return "".join(f"{key}={value}\n" for key, value in values.items()).encode()
 
     def test_host_script_emits_complete_fixed_schema(self) -> None:
@@ -76,8 +76,8 @@ class InventoryEvidenceTests(unittest.TestCase):
         valid = self.valid_data()
         for bad in (
             valid + b"extra_field=yes\n",
-            valid + b"schema=finance_inventory_v2\n",
-            valid.replace(b"schema=finance_inventory_v2\n", b""),
+            valid + b"schema=finance_inventory_v3\n",
+            valid.replace(b"schema=finance_inventory_v3\n", b""),
             valid.replace(b"provider_credential_presence=unknown", b"provider_credential_presence=secret"),
             valid.replace(b"backend_current_scope=", b"backend_current_scope=/opt/finance/"),
             valid + b"password=not-a-secret\n",
@@ -87,6 +87,22 @@ class InventoryEvidenceTests(unittest.TestCase):
             with self.subTest(bad=bad[-50:]):
                 with self.assertRaises(ValueError):
                     parse_inventory(bad)
+
+    def test_bounded_identity_and_http_values(self) -> None:
+        valid = self.valid_data()
+        for key, accepted, rejected in (
+            ("hostname_sha256", "a" * 64, "a" * 63),
+            ("ssh_user", "deploy-n8n", "root;id"),
+            ("backend_service_user", "finance_backend", "finance backend"),
+            ("backend_service_group", "www-data", "../../etc"),
+            ("docker_socket_group", "docker", "docker group"),
+            ("backend_8081_http_status", "200", "999"),
+            ("n8n_5678_http_status", "404", "200;token"),
+        ):
+            old = f"{key}={next(iter(FIELDS[key]))}\n".encode()
+            self.assertEqual(parse_inventory(valid.replace(old, f"{key}={accepted}\n".encode()))[key], accepted)
+            with self.assertRaises(ValueError):
+                parse_inventory(valid.replace(old, f"{key}={rejected}\n".encode()))
 
     def test_no_secret_values_are_read_by_host_script(self) -> None:
         source = (OPS / "inventory.sh").read_text(encoding="utf-8")
@@ -98,6 +114,7 @@ class InventoryEvidenceTests(unittest.TestCase):
             ". /etc/finance",
             "printenv",
             "/proc/",
+            "sudo -n docker",
         ):
             self.assertNotIn(forbidden, source)
 
