@@ -11,6 +11,8 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 branch="prod/release-inventory-${GITHUB_RUN_ID}"
 ref="refs/heads/${branch}"
 workflow='finance-prod-readonly-inventory.yml'
+workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}" --jq '.id')"
+[[ "$workflow_id" =~ ^[1-9][0-9]*$ ]]
 created=no
 dispatched=no
 
@@ -76,7 +78,7 @@ last_issue=''
 for ((attempt=1; attempt<=poll_limit; attempt++)); do
   if run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${inventory_id}" 2>/dev/null)"; then
     if result="$(printf '%s' "$run" | "$PYTHON_BIN" ops/finance-prod-inventory/check_run_metadata.py \
-      "$inventory_id" "$branch" "$GITHUB_SHA" "$GITHUB_RUN_ID")"; then
+      "$inventory_id" "$branch" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$workflow_id")"; then
       IFS=$'\t' read -r state field terminal conclusion <<< "$result"
     else
       state=contradictory field=response terminal=unknown conclusion=unknown
