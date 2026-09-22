@@ -20,7 +20,9 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def inspect_run(raw: str, run_id: int, branch: str, sha: str, bootstrap_id: str) -> tuple[str, str, str, str]:
+def inspect_run(
+    raw: str, run_id: int, branch: str, sha: str, bootstrap_id: str, workflow_id: int
+) -> tuple[str, str, str, str]:
     try:
         run = json.loads(raw, object_pairs_hook=unique_object)
     except (ValueError, TypeError):
@@ -51,7 +53,7 @@ def inspect_run(raw: str, run_id: int, branch: str, sha: str, bootstrap_id: str)
         ("head_branch", run.get("head_branch"), branch),
         ("head_sha", run.get("head_sha"), sha),
         ("actor", actor_login, "github-actions[bot]"),
-        ("display_title", run.get("display_title"), "finance-inventory-inventory-" + bootstrap_id),
+        ("workflow_id", run.get("workflow_id"), workflow_id),
         ("run_attempt", run.get("run_attempt"), 1),
     )
     missing = None
@@ -66,6 +68,15 @@ def inspect_run(raw: str, run_id: int, branch: str, sha: str, bootstrap_id: str)
         return "contradictory", "status", "unknown", "unknown"
     if missing:
         return "incomplete", missing, terminal, safe_conclusion
+    title = run.get("display_title")
+    if title is None or title == "":
+        state = "contradictory" if terminal == "completed" else "incomplete"
+        return state, "display_title", terminal, safe_conclusion
+    if not isinstance(title, str):
+        return "contradictory", "display_title", terminal, safe_conclusion
+    if title != "finance-inventory-inventory-" + bootstrap_id:
+        state = "contradictory" if terminal == "completed" else "incomplete"
+        return state, "display_title", terminal, safe_conclusion
     if status is None or status == "":
         return "incomplete", "status", "unknown", "unknown"
     if status == "completed" and safe_conclusion == "unknown":
@@ -76,5 +87,7 @@ def inspect_run(raw: str, run_id: int, branch: str, sha: str, bootstrap_id: str)
 
 
 if __name__ == "__main__":
-    state = inspect_run(sys.stdin.read(), int(sys.argv[1]), *sys.argv[2:5])
+    state = inspect_run(
+        sys.stdin.read(), int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+    )
     print("\t".join(state))
