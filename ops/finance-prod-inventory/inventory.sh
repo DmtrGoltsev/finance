@@ -2,7 +2,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-echo 'schema=finance_inventory_v4'
+echo 'schema=finance_inventory_v5'
 
 flag() {
   local key="$1"
@@ -41,6 +41,63 @@ number_or_unknown() {
     printf '%s=%s\n' "$name" "$value"
   else
     printf '%s=unknown\n' "$name"
+  fi
+}
+
+version_or_unknown() {
+  local name="$1" value="$2"
+  if [[ "$value" =~ ^v?[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    printf '%s=%s\n' "$name" "${value#v}"
+  else
+    printf '%s=unknown\n' "$name"
+  fi
+}
+
+disk_numbers() {
+  local name="$1" path="$2" values
+  values="$(df -B1 --output=size,used,avail -- "$path" 2>/dev/null | awk 'NR == 2 {print $1, $2, $3}' || true)"
+  if [[ "$values" =~ ^([0-9]+)[[:space:]]([0-9]+)[[:space:]]([0-9]+)$ ]]; then
+    printf '%s_total_bytes=%s\n%s_used_bytes=%s\n%s_available_bytes=%s\n' "$name" "${BASH_REMATCH[1]}" "$name" "${BASH_REMATCH[2]}" "$name" "${BASH_REMATCH[3]}"
+  else
+    for part in total used available; do echo "${name}_${part}_bytes=unknown"; done
+  fi
+  values="$(df --output=itotal,iused,iavail -- "$path" 2>/dev/null | awk 'NR == 2 {print $1, $2, $3}' || true)"
+  if [[ "$values" =~ ^([0-9]+)[[:space:]]([0-9]+)[[:space:]]([0-9]+)$ ]]; then
+    printf '%s_total_inodes=%s\n%s_used_inodes=%s\n%s_available_inodes=%s\n' "$name" "${BASH_REMATCH[1]}" "$name" "${BASH_REMATCH[2]}" "$name" "${BASH_REMATCH[3]}"
+  else
+    for part in total used available; do echo "${name}_${part}_inodes=unknown"; done
+  fi
+}
+
+mount_numbers() {
+  local name="$1" path="$2" target fs device
+  read -r target fs device < <(findmnt -n -o TARGET,FSTYPE,MAJ:MIN --target "$path" 2>/dev/null || true) || true
+  case "$target" in /|/opt|/var|/var/lib|/var/lib/postgresql) printf '%s_mount_target=%s\n' "$name" "$target" ;; '') printf '%s_mount_target=unknown\n' "$name" ;; *) printf '%s_mount_target=other\n' "$name" ;; esac
+  case "$fs" in ext4|xfs|btrfs|zfs|overlay|tmpfs) printf '%s_mount_fstype=%s\n' "$name" "$fs" ;; '') printf '%s_mount_fstype=unknown\n' "$name" ;; *) printf '%s_mount_fstype=other\n' "$name" ;; esac
+  MOUNT_DEVICE=unknown
+  if [[ "$device" =~ ^[0-9]+:[0-9]+$ ]]; then MOUNT_DEVICE="$device"; fi
+}
+
+read_allocated() {
+  local path="$1" value
+  if test -e "$path" && value="$(du -sB1 -- "$path" 2>/dev/null)" && [[ "$value" =~ ^([0-9]+)[[:space:]] ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  else
+    printf 'unknown'
+  fi
+}
+
+service_process() {
+  local name="$1" service="$2" pid values
+  pid="$(systemctl show "$service" -p MainPID --value 2>/dev/null || true)"
+  values=''
+  if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+    values="$(ps -p "$pid" -o rss=,%cpu= 2>/dev/null | awk 'NR == 1 {print $1, $2}' || true)"
+  fi
+  if [[ "$values" =~ ^([0-9]+)[[:space:]]([0-9]+(\.[0-9]+)?)$ ]]; then
+    printf '%s_main_rss_kib=%s\n%s_main_cpu_percent=%s\n' "$name" "${BASH_REMATCH[1]}" "$name" "${BASH_REMATCH[2]}"
+  else
+    printf '%s_main_rss_kib=unknown\n%s_main_cpu_percent=unknown\n' "$name" "$name"
   fi
 }
 
@@ -142,8 +199,93 @@ case "$docker_candidate" in
   /snap/bin/docker) echo 'docker_candidate=snap_bin' ;;
   *) echo 'docker_candidate=none' ;;
 esac
+for program in node npm; do
+  if command -v "$program" >/dev/null 2>&1; then
+    printf '%s_available=yes\n' "$program"
+    version_or_unknown "${program}_version" "$("$program" --version 2>/dev/null || true)"
+  else
+    printf '%s_available=no\n%s_version=unknown\n' "$program" "$program"
+  fi
+done
+if command -v apt-cache >/dev/null 2>&1 && apt_versions="$(apt-cache madison nodejs 2>/dev/null)"; then
+  for major in 22 24; do
+    if awk -v major="$major" '$1 == "nodejs" && $2 == "|" && $3 ~ ("^" major "[.]") {found=1} END {exit !found}' <<< "$apt_versions"; then
+      printf 'apt_cached_node%s_available=yes\n' "$major"
+    else
+      printf 'apt_cached_node%s_available=no\n' "$major"
+    fi
+  done
+else
+  echo 'apt_cached_node22_available=unknown'
+  echo 'apt_cached_node24_available=unknown'
+fi
 number_or_unknown mem_total_kib "$(awk '$1 == "MemTotal:" {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
 number_or_unknown mem_available_kib "$(awk '$1 == "MemAvailable:" {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
+number_or_unknown mem_available_bytes "$(free -b 2>/dev/null | awk '$1 == "Mem:" {print $7; exit}' || true)"
+number_or_unknown swap_total_bytes "$(free -b 2>/dev/null | awk '$1 == "Swap:" {print $2; exit}' || true)"
+number_or_unknown swap_free_bytes "$(free -b 2>/dev/null | awk '$1 == "Swap:" {print $4; exit}' || true)"
+if command -v swapon >/dev/null 2>&1 && swap_sizes="$(swapon --show --bytes --noheadings --output=SIZE 2>/dev/null)"; then
+  if [[ -z "$swap_sizes" ]]; then
+    echo 'swapon_active=no'
+    echo 'swapon_total_bytes=0'
+  elif [[ "$swap_sizes" =~ ^[0-9[:space:]]+$ ]]; then
+    echo 'swapon_active=yes'
+    number_or_unknown swapon_total_bytes "$(awk '{sum += $1} END {printf "%.0f", sum}' <<< "$swap_sizes")"
+  else
+    echo 'swapon_active=unknown'
+    echo 'swapon_total_bytes=unknown'
+  fi
+else
+  echo 'swapon_active=unknown'
+  echo 'swapon_total_bytes=unknown'
+fi
+disk_numbers opt /opt
+disk_numbers postgres /var/lib/postgresql
+disk_numbers backup /opt/finance/backups/postgres
+MOUNT_DEVICE=unknown
+mount_numbers opt /opt
+opt_mount_device="$MOUNT_DEVICE"
+mount_numbers postgres /var/lib/postgresql
+if [[ "$opt_mount_device" == unknown || "$MOUNT_DEVICE" == unknown ]]; then
+  echo 'opt_postgres_same_device=unknown'
+elif [[ "$opt_mount_device" == "$MOUNT_DEVICE" ]]; then
+  echo 'opt_postgres_same_device=yes'
+else
+  echo 'opt_postgres_same_device=no'
+fi
+backend_release_target="$(readlink -f /opt/finance/current 2>/dev/null || true)"
+if [[ "$backend_release_target" == /opt/finance/releases/* ]] && test -d "$backend_release_target"; then
+  current_release_bytes="$(read_allocated "$backend_release_target")"
+else
+  current_release_bytes=unknown
+fi
+number_or_unknown finance_current_release_bytes "$current_release_bytes"
+releases_bytes="$(read_allocated /opt/finance/releases)"
+number_or_unknown finance_releases_total_bytes "$releases_bytes"
+if [[ "$releases_bytes" =~ ^[0-9]+$ && "$current_release_bytes" =~ ^[0-9]+$ ]] && (( releases_bytes >= current_release_bytes )); then
+  number_or_unknown finance_prior_releases_bytes "$((releases_bytes - current_release_bytes))"
+else
+  echo 'finance_prior_releases_bytes=unknown'
+fi
+number_or_unknown finance_backup_bytes "$(read_allocated /opt/finance/backups/postgres)"
+number_or_unknown postgres_data_bytes "$(read_allocated /var/lib/postgresql)"
+wal_bytes=unknown
+if test -d /var/lib/postgresql; then
+  mapfile -t wal_paths < <(find /var/lib/postgresql -mindepth 2 -maxdepth 4 -type d -name pg_wal 2>/dev/null)
+  if (( ${#wal_paths[@]} > 0 )); then
+    wal_bytes=0
+    for wal_path in "${wal_paths[@]}"; do
+      size="$(read_allocated "$wal_path")"
+      if [[ "$size" =~ ^[0-9]+$ ]]; then
+        wal_bytes="$((wal_bytes + size))"
+      else
+        wal_bytes=unknown
+        break
+      fi
+    done
+  fi
+fi
+number_or_unknown postgres_wal_bytes "$wal_bytes"
 for target in opt var_lib; do
   case "$target" in
     opt) path=/opt ;;
@@ -197,6 +339,9 @@ for service in docker n8n nginx caddy postgresql; do
   service_state "${service}_service_state" "${service}.service"
 done
 service_state finance_backend_service_state finance-backend.service
+service_process finance_backend finance-backend.service
+service_process postgresql postgresql.service
+service_process nginx nginx.service
 for service in finance-delivery finance-n8n finance-gateway; do
   state="$(systemctl show "${service}.service" -p LoadState --value 2>/dev/null || true)"
   if [[ "$state" == loaded ]]; then
@@ -267,11 +412,15 @@ async def probe():
             await connection.exec_driver_sql('SET TRANSACTION READ ONLY')
             versions = (await connection.exec_driver_sql('SELECT version_num FROM alembic_version')).scalars().all()
             outbox = (await connection.exec_driver_sql("SELECT to_regclass('public.outbox_events') IS NOT NULL")).scalar_one()
+            db_size = (await connection.exec_driver_sql('SELECT pg_database_size(current_database())')).scalar_one()
+            max_connections = (await connection.exec_driver_sql('SHOW max_connections')).scalar_one()
             await connection.rollback()
         revision = 'base' if not versions else versions[0] if len(versions) == 1 else None
         if not isinstance(revision, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', revision):
             raise SystemExit(1)
-        print(f'{revision} {"yes" if outbox else "no"}')
+        if not isinstance(db_size, int) or db_size < 0 or not str(max_connections).isdigit():
+            raise SystemExit(1)
+        print(f'{revision} {"yes" if outbox else "no"} {db_size} {max_connections}')
     finally:
         await engine.dispose()
 
@@ -279,12 +428,16 @@ asyncio.run(asyncio.wait_for(probe(), timeout=8))
 PY
 )"
 fi
-if [[ "$db_observation" =~ ^([A-Za-z0-9][A-Za-z0-9._-]{0,127})[[:space:]](yes|no)$ ]]; then
+if [[ "$db_observation" =~ ^([A-Za-z0-9][A-Za-z0-9._-]{0,127})[[:space:]](yes|no)[[:space:]]([0-9]+)[[:space:]]([0-9]+)$ ]]; then
   printf 'alembic_current=%s\n' "${BASH_REMATCH[1]}"
   printf 'outbox_table_present=%s\n' "${BASH_REMATCH[2]}"
+  printf 'finance_db_size_bytes=%s\n' "${BASH_REMATCH[3]}"
+  printf 'postgres_max_connections=%s\n' "${BASH_REMATCH[4]}"
 else
   echo 'alembic_current=unknown'
   echo 'outbox_table_present=unknown'
+  echo 'finance_db_size_bytes=unknown'
+  echo 'postgres_max_connections=unknown'
 fi
 
 flag backend_loopback_health curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8081/health
