@@ -61,7 +61,7 @@ disk_numbers() {
   else
     for part in total used available; do echo "${name}_${part}_bytes=unknown"; done
   fi
-  values="$(df -i --output=itotal,iused,iavail -- "$path" 2>/dev/null | awk 'NR == 2 {print $1, $2, $3}' || true)"
+  values="$(df --output=itotal,iused,iavail -- "$path" 2>/dev/null | awk 'NR == 2 {print $1, $2, $3}' || true)"
   if [[ "$values" =~ ^([0-9]+)[[:space:]]([0-9]+)[[:space:]]([0-9]+)$ ]]; then
     printf '%s_total_inodes=%s\n%s_used_inodes=%s\n%s_available_inodes=%s\n' "$name" "${BASH_REMATCH[1]}" "$name" "${BASH_REMATCH[2]}" "$name" "${BASH_REMATCH[3]}"
   else

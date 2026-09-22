@@ -72,6 +72,38 @@ class InventoryEvidenceTests(unittest.TestCase):
             self.assertEqual(parsed["backend_network_internal"], "yes")
             self.assertEqual(parsed["n8n_volume_exists"], "yes")
 
+    def test_inode_probe_uses_compatible_df_output_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            fake_df = directory / "df"
+            fake_df.write_text(
+                "#!/usr/bin/env bash\n"
+                "case \"$1\" in\n"
+                "  --output=itotal,iused,iavail) printf 'Inodes IUsed IFree\\n1000 250 750\\n' ;;\n"
+                "  -B1) printf '1B-blocks Used Avail\\n4096 1024 3072\\n' ;;\n"
+                "  -Pk) printf 'Filesystem 1024-blocks Used Available Capacity Mounted-on\\nfs 4 1 3 25%% /\\n' ;;\n"
+                "  *) exit 99 ;;\n"
+                "esac\n",
+                encoding="ascii",
+            )
+            fake_df.chmod(0o755)
+            shell_dir = str(directory)
+            if os.name == "nt":
+                shell_dir = subprocess.run(
+                    [bash(), "-c", 'cygpath -u "$1"', "probe", shell_dir],
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip()
+            result = subprocess.run(
+                [bash(), "-c", 'export PATH="$1:$PATH"; exec bash "$2"',
+                 "probe", shell_dir, str(OPS / "inventory.sh")],
+                capture_output=True, check=True,
+            )
+            parsed = parse_inventory(result.stdout)
+            for name in ("opt", "postgres", "backup"):
+                self.assertEqual(parsed[f"{name}_total_inodes"], "1000")
+                self.assertEqual(parsed[f"{name}_used_inodes"], "250")
+                self.assertEqual(parsed[f"{name}_available_inodes"], "750")
+
     def test_rejects_unknown_duplicate_missing_and_arbitrary_values(self) -> None:
         valid = self.valid_data()
         for bad in (
