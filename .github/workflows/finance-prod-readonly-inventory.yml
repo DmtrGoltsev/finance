@@ -1,0 +1,79 @@
+name: Finance Production Read-Only Inventory
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_readonly_inventory:
+        description: "Enter finance-readonly-inventory. No production changes are made."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finance-prod-readonly-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    if: >-
+      ${{ github.actor == 'DmtrGoltsev' &&
+          github.ref == 'refs/heads/codex/finance-prod-inventory-20260922' &&
+          inputs.confirm_readonly_inventory == 'finance-readonly-inventory' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    timeout-minutes: 10
+    steps:
+      - name: Check out inventory script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run pinned read-only host inventory
+        shell: bash
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          test -n "${HEXCORE_PROD_SSH_PRIVATE_KEY}"
+          test -n "${HEXCORE_PROD_SSH_KNOWN_HOSTS}"
+          [[ "${HEXCORE_PROD_SSH_PORT}" =~ ^[0-9]{1,5}$ ]]
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/finance_inventory_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/finance_inventory_key ~/.ssh/known_hosts' EXIT
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/finance_inventory_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+          if ! ssh -i ~/.ssh/finance_inventory_key \
+              -p "${HEXCORE_PROD_SSH_PORT}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ConnectTimeout=10 \
+              "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+              'bash -s' < ops/finance-prod-inventory/inventory.sh \
+              > finance-inventory.txt 2>/dev/null; then
+            echo '::error::Pinned read-only inventory failed; no host output published.'
+            exit 1
+          fi
+          if LC_ALL=C grep -Evq '^[A-Za-z][A-Za-z0-9_]*=[A-Za-z0-9._-]+$' finance-inventory.txt \
+              || ! grep -qx 'schema=finance_inventory_v1' finance-inventory.txt; then
+            echo '::error::Inventory output failed the fixed-format sanitizer.'
+            exit 1
+          fi
+          cat finance-inventory.txt
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-readonly-inventory-${{ github.run_id }}
+          path: finance-inventory.txt
+          retention-days: 14
