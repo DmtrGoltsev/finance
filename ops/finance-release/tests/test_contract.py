@@ -182,7 +182,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED", workflow)
         gate = workflow.split("  production-package-gate:", 1)[1].split("  host-preflight:", 1)[0]
         self.assertIn('if [ "${FINANCE_PRODUCTION_REQUESTED}" = "true" ]; then', gate)
-        self.assertIn('echo "::error::DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED', gate)
+        self.assertIn('DELIVERY_INSTALL_CONTRACT_UNVERIFIED / DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED', gate)
         self.assertIn('exit 1\n          else', gate)
         self.assertNotIn("FINANCE_DELIVERY_CONTRACT_APPROVED", gate)
         self.assertIn("- production-package-gate", workflow.split("  host-preflight:", 1)[1].split("  deploy-frontend:", 1)[0])
