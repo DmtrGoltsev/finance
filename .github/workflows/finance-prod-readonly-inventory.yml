@@ -1,34 +1,116 @@
 name: Finance Production Read-Only Inventory
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/finance-prod-readonly-inventory.yml
+      - ops/finance-prod-inventory/**
   workflow_dispatch:
     inputs:
-      confirm_readonly_inventory:
-        description: "Enter finance-readonly-inventory. No production changes are made."
+      phase:
+        description: "bootstrap on main; inventory is dispatched only by GITHUB_TOKEN"
         required: true
+        type: choice
+        default: bootstrap
+        options: [bootstrap, inventory]
+      confirm_readonly_inventory:
+        description: "For bootstrap, enter finance-readonly-inventory"
+        required: false
+        type: string
+      bootstrap_run_id:
+        description: "Set only by bootstrap dispatch"
+        required: false
         type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: finance-prod-readonly-inventory
-  cancel-in-progress: false
-
 jobs:
-  inventory:
-    if: >-
-      ${{ github.actor == 'DmtrGoltsev' &&
-          github.ref == 'refs/heads/codex/finance-prod-inventory-20260922' &&
-          inputs.confirm_readonly_inventory == 'finance-readonly-inventory' }}
+  verify:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML==6.0.3
+      - run: |
+          bash -n ops/finance-prod-inventory/bootstrap.sh
+          bash -n ops/finance-prod-inventory/inventory.sh
+      - run: python -m unittest discover -s ops/finance-prod-inventory -p 'test_*.py' -v
+
+  bootstrap:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.phase == 'bootstrap' &&
+          github.ref == 'refs/heads/main' &&
+          github.actor == 'DmtrGoltsev' &&
+          inputs.confirm_readonly_inventory == 'finance-readonly-inventory' &&
+          inputs.bootstrap_run_id == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Create temporary ref, dispatch inventory, wait, and clean up
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ops/finance-prod-inventory/bootstrap.sh
+
+  validate-inventory:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'inventory' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify temporary ref and owner-started bootstrap run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINANCE_BOOTSTRAP_RUN_ID: ${{ inputs.bootstrap_run_id }}
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="${PYTHON_BIN:-python3}"
+          [[ "${FINANCE_BOOTSTRAP_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${GITHUB_REF}" == "refs/heads/prod/release-inventory-${FINANCE_BOOTSTRAP_RUN_ID}" ]]
+          workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/finance-prod-readonly-inventory.yml" --jq '.id')"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FINANCE_BOOTSTRAP_RUN_ID}" |
+            "${PYTHON_BIN}" -c '
+          import json, sys
+          run = json.load(sys.stdin)
+          valid = (run.get("event") == "workflow_dispatch"
+                   and run.get("head_branch") == "main"
+                   and run.get("head_sha") == sys.argv[1]
+                   and run.get("actor", {}).get("login") == "DmtrGoltsev"
+                   and run.get("status") == "in_progress"
+                   and run.get("workflow_id") == int(sys.argv[2]))
+          sys.exit(0 if valid else 1)
+          ' "${GITHUB_SHA}" "${workflow_id}"
+          echo 'Owner-started main bootstrap and exact temporary ref verified.'
+
+  inventory:
+    if: ${{ needs.validate-inventory.result == 'success' }}
+    needs: validate-inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     environment:
       name: production
       deployment: false
-    timeout-minutes: 10
     steps:
-      - name: Check out inventory script
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - name: Run pinned read-only host inventory
@@ -65,11 +147,7 @@ jobs:
             echo '::error::Pinned read-only inventory failed; no host output published.'
             exit 1
           fi
-          if LC_ALL=C grep -Evq '^[A-Za-z][A-Za-z0-9_]*=[A-Za-z0-9._-]+$' finance-inventory.txt \
-              || ! grep -qx 'schema=finance_inventory_v1' finance-inventory.txt; then
-            echo '::error::Inventory output failed the fixed-format sanitizer.'
-            exit 1
-          fi
+          python3 ops/finance-prod-inventory/validate_output.py finance-inventory.txt
           cat finance-inventory.txt
       - name: Upload sanitized evidence
         uses: actions/upload-artifact@v4
