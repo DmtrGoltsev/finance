@@ -113,5 +113,7 @@ export async function externalRequest(raw, { provider = false, body = null, key 
 export async function internalCallback(path, body, headers, transport = requestBytes) {
   if (!/^\/api\/v[0-9]+\/investments\/internal\/recommendation-jobs\/[0-9a-f-]{36}\/callback$/.test(path)) fail('INVALID_CALLBACK_PATH');
   // The sole deliberate private destination is configuration-fixed, never model-selected.
-  return transport({ hostname: 'finance-backend', port: 8000, path, method: 'POST', agent: false, headers }, body, { request: http.request });
+  const port = Number(process.env.FINANCE_CALLBACK_PROXY_PORT);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) fail('CALLBACK_PROXY_PORT_INVALID', 503);
+  return transport({ hostname: 'finance-host-callback', port, path, method: 'POST', agent: false, headers }, body, { request: http.request });
 }

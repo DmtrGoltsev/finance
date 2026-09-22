@@ -2,7 +2,7 @@
 
 ## Запуск и проверки
 
-Порядок: PostgreSQL → шлюз → n8n → назначение Header Auth credential → импорт/активация проверенных workflow → подписанный `scripts/health.ps1` → worker Finance. Проверить отсутствие опубликованных портов PostgreSQL/gateway и внешний `404` для внутренних webhook.
+Порядок: утверждённый inventory → PostgreSQL → шлюз → n8n → Header Auth credential → импорт трёх неактивных workflow → переключение backend → публикация workflow → host worker → подписанные health и сквозная проверка. Проверить отсутствие опубликованных портов PostgreSQL/gateway и внешний `404` для внутренних webhook. Production-команды описаны в [`ops/finance-release/README.md`](../../finance-release/README.md).
 
 Мониторинг: готовность трёх контейнеров, возраст `queued`, просроченный захват, число `delivery_failed`, свободное место и наличие актуальных резервных копий. Содержимое очереди, HMAC-заголовки, ответы модели и пароли не журналировать. Доступ к редактору n8n только через loopback/SSH-туннель.
 

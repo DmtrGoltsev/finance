@@ -61,12 +61,15 @@
 `FINANCE_BACKEND_DELIVERY_INGRESS_SECRET` равен ключу входа gateway,
 но **не** ключу обратного вызова или служебному токену n8n.
 
-Для Compose задать внешние пути `FINANCE_DELIVERY_ENV_FILE` и
+Для локального Compose задать внешние пути `FINANCE_DELIVERY_ENV_FILE` и
 `FINANCE_DELIVERY_SECRETS_DIR`, затем выполнить `docker compose -f compose.yml config --quiet`.
 Контейнер не публикует порты. Подключается к существующей `finance_backend_internal`
 и отдельной сети исходящего трафика. Вход n8n должен быть активирован после импорта.
-При неконтейнерной установке тот же entrypoint можно запускать отдельной службой,
-задав внутренний URL n8n на localhost и доступ к основной БД.
+Production не использует контейнер worker. `finance-investment-worker.service`
+запускает `/opt/finance/current/venv/bin/python -m app.delivery.worker` от
+пользователя `finance` и обращается к n8n через `127.0.0.1:<n8n_port>`.
+Секреты находятся в `/etc/finance/delivery/worker.env`; порядок установки:
+[`ops/finance-release/README.md`](../finance-release/README.md).
 
 `/healthz` и `/metrics` на внутреннем порту 8091 не содержат данных портфеля.
 При остановленном цикле или ошибке БД здоровье становится отрицательным через 90 секунд.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -20,7 +20,18 @@ function cli(args) {
 }
 try {
   assert.equal(cli(['--version']).trim(), '2.39.8');
+  const credentialFile = join(profile, 'credential.json');
+  await writeFile(credentialFile, JSON.stringify([{ id: 'finance-gateway-token', name: 'Finance Gateway Internal Token',
+    type: 'httpHeaderAuth', data: { name: 'X-Finance-Gateway-Token', value: 'ci-only-gateway-token' } }]));
+  cli(['import:credentials', `--input="${credentialFile}"`]);
+  cli(['import:credentials', `--input="${credentialFile}"`]);
+  const credentialExport = join(profile, 'credential-export.json');
+  cli(['export:credentials', '--all', `--output="${credentialExport}"`]);
+  const importedCredentials = JSON.parse(await readFile(credentialExport, 'utf8'));
+  assert.deepEqual(importedCredentials.map(({ id, type }) => ({ id, type })),
+    [{ id: 'finance-gateway-token', type: 'httpHeaderAuth' }]);
   for (const file of (await readdir(join(root, 'workflows'))).filter((f) => f.endsWith('.json'))) {
+    cli(['import:workflow', `--input="${resolve(root, 'workflows', file)}"`]);
     cli(['import:workflow', `--input="${resolve(root, 'workflows', file)}"`]);
   }
   const exported = join(profile, 'export.json');
@@ -29,7 +40,11 @@ try {
   assert.equal(workflows.length, 3);
   assert.equal(new Set(workflows.map((w) => w.id)).size, 3);
   assert.ok(workflows.every((w) => w.active === false));
-  console.log('n8n@2.39.8 import:workflow/export:workflow PASS: 3 stable IDs, isolated SQLite profile, inactive.');
+  for (const workflow of workflows) {
+    cli(['publish:workflow', `--id=${workflow.id}`]);
+    cli(['publish:workflow', `--id=${workflow.id}`]);
+  }
+  console.log('n8n@2.39.8 credential import and three workflow import/publish PASS in isolated SQLite profile.');
 } finally {
   if (!profile.startsWith(join(tmpdir(), 'finance-n8n-import-'))) throw new Error('Unsafe cleanup path');
   await rm(profile, { recursive: true, force: true });

@@ -2,7 +2,7 @@ name: finance-n8n
 
 services:
   postgres:
-    image: postgres:16.10-alpine3.22
+    image: ${FINANCE_POSTGRES_IMAGE:?required}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${FINANCE_N8N_POSTGRES_DB:?required}
@@ -41,7 +41,7 @@ services:
     cpus: 0.75
 
   n8n:
-    image: ${FINANCE_N8N_IMAGE:-n8nio/n8n:2.39.8}
+    image: ${FINANCE_N8N_IMAGE:?required}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -80,7 +80,7 @@ services:
       TZ: ${TZ:-Europe/Moscow}
       GENERIC_TIMEZONE: ${TZ:-Europe/Moscow}
     ports:
-      - ${FINANCE_N8N_LISTEN_ADDRESS:-127.0.0.1}:${FINANCE_N8N_LISTEN_PORT:-5680}:5678
+      - 127.0.0.1:${FINANCE_N8N_LISTEN_PORT:?required}:5678
     volumes:
       - finance_n8n_data:/home/node/.n8n
       - ./workflows:/home/node/.n8n/imports:ro
@@ -88,7 +88,6 @@ services:
       - /tmp:size=64m,noexec,nosuid,nodev
     networks:
       - finance_n8n_private
-      - finance_backend_bridge
     healthcheck:
       test:
         - CMD-SHELL
@@ -106,10 +105,12 @@ services:
     cpus: 1.0
 
   analysis-gateway:
-    image: ${FINANCE_GATEWAY_IMAGE:-finance-analysis-gateway:20260920}
+    image: ${FINANCE_GATEWAY_IMAGE:?required}
     build:
       context: .
       dockerfile: gateway/Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${FINANCE_GATEWAY_NODE_BASE_IMAGE:?required}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -123,11 +124,14 @@ services:
       FINANCE_INGRESS_HMAC_SECRET: ${FINANCE_INGRESS_HMAC_SECRET:?required}
       FINANCE_CALLBACK_HMAC_SECRET: ${FINANCE_CALLBACK_HMAC_SECRET:?required}
       FINANCE_BACKEND_API_PREFIX: ${FINANCE_BACKEND_API_PREFIX:-/api/v1}
+      FINANCE_CALLBACK_PROXY_PORT: ${FINANCE_CALLBACK_PROXY_PORT:?required}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?required}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+    extra_hosts:
+      - finance-host-callback:${FINANCE_DELIVERY_BRIDGE_GATEWAY:?required}
     networks:
       - finance_n8n_private
-      - finance_backend_bridge
+      - finance_host_bridge
       - finance_n8n_egress
     read_only: true
     tmpfs:
@@ -151,9 +155,9 @@ networks:
     internal: true
   finance_n8n_egress:
     driver: bridge
-  finance_backend_bridge:
+  finance_host_bridge:
     external: true
-    name: finance_backend_internal
+    name: ${FINANCE_DELIVERY_BRIDGE_NAME:?required}
 
 volumes:
   finance_n8n_postgres_data:

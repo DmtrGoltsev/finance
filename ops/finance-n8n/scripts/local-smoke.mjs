@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,11 @@ if (daemon.status !== 0) {
   const network = `${project}-backend`;
   // A new isolated backend network, never the real Finance network.
   const override = join(temp, 'override.json');
-  await writeFile(override, JSON.stringify({ networks: { finance_backend_bridge: { external: true, name: network } } }));
+  await writeFile(override, JSON.stringify({ networks: { finance_host_bridge: { external: true, name: network } } }));
   await writeFile(envFile, [
+    'FINANCE_POSTGRES_IMAGE=postgres:16.10-alpine3.22', 'FINANCE_N8N_IMAGE=n8nio/n8n:2.39.8',
+    'FINANCE_GATEWAY_IMAGE=finance-analysis-gateway:smoke', 'FINANCE_GATEWAY_NODE_BASE_IMAGE=node:22.22.0-alpine3.23',
+    `FINANCE_DELIVERY_BRIDGE_NAME=${network}`, 'FINANCE_CALLBACK_PROXY_PORT=18081',
     'FINANCE_N8N_POSTGRES_DB=finance_n8n', 'FINANCE_N8N_POSTGRES_USER=finance_smoke_admin',
     'FINANCE_N8N_POSTGRES_PASSWORD=smoke-only-db-password', 'N8N_ENCRYPTION_KEY=smoke-only-encryption-key-32-bytes',
     'FINANCE_GATEWAY_DB=finance_analysis', 'FINANCE_GATEWAY_DB_USER=finance_smoke_gateway',
@@ -36,6 +39,9 @@ if (daemon.status !== 0) {
   let networkCreated = false;
   try {
     assert.equal(run(['network', 'create', '--internal', network]).status, 0); networkCreated = true;
+    const gateway = run(['network', 'inspect', '--format', '{{(index .IPAM.Config 0).Gateway}}', network]);
+    assert.equal(gateway.status, 0, gateway.stderr);
+    await appendFile(envFile, `\nFINANCE_DELIVERY_BRIDGE_GATEWAY=${gateway.stdout.trim()}\n`);
     compose('config', '--quiet');
     compose('up', '-d', '--build', '--wait', '--wait-timeout', '180');
     const rows = compose('ps', '--format', 'json').trim().split(/\r?\n/).map((line) => JSON.parse(line)).flat();

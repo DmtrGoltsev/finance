@@ -1,4 +1,5 @@
-FROM node:22.22.0-alpine3.23
+ARG NODE_BASE_IMAGE
+FROM ${NODE_BASE_IMAGE}
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
