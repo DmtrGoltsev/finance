@@ -16,18 +16,6 @@ on:
       - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
   pull_request:
-    paths:
-      - "apps/ios/**"
-      - "apps/backend/src/app/auth/**"
-      - "apps/backend/src/app/db/model_enums.py"
-      - "apps/backend/tests/auth/**"
-      - "apps/backend/tests/db/test_ios_bearer_sessions_migration.py"
-      - "apps/backend/tests/db/test_bearer_access_expiry_migration.py"
-      - "api/openapi/openapi.yaml"
-      - "db/migrations/**"
-      - ".github/workflows/ios-build.yml"
-      - ".github/workflows/finance-prod-rotate-password.yml"
-      - "apps/backend/tests/ops/test_production_workflow_contract.py"
   workflow_dispatch:
 
 jobs:
