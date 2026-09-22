@@ -1,4 +1,5 @@
 name: Finance Production Read-Only Inventory
+run-name: finance-inventory-${{ inputs.phase || 'verify' }}-${{ inputs.bootstrap_run_id || 'none' }}
 
 on:
   pull_request:
@@ -50,6 +51,7 @@ jobs:
           inputs.phase == 'bootstrap' &&
           github.ref == 'refs/heads/main' &&
           github.actor == 'DmtrGoltsev' &&
+          github.run_attempt == 1 &&
           inputs.confirm_readonly_inventory == 'finance-readonly-inventory' &&
           inputs.bootstrap_run_id == '' }}
     runs-on: ubuntu-latest
@@ -67,7 +69,11 @@ jobs:
         run: bash ops/finance-prod-inventory/bootstrap.sh
 
   validate-inventory:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'inventory' }}
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.phase == 'inventory' &&
+          github.actor == 'github-actions[bot]' &&
+          github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -79,24 +85,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FINANCE_BOOTSTRAP_RUN_ID: ${{ inputs.bootstrap_run_id }}
+          FINANCE_PHASE: ${{ inputs.phase }}
         run: |
           set -euo pipefail
           PYTHON_BIN="${PYTHON_BIN:-python3}"
+          [[ "${FINANCE_PHASE}" == inventory ]]
+          [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch ]]
+          [[ "${GITHUB_ACTOR}" == 'github-actions[bot]' ]]
+          [[ "${GITHUB_RUN_ATTEMPT}" == 1 ]]
           [[ "${FINANCE_BOOTSTRAP_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
           [[ "${GITHUB_REF}" == "refs/heads/prod/release-inventory-${FINANCE_BOOTSTRAP_RUN_ID}" ]]
           workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/finance-prod-readonly-inventory.yml" --jq '.id')"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FINANCE_BOOTSTRAP_RUN_ID}" |
-            "${PYTHON_BIN}" -c '
+          bootstrap_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FINANCE_BOOTSTRAP_RUN_ID}")"
+          inventory_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
+          "${PYTHON_BIN}" -c '
           import json, sys
-          run = json.load(sys.stdin)
-          valid = (run.get("event") == "workflow_dispatch"
-                   and run.get("head_branch") == "main"
-                   and run.get("head_sha") == sys.argv[1]
-                   and run.get("actor", {}).get("login") == "DmtrGoltsev"
-                   and run.get("status") == "in_progress"
-                   and run.get("workflow_id") == int(sys.argv[2]))
+          bootstrap, inventory = map(json.loads, sys.argv[1:3])
+          sha, workflow_id, bootstrap_id, inventory_id = sys.argv[3:]
+          valid = (
+              bootstrap.get("id") == int(bootstrap_id)
+              and bootstrap.get("event") == "workflow_dispatch"
+              and bootstrap.get("head_branch") == "main"
+              and bootstrap.get("head_sha") == sha
+              and bootstrap.get("actor", {}).get("login") == "DmtrGoltsev"
+              and bootstrap.get("status") == "in_progress"
+              and bootstrap.get("workflow_id") == int(workflow_id)
+              and bootstrap.get("display_title") == "finance-inventory-bootstrap-none"
+              and bootstrap.get("run_attempt") == 1
+              and inventory.get("id") == int(inventory_id)
+              and inventory.get("event") == "workflow_dispatch"
+              and inventory.get("head_branch") == "prod/release-inventory-" + bootstrap_id
+              and inventory.get("head_sha") == sha
+              and inventory.get("actor", {}).get("login") == "github-actions[bot]"
+              and inventory.get("workflow_id") == int(workflow_id)
+              and inventory.get("display_title") == "finance-inventory-inventory-" + bootstrap_id
+              and inventory.get("run_attempt") == 1
+          )
           sys.exit(0 if valid else 1)
-          ' "${GITHUB_SHA}" "${workflow_id}"
+          ' "${bootstrap_run}" "${inventory_run}" "${GITHUB_SHA}" "${workflow_id}" "${FINANCE_BOOTSTRAP_RUN_ID}" "${GITHUB_RUN_ID}"
           echo 'Owner-started main bootstrap and exact temporary ref verified.'
 
   inventory:

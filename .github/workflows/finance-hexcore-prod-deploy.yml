@@ -84,7 +84,20 @@ env:
   FINANCE_BACKEND_PYTHON_CANDIDATES: "python3.12 /opt/finance/current/venv/bin/python python3.11 python3"
 
 jobs:
+  reject-inventory-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject diagnostic refs before release work
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/heads/prod/release-inventory-* ]]; then
+            echo '::error::Diagnostic inventory refs cannot run production CI/CD.'
+            exit 1
+          fi
+
   prepare-release:
+    needs: reject-inventory-ref
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
@@ -113,6 +126,7 @@ jobs:
           echo "Resolved release id ${release_id}"
 
   validate-prod-inputs:
+    needs: reject-inventory-ref
     runs-on: ubuntu-latest
     outputs:
       deploy_frontend: ${{ steps.validate.outputs.deploy_frontend }}

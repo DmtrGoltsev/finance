@@ -17,9 +17,17 @@ Workflow `.github/workflows/finance-prod-readonly-inventory.yml` не развё
    `phase=inventory` на созданном ref. GitHub не запускает push-workflow от
    событий, созданных `GITHUB_TOKEN`, но делает исключение для
    `workflow_dispatch`. См. [правило GitHub](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+   Production deploy workflow отдельно отвергает `prod/release-inventory-*`
+   до подготовки релиза и обращения к окружению, даже при ручном запуске.
+   Ответ [API версии 2026-03-10](https://docs.github.com/en/rest/actions/workflows?apiVersion=2026-03-10#create-a-workflow-dispatch-event)
+   должен содержать точный `workflow_run_id`: поиск по ветке/SHA запрещён.
+   Пустой ответ или несовпадение метаданных останавливают bootstrap без
+   автоматического удаления ref.
 3. Отдельный `validate-inventory` без production secrets проверяет строгий
-   формат ref, SHA и происхождение активного owner-started bootstrap-run на
-   `main`. Только после его успеха job `inventory` получает существующие SSH
+   формат ref, SHA, actor `github-actions[bot]` текущего запуска, первую
+   попытку, точные ID, имя и фазу обоих запусков, а также происхождение
+   активного owner-started bootstrap-run на `main`. Чужой ручной dispatch не
+   проходит. Только после его успеха job `inventory` получает существующие SSH
    secrets окружения `production`. Политика `prod/release-*` пропускает этот
    временный ref; `deployment: false` не создаёт запись о развёртывании.
 4. Inventory обращается к хосту только из Actions с закреплённым host key и
@@ -59,3 +67,10 @@ ref через GitHub API. При изменившемся SHA или актив
 Если GitHub ограничивает `GITHUB_TOKEN` в создании веток или dispatch,
 bootstrap завершится с ошибкой. Не использовать PAT, GitHub App token,
 локальный push в `prod/release-*` или изменение branch policy как обход.
+GitHub документирует действие `GITHUB_TOKEN` от имени Actions, но не обещает
+в справке конкретное значение actor для дочернего `workflow_dispatch`.
+Поэтому проверка `github-actions[bot]` намеренно закрыта при несовпадении.
+Проверить фактический actor можно только при разрешённом запуске после слияния;
+если он иной, остановиться и выбрать другой диагностический маршрут, например
+ограниченную read-only инвентаризацию на `main` без production environment
+secrets, либо согласовать безопасное изменение политики окружения.
