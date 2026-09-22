@@ -26,6 +26,8 @@ on:
       - "api/openapi/openapi.yaml"
       - "db/migrations/**"
       - ".github/workflows/ios-build.yml"
+      - ".github/workflows/finance-prod-rotate-password.yml"
+      - "apps/backend/tests/ops/test_production_workflow_contract.py"
   workflow_dispatch:
 
 jobs:
