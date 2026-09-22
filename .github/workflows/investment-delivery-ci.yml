@@ -64,4 +64,7 @@ jobs:
       - uses: android-actions/setup-android@v4
       - uses: gradle/actions/setup-gradle@v4
       - working-directory: apps/android
-        run: bash gradlew :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin -PfinancePushEnabled=false
+        run: >-
+          bash gradlew -Dorg.gradle.jvmargs=-Xmx4g --max-workers=2
+          :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin
+          -PfinancePushEnabled=false
