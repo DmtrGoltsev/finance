@@ -415,6 +415,60 @@ jobs:
             finance-backend-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
           retention-days: 14
 
+  delivery-ci-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: delivery_test
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: delivery_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd 'pg_isready -U delivery_test'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend test dependencies
+        run: python -m pip install -e "apps/backend[dev]" pyyaml
+      - name: Verify worker and migrations against disposable PostgreSQL
+        working-directory: apps/backend
+        env:
+          FINANCE_DELIVERY_TEST_POSTGRES_URL: postgresql+psycopg://delivery_test:ci-only-password@localhost:5432/delivery_test
+        run: python -m pytest tests/delivery tests/ops/test_production_workflow_contract.py -q
+      - name: Verify Alembic ownership and upgrade paths on disposable databases
+        working-directory: apps/backend
+        env:
+          FINANCE_TEST_POSTGRES_ADMIN_DSN: host=127.0.0.1 port=5432 user=delivery_test password=ci-only-password dbname=delivery_test
+        run: python -m pytest tests/investments/test_migration_0021_postgres.py tests/investments/test_investment_recommendations.py -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ops/finance-n8n/package-lock.json
+      - name: Install gateway test dependencies
+        working-directory: ops/finance-n8n
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify three inactive workflows and gateway contracts
+        working-directory: ops/finance-n8n
+        env:
+          BACKEND_HMAC_MODULE: ${{ github.workspace }}/apps/backend/src/app/investments/hmac_auth.py
+        run: |
+          npm run validate
+          npm test
+          npm run test:import
+      - name: Build and smoke isolated delivery images
+        run: |
+          docker build -f ops/finance-delivery/Dockerfile -t finance-delivery:ci .
+          cd ops/finance-n8n
+          npm run smoke
+
   production-package-gate:
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -422,6 +476,7 @@ jobs:
       - validate-prod-inputs
       - frontend-ci-package
       - backend-ci-package
+      - delivery-ci-verify
 
     steps:
       - name: Require both production packages
@@ -429,17 +484,23 @@ jobs:
           FINANCE_VALIDATE_RESULT: ${{ needs.validate-prod-inputs.result }}
           FINANCE_FRONTEND_PACKAGE_RESULT: ${{ needs.frontend-ci-package.result }}
           FINANCE_BACKEND_PACKAGE_RESULT: ${{ needs.backend-ci-package.result }}
+          FINANCE_DELIVERY_RESULT: ${{ needs.delivery-ci-verify.result }}
+          FINANCE_PRODUCTION_REQUESTED: ${{ needs.validate-prod-inputs.outputs.production_requested }}
         shell: bash
         run: |
           set -euo pipefail
-          for result_name in FINANCE_VALIDATE_RESULT FINANCE_FRONTEND_PACKAGE_RESULT FINANCE_BACKEND_PACKAGE_RESULT; do
+          for result_name in FINANCE_VALIDATE_RESULT FINANCE_FRONTEND_PACKAGE_RESULT FINANCE_BACKEND_PACKAGE_RESULT FINANCE_DELIVERY_RESULT; do
             result="${!result_name}"
             if [ "${result}" != "success" ]; then
               echo "::error::${result_name}=${result}; production package gate requires success"
               exit 1
             fi
           done
-          echo "Both production package lanes and input validation succeeded."
+          if [ "${FINANCE_PRODUCTION_REQUESTED}" = "true" ]; then
+            echo "::error::DELIVERY_INSTALL_CONTRACT_UNVERIFIED: Finance worker, n8n, gateway, and three workflows have no approved HexCore install/network/secret/backup contract. See docs/production/finance-investment-release-20260922.md. No production host contact is permitted."
+            exit 1
+          fi
+          echo "All Finance CI lanes and input validation succeeded; production actions were not requested."
 
   host-preflight:
     if: ${{ needs.validate-prod-inputs.outputs.production_requested == 'true' }}

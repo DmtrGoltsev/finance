@@ -1,5 +1,11 @@
 # Finance production CI/CD runbook
 
+> Для выпуска инвестиционных рекомендаций действует временный закрытый шлюз:
+> `production-package-gate` останавливает любой production deploy до утверждения
+> установки worker, n8n, gateway и трёх workflow. Release-ветку пока нельзя
+> отправлять как разрешение на развёртывание. Недостающие параметры перечислены
+> в `docs/production/finance-investment-release-20260922.md`.
+
 Scope: Finance only. Do not change RocketFlow routes, services, databases, or
 nginx locations from this runbook.
 

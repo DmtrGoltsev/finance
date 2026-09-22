@@ -1,5 +1,10 @@
 # Finance release preflight checklist
 
+> Выпуск инвестиционных рекомендаций пока остановлен общим production gate.
+> Перед отправкой `prod/release-finance-investment-recommendations-20260922`
+> закрыть вопросы из `docs/production/finance-investment-release-20260922.md`
+> и заменить временную блокировку проверенным полным путём развёртывания.
+
 Scope: read-only production readiness checks before running the Finance
 production CI/CD workflow. Do not deploy, migrate, restart services, create
 backups, or run authenticated production smoke until the blockers below are

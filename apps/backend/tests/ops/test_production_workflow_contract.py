@@ -66,6 +66,22 @@ def test_ci_only_dispatch_skips_production_environment_and_host_contact() -> Non
     assert "environment: production" not in _job(workflow, "production-package-gate")
 
 
+def test_investment_release_requires_delivery_ci_and_blocks_partial_deploy() -> None:
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    delivery = _job(workflow, "delivery-ci-verify")
+    package_gate = _job(workflow, "production-package-gate")
+
+    assert "tests/delivery tests/ops/test_production_workflow_contract.py" in delivery
+    assert "tests/investments/test_migration_0021_postgres.py" in delivery
+    assert "npm run validate" in delivery
+    assert "npm run test:import" in delivery
+    assert "npm run smoke" in delivery
+    assert "docker build -f ops/finance-delivery/Dockerfile" in delivery
+    assert "- delivery-ci-verify" in package_gate
+    assert 'if [ "${FINANCE_PRODUCTION_REQUESTED}" = "true" ]; then' in package_gate
+    assert "DELIVERY_INSTALL_CONTRACT_UNVERIFIED" in package_gate
+
+
 def test_host_preflight_contract_is_read_only_and_complete() -> None:
     host_preflight = _job(DEPLOY_WORKFLOW.read_text(encoding="utf-8"), "host-preflight")
 
