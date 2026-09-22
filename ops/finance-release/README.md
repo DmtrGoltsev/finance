@@ -1,12 +1,82 @@
 # Контракт установки инвестиционных рекомендаций Finance
 
 **Статус: производство заблокировано.** После preflight PR #11 Docker-путь
-выведен из эксплуатации: `production-package-gate` безусловно останавливает
+выведен из эксплуатации. `production-package-gate` безусловно останавливает
 любой release push до обращения к хосту с кодом
-`DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED`. Ни старые approval variables, ни
-ручной dispatch не снимают блокировку. Описанный ниже Docker installer остаётся
-локальным прототипом и не должен запускаться. Условия перехода на host-native
-вариант перечислены в [HOST_NATIVE_READINESS.md](HOST_NATIVE_READINESS.md).
+`DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED`. Ни approval variables, ни ручной
+dispatch не снимают блокировку. Host-native код подготовлен локально, но его
+вместимость и восстановление на VPS не доказаны.
+
+## Host-native контракт (локальная реализация)
+
+`native_contract.py preflight` выполняет только чтение. Он требует approval
+`host-native-v1` не старше 24 часов с SHA-256 файлов доказательств, точными
+Ubuntu 26.04 x86_64, Node 24 и npm 10/11 с контрольными суммами,
+PostgreSQL 18 с правами администратора, ревизией Finance `20260822_0019`,
+здоровым backend на loopback `8081`, свободными или уже принадлежащими Finance
+портами `5680/8080/8091`. Доступные память и место должны покрывать
+**измеренные** пики n8n/gateway/worker, установку, рост БД, резервные копии,
+пробное восстановление и запас минимум 512 МиБ/1 ГиБ. Примерные числа из
+локальных тестов не являются измерением VPS. Поля контракта заданы в
+`native_contract.py`; синтетическую проверку выполняют командой `dry-run
+--approval <файл> --facts <файл>`. Режим `preflight` не принимает `--facts`.
+
+До любой записи `native_release.py stage` повторяет живой preflight, проверяет
+источник по lockfile SHA-256 и n8n `2.39.8`, root-owned файлы `0600`, реальные
+значения семи раздельных секретов, DeepSeek, FCM service account от `finance`,
+токен и UUID тестового снимка, а также доказательства backup/restore и
+недеструктивного rollback. Источник секретов только
+`/etc/finance/delivery/production.env`, не Git и не workflow inputs:
+
+```text
+FINANCE_N8N_POSTGRES_PASSWORD
+FINANCE_GATEWAY_DB_PASSWORD
+N8N_ENCRYPTION_KEY
+FINANCE_GATEWAY_QUEUE_KEY
+FINANCE_GATEWAY_TOKEN
+FINANCE_INGRESS_HMAC_SECRET
+FINANCE_CALLBACK_HMAC_SECRET
+DEEPSEEK_API_KEY
+DEEPSEEK_MODEL
+FINANCE_BACKEND_FCM_ENABLED
+FINANCE_BACKEND_FCM_PROJECT_ID
+FINANCE_BACKEND_FCM_CREDENTIALS_FILE
+FINANCE_E2E_BEARER_TOKEN_FILE
+FINANCE_E2E_SNAPSHOT_ID
+```
+
+Семь внутренних значений должны быть разными 64-символьными hex-строками,
+созданными и сохранёнными оператором один раз вне Git. Файлы
+`measurement.json`, `backup-restore.json`, `rollback-gate.json` хранятся в
+`/etc/finance/delivery` с владельцем root и правами `0600`; approval содержит
+их SHA-256. Наличие или самодекларация этих файлов **не доказывает** реальное
+измерение, совместимость старого backend с новой схемой либо доступность
+внешних провайдеров. Их должен отдельно подтвердить оператор.
+
+После gate стадия `stage` создаёт резервную копию Finance DB и пробно
+восстанавливает её в отдельную БД, устанавливает закреплённые пакеты через
+`npm ci`, заводит отдельные роли/БД `finance_n8n` и `finance_analysis`,
+запускает управляемые systemd-службы от `finance` на loopback, импортирует один
+Header Auth credential и ровно три **неактивных** workflow, резервирует и
+пробно восстанавливает обе новые БД. Callback gateway идёт напрямую на
+`127.0.0.1:8081`; публичных webhook и внутренних API нет. После переключения
+backend на тот же release ID и ревизии `20260921_0025` команда `activate`
+включает три workflow, worker, signed health и тест job/report. При ошибке
+`rollback` отключает собственные units, возвращает предыдущий backend и
+сохраняет БД/резервные копии; автоматического downgrade миграций нет.
+
+Путь `0019` → `0025` и работоспособность старого backend на новой схеме должны
+быть отдельно испытаны на **копии** Finance DB до снятия gate. Текущий код
+проверяет только утверждённый `rollback-gate.json`, поэтому не является
+достаточным доказательством. Также не проверены реальный FCM на устройстве и
+полный запуск host-native стека на VPS. См.
+[HOST_NATIVE_READINESS.md](HOST_NATIVE_READINESS.md).
+
+## Исторический Docker-прототип
+
+Всё ниже описывает старый `host_release.py`, **не** текущий host-native
+маршрут. Docker installer не запускать и не использовать для обоснования
+готовности VPS.
 
 Этот каталог готовит локальный прототип. Будущий запуск на production допустим только из
 `.github/workflows/finance-hexcore-prod-deploy.yml` после успешного полного CI,

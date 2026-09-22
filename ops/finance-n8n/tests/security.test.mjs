@@ -6,8 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { hmacSignature, cashFirstAdjustments, validateJobEnvelope } from '../gateway/core.mjs';
 import { accept, INGRESS_PATH } from '../gateway/ingress.mjs';
-import { createServer } from '../gateway/server.mjs';
-import { pinnedOptions, publicAddress, externalRequest, requestBytes, retry3, GatewayError, allowedUrl } from '../gateway/network.mjs';
+import { createServer, readConfig } from '../gateway/server.mjs';
+import { pinnedOptions, publicAddress, externalRequest, requestBytes, retry3, GatewayError, allowedUrl, internalCallback } from '../gateway/network.mjs';
 import { moexTimestamp, collectMarket, drain, providerPayload, analyze } from '../gateway/analysis.mjs';
 import { recommendationSchema, validateRecommendation } from '../gateway/schema.mjs';
 import { cipher, Store } from '../gateway/store.mjs';
@@ -15,6 +15,21 @@ import { validEnvelope } from './helpers.mjs';
 
 const config = { ingressSecret: 'a'.repeat(64), callbackSecret: 'b'.repeat(64), gatewayToken: 'c'.repeat(64),
   queueKey: 'd'.repeat(64), apiPrefix: '/api/v2', model: 'test-model', providerKey: 'test-provider' };
+test('native gateway callback is fixed to backend loopback and unknown mode fails closed', async () => {
+  const previous = process.env.FINANCE_GATEWAY_HOST_MODE;
+  process.env.FINANCE_GATEWAY_HOST_MODE = 'native';
+  try {
+    const path = '/api/v1/investments/internal/recommendation-jobs/11111111-1111-4111-8111-111111111111/callback';
+    let destination;
+    await internalCallback(path, Buffer.from('{}'), {}, async (options) => { destination = options; return Buffer.from('{}'); });
+    assert.equal(destination.hostname, '127.0.0.1');
+    assert.equal(destination.port, 8081);
+    assert.throws(() => readConfig({ FINANCE_GATEWAY_HOST_MODE: 'typo' }), /INVALID_HOST_MODE/);
+  } finally {
+    if (previous === undefined) delete process.env.FINANCE_GATEWAY_HOST_MODE;
+    else process.env.FINANCE_GATEWAY_HOST_MODE = previous;
+  }
+});
 function headers(raw, nonce = 'abcdefghijklmnop1234') {
   const timestamp = Math.floor(Date.now() / 1000);
   return { 'x-finance-gateway-token': config.gatewayToken, 'x-finance-timestamp': String(timestamp),

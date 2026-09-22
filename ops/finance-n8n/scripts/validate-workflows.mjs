@@ -20,7 +20,7 @@ for (const file of files) {
   }
   for (const node of workflow.nodes) {
     if (node.type === 'n8n-nodes-base.httpRequest') {
-      assert.match(node.parameters.url, /^http:\/\/analysis-gateway:8080\/(accept|signed-health|drain|prune)$/);
+      assert.match(node.parameters.url, /^http:\/\/(analysis-gateway|127\.0\.0\.1):8080\/(accept|signed-health|drain|prune)$/);
       assert.equal(node.parameters.options.redirect.redirect.followRedirects, false);
     }
     if (node.type === 'n8n-nodes-base.webhook') {

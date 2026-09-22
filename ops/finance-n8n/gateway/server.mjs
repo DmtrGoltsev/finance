@@ -6,6 +6,7 @@ import { drain } from './analysis.mjs';
 import { GatewayError, fail } from './network.mjs';
 
 export function readConfig(env = process.env) {
+  if (env.FINANCE_GATEWAY_HOST_MODE && !['native', 'docker'].includes(env.FINANCE_GATEWAY_HOST_MODE)) fail('INVALID_HOST_MODE', 503);
   const config = {
     ingressSecret: env.FINANCE_INGRESS_HMAC_SECRET, callbackSecret: env.FINANCE_CALLBACK_HMAC_SECRET,
     gatewayToken: env.FINANCE_GATEWAY_TOKEN, queueKey: env.FINANCE_GATEWAY_QUEUE_KEY,
@@ -70,7 +71,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const config = readConfig();
     const store = new Store(config);
     await store.ping();
-    const server = createServer(config, store).listen(8080, '0.0.0.0');
+    const bind = process.env.FINANCE_GATEWAY_HOST_MODE === 'native' ? '127.0.0.1' : '0.0.0.0';
+    const server = createServer(config, store).listen(8080, bind);
     const stop = () => server.close(() => store.close().then(() => process.exit(0)));
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
   } catch {

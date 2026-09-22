@@ -22,7 +22,7 @@ export function cipher(keyHex) {
 
 export class Store {
   constructor(config) {
-    this.pool = new pg.Pool({ host: 'postgres', port: 5432, database: config.db,
+    this.pool = new pg.Pool({ host: process.env.FINANCE_GATEWAY_HOST_MODE === 'native' ? '127.0.0.1' : 'postgres', port: 5432, database: config.db,
       user: config.dbUser, password: config.dbPassword, max: 4,
       connectionTimeoutMillis: 5000, statement_timeout: 10000 });
     this.crypt = cipher(config.queueKey);

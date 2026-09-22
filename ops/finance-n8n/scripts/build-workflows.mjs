@@ -3,13 +3,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const output = process.env.FINANCE_WORKFLOW_OUTPUT_DIR || join(root, 'workflows');
+const gatewayUrl = process.env.FINANCE_GATEWAY_HOST_MODE === 'native' ? 'http://127.0.0.1:8080' : 'http://analysis-gateway:8080';
 const credentials = { httpHeaderAuth: { id: 'finance-gateway-token', name: 'Finance Gateway Internal Token' } };
 const settings = { executionOrder: 'v1', saveDataSuccessExecution: 'none', saveDataErrorExecution: 'none', saveManualExecutions: false, timezone: 'Europe/Moscow', executionTimeout: 1800 };
 const httpNode = (name, path, position, ingress = false) => ({
   id: `finance-http-${path.slice(1)}`, name, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position,
   credentials,
   parameters: {
-    method: 'POST', url: `http://analysis-gateway:8080${path}`,
+    method: 'POST', url: `${gatewayUrl}${path}`,
     authentication: 'genericCredentialType', genericAuthType: 'httpHeaderAuth',
     ...(ingress ? {
       sendHeaders: true, headerParameters: { parameters: [
@@ -46,7 +48,7 @@ const maintenance = { id: 'finance-metadata-retention-v1', name: 'Finance Queue 
   [timer.name]: { main: [[{ node: drain.name, type: 'main', index: 0 }]] },
   [drain.name]: { main: [[{ node: prune.name, type: 'main', index: 0 }]] },
 } };
-await mkdir(join(root, 'workflows'), { recursive: true });
+await mkdir(output, { recursive: true });
 for (const workflow of [main, health, maintenance]) {
-  await writeFile(join(root, 'workflows', `${workflow.id}.json`), `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+  await writeFile(join(output, `${workflow.id}.json`), `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
 }
