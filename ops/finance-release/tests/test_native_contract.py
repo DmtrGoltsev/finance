@@ -130,6 +130,10 @@ class NativeApprovalTests(unittest.TestCase):
 class NativeInstallerTests(unittest.TestCase):
     def test_workflow_keeps_host_native_path_behind_unconditional_hold(self):
         workflow = (REPO / ".github/workflows/finance-hexcore-prod-deploy.yml").read_text(encoding="utf-8")
+        ref_guard = workflow.split("  reject-inventory-ref:", 1)[1].split("  prepare-release:", 1)[0]
+        self.assertIn('"${GITHUB_REF}" != refs/heads/prod/release-*', ref_guard)
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', ref_guard)
+        self.assertIn('if [[ "${GITHUB_REF}" != refs/heads/prod/release-* ]]; then', workflow)
         gate = workflow.split("  production-package-gate:", 1)[1].split("  host-preflight:", 1)[0]
         self.assertIn("DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED", gate)
         self.assertIn('exit 1\n          else', gate)
@@ -167,6 +171,63 @@ class NativeInstallerTests(unittest.TestCase):
                     native_release.stage(args)
                 backup.assert_not_called()
                 command.assert_not_called()
+
+    def test_finance_writable_root_code_or_changed_hash_blocks_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "release"
+            modules = target / "ops/finance-release"
+            modules.mkdir(parents=True)
+            hashes = {}
+            for name in ("contract.py", "host_release.py", "native_contract.py", "native_release.py"):
+                file = modules / name
+                file.write_text("approved source\n", encoding="utf-8")
+                hashes[file.relative_to(target).as_posix()] = hashlib.sha256(file.read_bytes()).hexdigest()
+            (target / "source-hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+            writable = modules / "native_release.py"
+            with (patch.object(native_release, "_root_locked", side_effect=lambda path: path != writable),
+                  self.assertRaisesRegex(ValueError, "writable or not root-owned")):
+                native_release._verify_source_provenance(target)
+            writable.write_text("modified source\n", encoding="utf-8")
+            with (patch.object(native_release, "_root_locked", return_value=True),
+                  self.assertRaisesRegex(ValueError, "provenance differs")):
+                native_release._verify_source_provenance(target)
+
+    def test_database_conflict_blocks_password_change(self):
+        calls = []
+
+        def fake_pg(query, database="postgres"):
+            calls.append(query)
+            if "FROM pg_authid" in query:
+                return "false|false|false|finance-investment-delivery"
+            if "FROM pg_database" in query:
+                return "other_owner|unmanaged"
+            raise AssertionError("database was mutated before ownership check")
+
+        with (patch.object(native_release, "pg", side_effect=fake_pg),
+              self.assertRaisesRegex(ValueError, "database is not owned")):
+            native_release._ensure_database("finance_n8n", "finance_n8n", "a" * 64)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(any("ALTER ROLE" in query for query in calls))
+
+    def test_restage_never_reuses_stale_backup(self):
+        dumps = []
+
+        def fake_run(args, **kwargs):
+            if "pg_dump" in args:
+                dumps.append(args)
+                kwargs["stdout"].write(f"fresh-{len(dumps)}".encode())
+            return SimpleNamespace(returncode=0)
+
+        with tempfile.TemporaryDirectory() as temp:
+            with (patch.object(native_release, "BACKUPS", Path(temp)),
+                  patch.object(native_release, "pg"),
+                  patch.object(native_release.subprocess, "run", side_effect=fake_run)):
+                first = native_release._backup_and_drill("finance", "release-1")
+                second = native_release._backup_and_drill("finance", "release-1")
+            self.assertNotEqual(first, second)
+            self.assertEqual(first.read_bytes(), b"fresh-1")
+            self.assertEqual(second.read_bytes(), b"fresh-2")
+            self.assertEqual(len(dumps), 2)
 
     def test_production_env_rejects_missing_provider_secret(self):
         values = {key: f"{index:064x}" for index, key in enumerate(native_release.SECRET_KEYS, 1)}

@@ -11,6 +11,7 @@ import secrets
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -172,9 +173,12 @@ def preflight(approval_path: Path, release_id: str, source: Path) -> tuple[dict,
     secrets_env = production_env()
     gate = evidence(approval, release_id)
     check_source(source, approval)
+    _protected_locations_ready()
     current = Path("/opt/finance/current")
     require(current.is_symlink() and current.resolve().name == gate["previous_backend_release_id"],
             "backend current release differs from rollback gate")
+    _database_state("finance_n8n", "finance_n8n")
+    _database_state("finance_analysis", "finance_analysis")
     return approval, secrets_env, gate
 
 
@@ -183,40 +187,48 @@ def pg(query: str, database: str = "postgres") -> str:
                     "-d", database], input_bytes=query.encode()).decode().strip()
 
 
-def _ensure_database(role: str, database: str, password: str) -> None:
-    require(re.fullmatch(r"[a-z_]+", role) and re.fullmatch(r"[a-z_]+", database), "unsafe database identity")
-    require(re.fullmatch(r"[a-f0-9]{64}", password) is not None, "unsafe database password")
+def _database_state(role: str, database: str) -> tuple[str, str]:
+    require(re.fullmatch(r"[a-z][a-z0-9_]*", role) and
+            re.fullmatch(r"[a-z][a-z0-9_]*", database), "unsafe database identity")
     role_info = pg(f"SELECT rolsuper || '|' || rolcreatedb || '|' || rolcreaterole || '|' || "
                    f"coalesce(shobj_description(oid,'pg_authid'),'') FROM pg_authid WHERE rolname='{role}';")
+    require(not role_info or role_info == "false|false|false|finance-investment-delivery",
+            f"existing PostgreSQL role is not owned by Finance delivery: {role}")
+    db_info = pg(f"SELECT pg_get_userbyid(datdba) || '|' || coalesce(shobj_description(oid,'pg_database'),'') "
+                 f"FROM pg_database WHERE datname='{database}';")
+    require(not db_info or db_info == f"{role}|finance-investment-delivery",
+            f"existing PostgreSQL database is not owned by Finance delivery: {database}")
+    return role_info, db_info
+
+
+def _ensure_database(role: str, database: str, password: str) -> None:
+    require(re.fullmatch(r"[a-f0-9]{64}", password) is not None, "unsafe database password")
+    role_info, db_info = _database_state(role, database)
     if not role_info:
         pg(f"BEGIN; CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{password}'; "
            f"COMMENT ON ROLE {role} IS 'finance-investment-delivery'; COMMIT;")
     else:
-        require(role_info == "false|false|false|finance-investment-delivery",
-                f"existing PostgreSQL role is not owned by Finance delivery: {role}")
         pg(f"ALTER ROLE {role} PASSWORD '{password}';")
-    db_info = pg(f"SELECT pg_get_userbyid(datdba) || '|' || coalesce(shobj_description(oid,'pg_database'),'') "
-                 f"FROM pg_database WHERE datname='{database}';")
     if not db_info:
         pg(f"CREATE DATABASE {database} OWNER {role};")
         pg(f"REVOKE ALL ON DATABASE {database} FROM PUBLIC; "
            f"COMMENT ON DATABASE {database} IS 'finance-investment-delivery';")
-    else:
-        require(db_info == f"{role}|finance-investment-delivery",
-                f"existing PostgreSQL database is not owned by Finance delivery: {database}")
 
 
 def _backup_and_drill(database: str, release_id: str) -> Path:
     BACKUPS.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(BACKUPS, 0o700)
-    backup = BACKUPS / f"{release_id}-{database}.dump"
-    if not backup.exists():
-        with backup.open("wb") as file:
+    backup = BACKUPS / f"{release_id}-{database}-{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%S}-{secrets.token_hex(8)}.dump"
+    try:
+        with backup.open("xb") as file:
             result = subprocess.run(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", database],
                                     stdout=file, stderr=subprocess.PIPE, check=False, timeout=1800)
-        require(result.returncode == 0 and backup.stat().st_size > 0, f"{database} backup failed")
-        os.chmod(backup, 0o600)
-        write_private(backup.with_suffix(".sha256"), _file_sha256(backup) + "\n")
+        require(result.returncode == 0 and backup.stat().st_size > 0, f"{database} fresh backup failed")
+    except BaseException:
+        backup.unlink(missing_ok=True)
+        raise
+    os.chmod(backup, 0o600)
+    write_private(backup.with_suffix(".sha256"), _file_sha256(backup) + "\n")
     require(backup.is_file() and not backup.is_symlink() and
             backup.with_suffix(".sha256").read_text(encoding="ascii").strip() == _file_sha256(backup),
             "backup integrity failed")
@@ -239,6 +251,50 @@ def _source_hashes(source: Path) -> dict[str, str]:
             if path.is_file() and "node_modules" not in path.parts and "__pycache__" not in path.parts}
 
 
+def _root_locked(path: Path) -> bool:
+    return (not path.is_symlink() and (path.is_file() or path.is_dir()) and
+            path.stat().st_uid == 0 and stat.S_IMODE(path.stat().st_mode) & 0o022 == 0)
+
+
+def _protected_locations_ready() -> None:
+    for location in (BASE / "releases", BACKUPS, CONFIG):
+        for path in (location, *location.parents):
+            if path.exists() or path.is_symlink():
+                require(path.is_dir() and _root_locked(path),
+                        f"Finance delivery parent is writable or not root-owned: {path}")
+
+
+def _seal_tree(root: Path) -> None:
+    for path in (root, *root.rglob("*")):
+        if path.is_symlink():
+            require(path.resolve().is_relative_to(root.resolve()), f"runtime symlink escapes release: {path}")
+            os.chown(path, 0, 0, follow_symlinks=False)
+        else:
+            os.chown(path, 0, 0)
+            os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)
+
+
+def _verify_source_provenance(target: Path) -> None:
+    manifest = target / "source-hashes.json"
+    for path in (target, *target.parents, manifest):
+        require(_root_locked(path), f"root-executed release path is writable or not root-owned: {path}")
+    hashes = json.loads(manifest.read_text(encoding="utf-8"))
+    require(isinstance(hashes, dict) and bool(hashes), "staged source manifest is empty")
+    for name, digest in hashes.items():
+        relative = Path(name)
+        require(not relative.is_absolute() and ".." not in relative.parts and
+                re.fullmatch(r"[a-f0-9]{64}", digest) is not None, "unsafe staged source manifest")
+        path = target / relative
+        require(_root_locked(path), f"staged source is writable or not root-owned: {name}")
+        require(_file_sha256(path) == digest, f"staged source provenance differs: {name}")
+        for parent in path.parents:
+            if parent == target.parent:
+                break
+            require(_root_locked(parent), f"staged source parent is writable or not root-owned: {parent}")
+    for name in ("contract.py", "host_release.py", "native_contract.py", "native_release.py"):
+        require(f"ops/finance-release/{name}" in hashes, f"root-executed module is absent: {name}")
+
+
 def _stage_source(source: Path, release_id: str) -> Path:
     target = BASE / "releases" / _safe_release_id(release_id)
     hashes = _source_hashes(source)
@@ -252,8 +308,34 @@ def _stage_source(source: Path, release_id: str) -> Path:
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, target, symlinks=False, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+        _seal_tree(target)
         write_private(target / "source-hashes.json", json.dumps(hashes, sort_keys=True) + "\n")
+    _verify_source_provenance(target)
     return target
+
+
+def _install_locked_dependencies(package: Path, npm_path: str, finance, timeout: int) -> None:
+    installed = package / "node_modules"
+    if installed.exists():
+        require(_root_locked(installed), f"existing runtime dependencies are writable or not root-owned: {installed}")
+        return
+    scratch = Path(tempfile.mkdtemp(prefix=".finance-npm-", dir=package))
+    os.chown(scratch, finance.pw_uid, finance.pw_gid)
+    try:
+        for name in ("package.json", "package-lock.json"):
+            copied = scratch / name
+            shutil.copy2(package / name, copied)
+            os.chown(copied, finance.pw_uid, finance.pw_gid)
+        command([npm_path, "ci", "--omit=dev", "--no-audit", "--no-fund"],
+                env={**os.environ, "HOME": "/var/lib/finance"}, user="finance", timeout=timeout, cwd=scratch)
+        require(all(_file_sha256(scratch / name) == _file_sha256(package / name)
+                    for name in ("package.json", "package-lock.json")),
+                "npm install changed the approved package or lockfile")
+        require((scratch / "node_modules").is_dir(), "locked npm install is incomplete")
+        _seal_tree(scratch / "node_modules")
+        (scratch / "node_modules").replace(installed)
+    finally:
+        shutil.rmtree(scratch)
 
 
 def _finance_env(source: dict[str, str]) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
@@ -404,25 +486,39 @@ def stage(args) -> None:
     _backup_and_drill(approval["finance_database"], release_id)
     target = _stage_source(args.source, release_id)
     write_private(target / "approval.json", args.approval.read_text(encoding="utf-8"))
+    for path in (BASE.parent, BASE, BASE / "releases"):
+        require(_root_locked(path), f"Finance runtime parent is writable or not root-owned: {path}")
+        os.chmod(path, stat.S_IMODE(path.stat().st_mode) | 0o111)
     finance = pwd.getpwnam("finance")
     finance_home = Path("/var/lib/finance")
     finance_home.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chown(finance_home, finance.pw_uid, finance.pw_gid)
-    for path in (target, *target.rglob("*")):
-        os.chown(path, finance.pw_uid, finance.pw_gid)
     runtime = target / "ops/finance-release/native-n8n"
     gateway = target / "ops/finance-n8n"
-    command([approval["npm_path"], "ci", "--omit=dev", "--no-audit", "--no-fund"],
-            env={**os.environ, "HOME": "/var/lib/finance"}, user="finance", timeout=1800, cwd=runtime)
-    command([approval["npm_path"], "ci", "--omit=dev", "--no-audit", "--no-fund"],
-            env={**os.environ, "HOME": "/var/lib/finance"}, user="finance", timeout=600, cwd=gateway)
+    _install_locked_dependencies(runtime, approval["npm_path"], finance, 1800)
+    _install_locked_dependencies(gateway, approval["npm_path"], finance, 600)
     require((runtime / "node_modules/n8n/package.json").is_file(), "n8n runtime install is incomplete")
     installed = json.loads((runtime / "node_modules/n8n/package.json").read_text(encoding="utf-8"))
     require(installed.get("version") == "2.39.8", "installed n8n version differs from lockfile")
     native_workflows = target / "ops/finance-release/native-workflows"
-    command([approval["node_path"], str(gateway / "scripts/build-workflows.mjs")],
-            env={**os.environ, "FINANCE_GATEWAY_HOST_MODE": "native",
-                 "FINANCE_WORKFLOW_OUTPUT_DIR": str(native_workflows)}, user="finance")
+    with tempfile.TemporaryDirectory(prefix="finance-native-workflows-", dir=finance_home) as output:
+        os.chown(output, finance.pw_uid, finance.pw_gid)
+        command([approval["node_path"], str(gateway / "scripts/build-workflows.mjs")],
+                env={**os.environ, "FINANCE_GATEWAY_HOST_MODE": "native",
+                     "FINANCE_WORKFLOW_OUTPUT_DIR": output}, user="finance")
+        require({path.stem for path in Path(output).glob("*.json")} == set(WORKFLOWS),
+                "native workflow build did not produce exactly three workflows")
+        if native_workflows.exists():
+            require(native_workflows.is_dir() and _root_locked(native_workflows),
+                    "existing native workflows are not root-owned")
+            require(all(_root_locked(native_workflows / (name + ".json")) for name in WORKFLOWS),
+                    "existing native workflow file is writable or not root-owned")
+            require(all(_file_sha256(native_workflows / (name + ".json")) ==
+                        _file_sha256(Path(output) / (name + ".json")) for name in WORKFLOWS),
+                    "existing native workflows differ from approved build")
+        else:
+            shutil.copytree(output, native_workflows)
+            _seal_tree(native_workflows)
     require(all("http://127.0.0.1:8080/" in (native_workflows / (name + ".json")).read_text(encoding="utf-8")
                 for name in WORKFLOWS), "native workflow gateway URL is not loopback")
     _ensure_database("finance_n8n", "finance_n8n", values["FINANCE_N8N_POSTGRES_PASSWORD"])
@@ -536,12 +632,16 @@ def activate(args) -> None:
     require(Path("/opt/finance/current").is_symlink() and Path("/opt/finance/current").resolve().name == release_id,
             "backend must be on the same release before native activation")
     approval = validate_approval(args.approval.read_bytes())
-    require((BASE / "releases" / release_id / "approval.json").read_bytes() == args.approval.read_bytes(),
+    target = BASE / "releases" / release_id
+    require((BASE / "current").is_symlink() and (BASE / "current").resolve() == target,
+            "native current is not the staged release")
+    _verify_source_provenance(target)
+    require(_root_locked(target / "approval.json") and
+            (target / "approval.json").read_bytes() == args.approval.read_bytes(),
             "activation approval differs from staged approval")
     require(pg("SELECT version_num FROM public.alembic_version;", approval["finance_database"]) ==
             approval["backend_target_revision"], "backend migration target is not reached")
     values = production_env()
-    target = BASE / "releases" / release_id
     try:
         for workflow in WORKFLOWS:
             _n8n_cli(target, approval, values, "publish:workflow", f"--id={workflow}")
