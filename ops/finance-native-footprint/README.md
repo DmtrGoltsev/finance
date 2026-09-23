@@ -8,8 +8,9 @@ Workflow `.github/workflows/finance-native-footprint.yml` измеряет за�
 `codex/investment-recommendations-ci-20260923`; иной SHA отклоняется до
 загрузки feature-кода. До публикации обновлённого SHA ручной запуск запрещён.
 
-Из собственного закреплённого lockfile workflow устанавливает `n8n@2.39.8`
-через `npm ci`. Из указанного feature-коммита он берёт lockfile и исходники
+Из lockfile точного feature-коммита
+(`ops/finance-release/native-n8n/package-lock.json`) workflow устанавливает
+`n8n@2.39.8` через `npm ci`. Из того же коммита он берёт lockfile и исходники
 gateway (`ops/finance-n8n`) и Python-пакет worker (`apps/backend`). Отдельный
 lockfile Python-зависимостей в текущем feature-коммите отсутствует: worker
 устанавливается из `pyproject.toml`, а хеш итогового списка версий фиксируется

@@ -3,11 +3,12 @@ set -euo pipefail
 export LC_ALL=C
 
 source_root="${SOURCE_ROOT:?}"
-lock_root="${N8N_LOCK_ROOT:?}"
+lock_root="$source_root/ops/finance-release/native-n8n"
 output="${METRICS_OUT:?}"
 feature_sha="${FEATURE_SHA:?}"
 [[ "$feature_sha" =~ ^[0-9a-f]{40}$ ]]
 test -f "$lock_root/package-lock.json"
+test -f "$lock_root/package.json"
 test -f "$source_root/ops/finance-n8n/package-lock.json"
 test -f "$source_root/apps/backend/pyproject.toml"
 test -d "$source_root/ops/finance-n8n/gateway"

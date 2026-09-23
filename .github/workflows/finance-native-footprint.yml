@@ -24,6 +24,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: 76363ca73756d4c279a115c48c29b53bf10ecef2
+          persist-credentials: false
+          path: feature
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -34,8 +40,18 @@ jobs:
       - run: bash -n ops/finance-native-footprint/measure.sh
       - run: python -m unittest discover -s ops/finance-native-footprint -p 'test_*.py' -v
       - run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('feature/ops/finance-release/native-n8n')
+          manifest = json.loads((root / 'package.json').read_text())
+          lock = json.loads((root / 'package-lock.json').read_text())
+          assert manifest['dependencies']['n8n'] == '2.39.8'
+          assert lock['packages']['node_modules/n8n']['version'] == '2.39.8'
+          assert lock['lockfileVersion'] == 3
+          PY
           npm install --global npm@9.2.0 --ignore-scripts --no-audit --no-fund
-          npm ci --dry-run --ignore-scripts --omit=dev --no-audit --no-fund --prefix ops/finance-native-footprint/n8n
+          npm ci --dry-run --ignore-scripts --omit=dev --no-audit --no-fund --prefix feature/ops/finance-release/native-n8n
 
   measure:
     if: >-
@@ -75,7 +91,6 @@ jobs:
       - name: Measure isolated native install and rollback copy
         env:
           SOURCE_ROOT: ${{ github.workspace }}/feature
-          N8N_LOCK_ROOT: ${{ github.workspace }}/footprint-src/ops/finance-native-footprint/n8n
           METRICS_OUT: ${{ github.workspace }}/finance-native-footprint.txt
         run: |
           set -euo pipefail

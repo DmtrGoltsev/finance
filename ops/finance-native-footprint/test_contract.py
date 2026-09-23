@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -60,17 +59,16 @@ class FootprintContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse(valid, "c" * 40)
 
-    def test_n8n_lock_is_pinned_to_public_registry(self) -> None:
-        manifest = json.loads((HERE / "n8n/package.json").read_text(encoding="utf-8"))
-        lock = json.loads((HERE / "n8n/package-lock.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["dependencies"], {"n8n": "2.39.8"})
-        self.assertEqual(lock["packages"]["node_modules/n8n"]["version"], "2.39.8")
-        self.assertEqual(lock["lockfileVersion"], 3)
-        for name, package in lock["packages"].items():
-            resolved = package.get("resolved")
-            if resolved:
-                with self.subTest(name=name):
-                    self.assertTrue(resolved.startswith("https://registry.npmjs.org/"))
+    def test_pr_verifies_exact_feature_n8n_lock(self) -> None:
+        workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        steps = workflow["jobs"]["verify"]["steps"]
+        feature_checkout = next(step for step in steps if step.get("with", {}).get("path") == "feature")
+        self.assertEqual(feature_checkout["with"]["ref"], "76363ca73756d4c279a115c48c29b53bf10ecef2")
+        self.assertEqual(feature_checkout["with"]["persist-credentials"], "false")
+        check = steps[-1]["run"]
+        self.assertIn("feature/ops/finance-release/native-n8n", check)
+        self.assertIn("'2.39.8'", check)
+        self.assertIn("npm ci --dry-run --ignore-scripts", check)
 
     def test_manual_run_has_no_production_boundary_or_secret_passthrough(self) -> None:
         workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -98,7 +96,7 @@ class FootprintContractTests(unittest.TestCase):
         script = (HERE / "measure.sh").read_text(encoding="utf-8")
         result = subprocess.run([bash(), "-n", str(HERE / "measure.sh")], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for required in ("df -B1 --output=avail", "df --output=iavail", "sleep 0.2", "npm ci", "cp -a", "sha256sum --check"):
+        for required in ("df -B1 --output=avail", "df --output=iavail", "sleep 0.2", "npm ci", "cp -a", "sha256sum --check", "ops/finance-release/native-n8n"):
             self.assertIn(required, script)
         for forbidden in (".env", "printenv", "docker ", "ssh ", "sudo ", "pg_dump", "git push"):
             self.assertNotIn(forbidden, script)
