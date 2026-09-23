@@ -1,0 +1,19 @@
+{
+  "name": "finance-investment-n8n-ops",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ipaddr.js": "2.2.0",
+    "pg": "8.16.3"
+  },
+  "scripts": {
+    "build:workflows": "node scripts/build-workflows.mjs",
+    "validate": "node scripts/validate-workflows.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "smoke": "node scripts/local-smoke.mjs",
+    "start": "node gateway/server.mjs",
+    "test:import": "node scripts/import-check.mjs"
+  }
+}

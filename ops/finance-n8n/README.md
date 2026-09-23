@@ -1,0 +1,56 @@
+# Внутренний шлюз анализа Finance
+
+Finance остаётся владельцем портфелей, заданий и рекомендаций. n8n `2.39.8` только передаёт подписанные запросы шлюзу и запускает обработку очереди штатными HTTP Request nodes. Узлов Code нет. Внешних сделок и прямых вызовов FCM нет.
+
+## Состав
+
+- `gateway/`: проверка сырых байтов HMAC, контракт, атомарное принятие задания, шифрованная очередь, защищённые запросы, проверка DeepSeek и подписанный обратный вызов.
+- `workflows/`: приём задания, подписанная проверка готовности, обработка очереди с очисткой. У всех есть постоянный верхнеуровневый `id`; импорт не активирует процессы.
+- `compose.yml`: n8n, PostgreSQL и шлюз. У шлюза и PostgreSQL нет опубликованных портов. n8n имеет только loopback-порт редактора и внутреннего webhook.
+- `postgres/`: отдельная БД и роль шлюза, не БД Finance; PostgreSQL-инстанс общий только с данным экземпляром n8n.
+- `scripts/`: импорт, проверки, резервное копирование обеих БД, восстановление и откат.
+
+## Проверки
+
+```powershell
+npm ci --ignore-scripts
+npm run build:workflows
+npm run validate
+$env:BACKEND_HMAC_MODULE = '<путь к актуальному backend>/src/app/investments/hmac_auth.py'
+npm test
+npm run test:import
+docker compose --env-file .env.example -f compose.yml config --quiet
+npm run smoke
+```
+
+Проверка `test:import` выполняет `n8n@2.39.8 import:credentials`, `import:workflow`, `export:workflow` и `publish:workflow` для трёх файлов. Используется временный профиль SQLite, не существующая установка n8n. Он удаляется после проверки. `smoke` при недоступном Docker daemon завершается с точным сообщением, не пытаясь его включить.
+
+## Подключение
+
+1. Production использует только утверждённые образы с `@sha256` и значения из свежего approval; `.env.example` предназначен для локальной проверки.
+2. Сеть `finance_delivery_host_bridge` создаёт только Finance install-контракт. n8n к ней не подключается; gateway видит узкий host callback proxy. Публичный reverse proxy не обслуживает внутренние webhook.
+3. PostgreSQL, gateway и n8n запускаются после резервного копирования существующего контура. SQL схемы gateway применяется и на старом томе без его удаления.
+4. Install-контракт создаёт Header Auth credential с фиксированным `finance-gateway-token` и значением из защищённого файла, затем импортирует ровно три неактивных workflow. `publish:workflow` выполняется после готовности новой версии backend.
+5. Выполнить подписанную проверку приложения, bridge proxy и worker. Один статус контейнера `healthy` не подтверждает сквозную доставку. Порядок: [`ops/finance-release/README.md`](../finance-release/README.md).
+
+У n8n нет ключей DeepSeek, подписи callback или шифрования очереди. Служебный токен хранится в зашифрованном credential n8n, а не в workflow. Gateway обращается только к `finance-host-callback` на утверждённом bridge-порту; proxy пропускает лишь callback к `127.0.0.1:8081`.
+
+## Контракт backend
+
+Backend отправляет UTF-8 JSON версии 1 в `/webhook/internal/finance/investments/recommendations/v1`, предпочтительно с `Content-Type: application/octet-stream`. Подпись вычисляется над **точными байтами**, как `sign_callback` backend:
+
+```text
+POST\n<canonical path>\n<timestamp>\n<nonce>\n<raw body bytes>
+```
+
+Заголовки: `X-Finance-Timestamp`, `X-Finance-Nonce`, `X-Finance-Signature`. Нельзя повторно сериализовать JSON после подписания. n8n пересылает `binary.data` без преобразования. Отметить outbox доставленным можно только после `202`: к этому моменту шлюз завершил HMAC, проверку контракта и транзакцию очереди. Ошибка gateway возвращается исходным HTTP-кодом, ошибка транспорта не превращается в успех.
+
+Поле `analysisPackage` соответствует обезличенному пакету backend; оболочка содержит `schemaVersion,eventId,jobId,attempt,createdAt,analysisPackage`. Автоматическая повторная попытка доменного анализа принадлежит backend, максимум три. Реализация outbox-worker вне области этого каталога.
+
+## Ограничения выпуска
+
+Нужны реальная проверка Docker/PostgreSQL, восстановление резервных копий, сетевой вызов MOEX и проверка доступности выбранной модели/Responses API DeepSeek. Тесты с подставными ответами не доказывают доступность провайдера. В выходные при котировках старше 24 часов готовая рекомендация запрещена намеренно.
+
+Backend принимает идентичный повторный terminal callback идемпотентно: канонический хеш результата проверяется до изменчивых ограничений свежести и политики. При потерянном ответе шлюз сохраняет зашифрованный результат и повторяет callback для того же `jobId`, `eventId` и ключа идемпотентности, не запуская анализ повторно. Отличающийся результат отклоняется, а готовый callback терминально гасит ожидающее или арендованное событие outbox.
+
+Подробнее: [архитектура](docs/architecture.md), [эксплуатация](docs/operations.md).

@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.models import Membership as MembershipModel
 from app.db.models import Session as SessionModel
 from app.db.models import User as UserModel
+from app.delivery.models import PushDevice
 
 from .identifiers import canonical_uuid_text, normalize_email
 from .models import (
@@ -265,12 +266,16 @@ class SqlAlchemySessionTokenStore:
             return
 
         with self.session_factory.begin() as session:
-            model = session.get(SessionModel, parsed_session_id)
+            model = session.scalar(select(SessionModel).where(
+                SessionModel.id == parsed_session_id).with_for_update())
             if model is None:
                 return
             model.status = TokenRecordStatus.REVOKED.value
             model.revoked_at = _aware_utc(revoked_at)
             model.updated_at = _aware_utc(revoked_at)
+            session.execute(update(PushDevice).where(
+                PushDevice.session_id == parsed_session_id,
+            ).values(token=None, revoked_at=_aware_utc(revoked_at)))
 
     def revoke_user_sessions(self, *, user_id: str, revoked_at: datetime) -> None:
         parsed_user_id = _optional_uuid(user_id)
@@ -283,12 +288,15 @@ class SqlAlchemySessionTokenStore:
                 select(SessionModel).where(
                     SessionModel.user_id == parsed_user_id,
                     SessionModel.status == TokenRecordStatus.ACTIVE.value,
-                )
+                ).with_for_update()
             ).scalars()
             for model in rows:
                 model.status = TokenRecordStatus.REVOKED.value
                 model.revoked_at = revoked_at_utc
                 model.updated_at = revoked_at_utc
+            session.execute(update(PushDevice).where(
+                PushDevice.owner_user_id == parsed_user_id,
+            ).values(token=None, revoked_at=revoked_at_utc))
 
     def records_for_tests(self) -> tuple[SessionStorageRecord, ...]:
         with self.session_factory() as session:

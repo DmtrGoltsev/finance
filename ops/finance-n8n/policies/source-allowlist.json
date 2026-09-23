@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "defaultEnabled": [
+    "iss.moex.com",
+    "www.cbr.ru",
+    "minfin.gov.ru",
+    "www.nalog.gov.ru"
+  ],
+  "approvedIssuerHosts": [],
+  "licensedNews": {
+    "enabled": false,
+    "hosts": [
+      "www.rbc.ru",
+      "www.interfax.ru",
+      "tass.ru"
+    ]
+  },
+  "rules": {
+    "httpsOnly": true,
+    "followRedirects": false,
+    "denyPrivateAddresses": true,
+    "denyPayloadProvidedUrls": true,
+    "maximumResponseBytes": 1048576,
+    "timeoutSeconds": 10
+  }
+}

@@ -111,6 +111,41 @@ interface FinanceApiClient {
         householdId: String?,
     ): ApiResult<ScreenshotOcrResponse> =
         ApiResult.Failure("Распознавание скриншотов не поддерживается этим клиентом")
+    suspend fun getInvestmentPolicy(): ApiResult<InvestmentPolicy> =
+        ApiResult.Failure("Инвестиционный профиль не поддерживается этим клиентом")
+    suspend fun putInvestmentPolicy(policy: InvestmentPolicy): ApiResult<InvestmentPolicy> =
+        ApiResult.Failure("Инвестиционный профиль не поддерживается этим клиентом")
+    suspend fun createPortfolioImport(
+        idempotencyKey: String,
+        accountProfile: BrokerageAccountProfile,
+        screenshotCount: Int,
+        observedAt: String,
+    ): ApiResult<PortfolioImport> = ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
+    suspend fun confirmPortfolioImport(
+        importId: String,
+        accountProfileId: String,
+        freeCash: String,
+        monthlyContribution: String,
+        positions: List<PortfolioPosition>,
+    ): ApiResult<PortfolioSnapshot> = ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
+    suspend fun discardPortfolioImport(importId: String): ApiResult<Unit> =
+        ApiResult.Failure("Импорт портфеля не поддерживается этим клиентом")
+    suspend fun listPortfolioSnapshots(): ApiResult<List<PortfolioSnapshot>> =
+        ApiResult.Failure("Портфели не поддерживаются этим клиентом")
+    suspend fun getPortfolioSnapshot(snapshotId: String): ApiResult<PortfolioSnapshot> =
+        ApiResult.Failure("Портфели не поддерживаются этим клиентом")
+    suspend fun createRecommendationJob(
+        idempotencyKey: String,
+        snapshotIds: List<String>,
+    ): ApiResult<RecommendationJob> = ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
+    suspend fun listRecommendationJobs(limit: Int = 20, cursor: String? = null): ApiResult<RecommendationHistoryPage> =
+        ApiResult.Failure("История рекомендаций не поддерживается этим клиентом")
+    suspend fun getRecommendationJob(jobId: String): ApiResult<RecommendationJob> =
+        ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
+    suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> =
+        ApiResult.Failure("Повтор доставки не поддерживается этим клиентом")
+    suspend fun getRecommendationReport(jobId: String): ApiResult<RecommendationReport> =
+        ApiResult.Failure("Рекомендации не поддерживаются этим клиентом")
     suspend fun listPlanningPlans(scope: String, month: String, householdId: String? = null): ApiResult<PlanningPlan?> =
         ApiResult.Failure("Планирование не поддерживается этим клиентом")
     suspend fun listPlanningPlanHistory(scope: String, householdId: String? = null): ApiResult<List<PlanningPlan>> =
@@ -582,6 +617,29 @@ class LiveFinanceApiClient(
     override val config: ApiConfig,
     private val tokenStore: SecureTokenStore,
 ) : FinanceApiClient {
+    suspend fun registerPushDevice(deviceId: String, token: String, sessionId: String): ApiResult<Unit> = safeCall {
+        val current = tokenStore.readSession() ?: throw SessionChangedException()
+        if (current.sessionIdentity != sessionId) throw SessionChangedException()
+        val expected = current.expectation()
+        request(
+            path = "/api/v1/push/devices/${deviceId.urlEncodePath()}", method = "PUT",
+            body = JSONObject().put("token", token).toString(), requiredSession = expected,
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
+    suspend fun revokePushDevice(deviceId: String, sessionId: String): ApiResult<Unit> = safeCall {
+        val current = tokenStore.readSession() ?: throw SessionChangedException()
+        if (current.sessionIdentity != sessionId) throw SessionChangedException()
+        val expected = current.expectation()
+        request(
+            path = "/api/v1/push/devices/${deviceId.urlEncodePath()}", method = "DELETE",
+            requiredSession = expected, expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
     override suspend fun login(email: String, password: String): ApiResult<SessionStatus> = safeCall {
         val response = request(
             path = "/api/v1/sessions",
@@ -1109,6 +1167,154 @@ class LiveFinanceApiClient(
         return parseScreenshotOcrResponse(JSONObject(text))
     }
 
+    override suspend fun getInvestmentPolicy(): ApiResult<InvestmentPolicy> = safeCall {
+        parseInvestmentPolicy(request(path = "/api/v1/investments/policy", method = "GET"))
+    }
+
+    override suspend fun putInvestmentPolicy(policy: InvestmentPolicy): ApiResult<InvestmentPolicy> = safeCall {
+        parseInvestmentPolicy(
+            request(
+                path = "/api/v1/investments/policy",
+                method = "PUT",
+                body = policy.toPutJson().toString(),
+            ),
+        )
+    }
+
+    override suspend fun createPortfolioImport(
+        idempotencyKey: String,
+        accountProfile: BrokerageAccountProfile,
+        screenshotCount: Int,
+        observedAt: String,
+    ): ApiResult<PortfolioImport> = safeCall {
+        parsePortfolioImport(
+            request(
+                path = "/api/v1/investments/portfolio-imports",
+                method = "POST",
+                body = JSONObject()
+                    .put("idempotencyKey", idempotencyKey)
+                    .put("accountProfileId", accountProfile.id)
+                    .put("brokerage", accountProfile.brokerage.apiValue)
+                    .put("userLabel", accountProfile.userLabel)
+                    .put("accountType", accountProfile.accountType.apiValue)
+                    .put("screenshotCount", screenshotCount)
+                    .put("observedAt", observedAt)
+                    .toString(),
+                expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
+            ),
+        )
+    }
+
+    override suspend fun confirmPortfolioImport(
+        importId: String,
+        accountProfileId: String,
+        freeCash: String,
+        monthlyContribution: String,
+        positions: List<PortfolioPosition>,
+    ): ApiResult<PortfolioSnapshot> = safeCall {
+        parsePortfolioSnapshot(
+            request(
+                path = "/api/v1/investments/portfolio-imports/${importId.urlEncodePath()}/confirm",
+                method = "POST",
+                body = JSONObject()
+                    .put("accountProfileId", accountProfileId)
+                    .put("freeCash", freeCash)
+                    .put("monthlyContribution", monthlyContribution)
+                    .put("positions", JSONArray().apply { positions.forEach { put(it.toInputJson()) } })
+                    .toString(),
+                expectedCodes = setOf(HttpURLConnection.HTTP_CREATED),
+            ),
+        )
+    }
+
+    override suspend fun discardPortfolioImport(importId: String): ApiResult<Unit> = safeCall {
+        request(
+            path = "/api/v1/investments/portfolio-imports/${importId.urlEncodePath()}",
+            method = "DELETE",
+            expectedCodes = setOf(HttpURLConnection.HTTP_NO_CONTENT),
+        )
+        Unit
+    }
+
+    override suspend fun listPortfolioSnapshots(): ApiResult<List<PortfolioSnapshot>> = safeCall {
+        val response = request(path = "/api/v1/investments/portfolio-snapshots", method = "GET")
+        val items = response.optJSONArray("_array")
+            ?: response.optJSONArray("items")
+            ?: response.optJSONObject("data")?.optJSONArray("items")
+            ?: JSONArray()
+        (0 until items.length()).mapNotNull { items.optJSONObject(it) }.map(::parsePortfolioSnapshot)
+    }
+
+    override suspend fun getPortfolioSnapshot(snapshotId: String): ApiResult<PortfolioSnapshot> = safeCall {
+        parsePortfolioSnapshot(
+            request(
+                path = "/api/v1/investments/portfolio-snapshots/${snapshotId.urlEncodePath()}",
+                method = "GET",
+            ),
+        )
+    }
+
+    override suspend fun createRecommendationJob(
+        idempotencyKey: String,
+        snapshotIds: List<String>,
+    ): ApiResult<RecommendationJob> = safeCall {
+        parseRecommendationJob(
+            request(
+                path = "/api/v1/investments/recommendation-jobs",
+                method = "POST",
+                body = JSONObject()
+                    .put("idempotencyKey", idempotencyKey)
+                    .put("snapshotIds", JSONArray(snapshotIds))
+                    .toString(),
+                expectedCodes = setOf(HttpURLConnection.HTTP_ACCEPTED),
+            ),
+        )
+    }
+
+    override suspend fun listRecommendationJobs(
+        limit: Int,
+        cursor: String?,
+    ): ApiResult<RecommendationHistoryPage> = safeCall {
+        parseRecommendationHistoryPage(
+            request(
+                path = "/api/v1/investments/recommendation-jobs",
+                method = "GET",
+                query = buildMap {
+                    put("limit", limit.coerceIn(1, 100).toString())
+                    cursor?.takeIf(String::isNotBlank)?.let { put("cursor", it) }
+                },
+            ),
+        )
+    }
+
+    override suspend fun getRecommendationJob(jobId: String): ApiResult<RecommendationJob> = safeCall {
+        parseRecommendationJob(
+            request(
+                path = "/api/v1/investments/recommendation-jobs/${jobId.urlEncodePath()}",
+                method = "GET",
+            ),
+        )
+    }
+
+    override suspend fun retryRecommendationDelivery(jobId: String): ApiResult<RecommendationJob> = safeCall {
+        parseRecommendationJob(
+            request(
+                path = "/api/v1/investments/recommendation-jobs/${jobId.urlEncodePath()}/retry-delivery",
+                method = "POST",
+                expectedCodes = setOf(HttpURLConnection.HTTP_ACCEPTED),
+            ),
+        )
+    }
+
+    override suspend fun getRecommendationReport(jobId: String): ApiResult<RecommendationReport> = safeCall {
+        parseRecommendationReport(
+            request(
+                path = "/api/v1/investments/recommendation-jobs/${jobId.urlEncodePath()}/report",
+                method = "GET",
+            ),
+        )
+    }
+
     override suspend fun listPlanningPlans(
         scope: String,
         month: String,
@@ -1444,7 +1650,11 @@ class LiveFinanceApiClient(
         if (authorize) {
             ensureSessionStillCurrent(requestSession)
         }
-        return if (text.isBlank()) JSONObject() else JSONObject(text)
+        return when {
+            text.isBlank() -> JSONObject()
+            text.trimStart().startsWith("[") -> JSONObject().put("_array", JSONArray(text))
+            else -> JSONObject(text)
+        }
     }
 
     private suspend fun refreshAccessToken(failedSession: StoredSessionTokens?): RefreshAttempt =

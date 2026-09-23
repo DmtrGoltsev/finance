@@ -1,0 +1,8 @@
+{
+  "name": "finance-native-n8n-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "n8n": "2.39.8"
+  }
+}

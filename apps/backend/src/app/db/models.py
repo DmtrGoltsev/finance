@@ -954,9 +954,9 @@ class AuditEvent(Base):
     request_id: Mapped[str | None] = mapped_column(Text)
     reason_code: Mapped[str | None] = mapped_column(Text)
     metadata_safe: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
+        JSONB().with_variant(JSON, "sqlite"),
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("'{}'"),
     )
 
 
@@ -968,6 +968,13 @@ class OutboxEvent(Base):
         Index("ix_outbox_events_event_type_created", "event_type", "created_at"),
         Index("ix_outbox_events_owner_created", "owner_user_id", "created_at"),
         Index("ix_outbox_events_household_created", "household_id", "created_at"),
+        Index(
+            "uq_outbox_events_deduplication_key",
+            "deduplication_key",
+            unique=True,
+            postgresql_where=text("deduplication_key IS NOT NULL"),
+            sqlite_where=text("deduplication_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -979,15 +986,19 @@ class OutboxEvent(Base):
     household_id: Mapped[uuid.UUID | None] = uuid_fk("households.id", nullable=True)
     membership_version: Mapped[int | None] = mapped_column(BigInteger)
     payload_safe: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
+        JSONB().with_variant(JSON, "sqlite"),
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("'{}'"),
     )
     status: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = created_timestamp()
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    deduplication_key: Mapped[str | None] = mapped_column(Text)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class SyncClient(Base):
@@ -1127,3 +1138,8 @@ class SyncClientMutation(TimestampMixin, Base):
     response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error_code: Mapped[str | None] = mapped_column(Text)
     change_seq: Mapped[int | None] = mapped_column(BigInteger)
+
+
+# Import additive domain models so Alembic and metadata checks see their tables.
+from app.delivery import models as delivery_models  # noqa: E402,F401
+from app.investments import models as investment_models  # noqa: E402,F401

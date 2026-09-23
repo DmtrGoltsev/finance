@@ -1,0 +1,136 @@
+{
+  "id": "finance-investment-recommendation-v1",
+  "name": "Finance Investment Recommendation v1",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "timezone": "Europe/Moscow",
+    "executionTimeout": 1800
+  },
+  "nodes": [
+    {
+      "id": "finance-investment-recommendation-v1-webhook",
+      "name": "Приём подписанного запроса",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "finance-investment-recommendation-v1",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal/finance/investments/recommendations/v1",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      }
+    },
+    {
+      "id": "finance-http-accept",
+      "name": "Проверка и приём gateway",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "finance-gateway-token",
+          "name": "Finance Gateway Internal Token"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "http://analysis-gateway:8080/accept",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-finance-timestamp",
+              "value": "={{ $json.headers['x-finance-timestamp'] || '' }}"
+            },
+            {
+              "name": "x-finance-nonce",
+              "value": "={{ $json.headers['x-finance-nonce'] || '' }}"
+            },
+            {
+              "name": "x-finance-signature",
+              "value": "={{ $json.headers['x-finance-signature'] || '' }}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/octet-stream"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "finance-investment-recommendation-v1-respond",
+      "name": "Ответ после проверки",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Приём подписанного запроса": {
+      "main": [
+        [
+          {
+            "node": "Проверка и приём gateway",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Проверка и приём gateway": {
+      "main": [
+        [
+          {
+            "node": "Ответ после проверки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

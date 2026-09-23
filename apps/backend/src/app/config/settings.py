@@ -13,6 +13,20 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Finance MVP Backend"
+    delivery_n8n_url: str = (
+        "http://n8n:5678/webhook/internal/finance/investments/recommendations/v1"
+    )
+    delivery_ingress_secret: str | None = Field(default=None, repr=False)
+    delivery_lease_seconds: int = Field(default=120, ge=90)
+    delivery_max_attempts: int = Field(default=12, ge=1)
+    delivery_poll_seconds: int = Field(default=5, ge=1)
+    delivery_health_port: int = 8091
+    delivery_health_host: str = "127.0.0.1"
+    fcm_enabled: bool = False
+    fcm_project_id: str = ""
+    fcm_credentials_file: str | None = Field(default=None, repr=False)
+    fcm_credentials_json: str | None = Field(default=None, repr=False)
+    moex_refresh_secids: list[str] = Field(default_factory=list)
     app_version: str = "0.1.0"
     environment: str = "local"
     debug: bool = False
@@ -135,6 +149,20 @@ class Settings(BaseSettings):
         ge=1,
         description="Per-image Tesseract OCR timeout in seconds.",
     )
+    investment_callback_hmac_secret: str | None = Field(
+        default=None,
+        description="Shared HMAC secret for the n8n recommendation callback.",
+    )
+    investment_callback_max_clock_skew_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=900,
+        description="Maximum accepted n8n callback clock skew.",
+    )
+    investment_source_allowed_issuer_hosts: list[str] = Field(
+        default_factory=list,
+        description="Additional exact HTTPS issuer hosts accepted in recommendation citations.",
+    )
 
     @property
     def effective_auth_bearer_refresh_ttl_seconds(self) -> int:
@@ -142,6 +170,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bearer_token_lifetimes(self) -> "Settings":
+        if self.fcm_credentials_file and self.fcm_credentials_json:
+            raise ValueError("Configure either FCM credential file or JSON, not both")
         if self.auth_bearer_access_ttl_seconds >= self.effective_auth_bearer_refresh_ttl_seconds:
             raise ValueError("mobile bearer access lifetime must be shorter than refresh lifetime")
         return self

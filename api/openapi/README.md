@@ -31,8 +31,16 @@ MVP auth surface:
 Reserved post-MVP exclusions:
 
 - no user profile, household, invite, membership, export, deletion-request, logout-all, standalone transfer, or explicit transaction void routes are exposed in the mounted MVP contract;
-- no import endpoints;
+- no bank/file import endpoints; the personal investment extension exposes only
+  metadata-only screenshot import sessions and user-confirmed structured positions;
 - no bank API, bank connection, bank account sync, SMS import, push import, broker connection, external credential, card, IBAN/account-requisite, raw bank statement, or push-token endpoints;
 - reserved source values such as `file_import`, `bank_api`, `sms`, and `push` are not accepted by MVP create/update flows.
+
+Investment recommendation extension:
+
+- supports only Russian-market stocks, bonds, and funds in RUB;
+- stores no raw screenshots, OCR text, person names, broker account numbers, or credentials;
+- queues analysis through an outbox and accepts only HMAC-authenticated callbacks;
+- never executes trades; recommendations expire after seven days and use market data no older than 24 hours.
 
 Next validation should run a real OpenAPI 3.1 linter such as Redocly or Spectral, then codegen dry-runs for the TypeScript and Kotlin clients.

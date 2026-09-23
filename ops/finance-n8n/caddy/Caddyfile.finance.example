@@ -1,0 +1,4 @@
+# Finance backend calls n8n directly through finance_backend_internal.
+# These paths must never be exposed through the public Caddy listener.
+@finance_internal path /webhook/internal/finance/* /webhook-test/internal/finance/*
+respond @finance_internal 404

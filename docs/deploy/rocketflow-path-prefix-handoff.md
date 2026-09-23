@@ -2,7 +2,7 @@
 
 ## Server state
 
-- Finance is prepared beside RocketFlow on `45.10.110.42`.
+- Finance is prepared beside RocketFlow on the configured production host.
 - RocketFlow remains on `/` and `/api/`; do not move it to `/rocket/` or `/rocket-api/`.
 - Finance nginx routes are already present:
   - `/finance/` serves `/var/www/finance/current/`.

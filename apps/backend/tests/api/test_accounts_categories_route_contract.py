@@ -100,6 +100,42 @@ EXPECTED_APPROVED_SYNC_OPERATIONS = {
     ("POST", "/api/v1/sync/push"): "syncPush",
     ("POST", "/api/v1/sync/pull"): "syncPull",
 }
+EXPECTED_APPROVED_INVESTMENT_OPERATIONS = {
+    ("GET", "/api/v1/investments/policy"): "getInvestmentPolicy",
+    ("PUT", "/api/v1/investments/policy"): "putInvestmentPolicy",
+    ("POST", "/api/v1/investments/portfolio-imports"): "createPortfolioImport",
+    (
+        "DELETE",
+        "/api/v1/investments/portfolio-imports/{importId}",
+    ): "discardPortfolioImport",
+    (
+        "POST",
+        "/api/v1/investments/portfolio-imports/{importId}/confirm",
+    ): "confirmPortfolioImport",
+    ("GET", "/api/v1/investments/portfolio-snapshots"): "listPortfolioSnapshots",
+    (
+        "GET",
+        "/api/v1/investments/portfolio-snapshots/{snapshotId}",
+    ): "getPortfolioSnapshot",
+    ("POST", "/api/v1/investments/recommendation-jobs"): "createRecommendationJob",
+    ("GET", "/api/v1/investments/recommendation-jobs"): "listRecommendationJobs",
+    (
+        "GET",
+        "/api/v1/investments/recommendation-jobs/{jobId}",
+    ): "getRecommendationJob",
+    (
+        "POST",
+        "/api/v1/investments/recommendation-jobs/{jobId}/retry-delivery",
+    ): "retryRecommendationDelivery",
+    (
+        "GET",
+        "/api/v1/investments/recommendation-jobs/{jobId}/report",
+    ): "getRecommendationReport",
+    (
+        "POST",
+        "/api/v1/investments/internal/recommendation-jobs/{jobId}/callback",
+    ): "receiveRecommendationCallback",
+}
 EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
     {
         ("DELETE", "/api/v1/sessions"),
@@ -108,6 +144,8 @@ EXPECTED_UNMOUNTED_SESSION_OPERATIONS = frozenset(
 
 EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
     {
+        ("PUT", "/api/v1/push/devices/{device_id}"),
+        ("DELETE", "/api/v1/push/devices/{device_id}"),
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_TRANSACTION_OPERATIONS.keys(),
@@ -115,10 +153,13 @@ EXPECTED_SCHEMA_INCLUDED_ROUTES = frozenset(
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SYNC_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_INVESTMENT_OPERATIONS.keys(),
     }
 )
 EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
     {
+        ("PUT", "/api/v1/push/devices/{device_id}"),
+        ("DELETE", "/api/v1/push/devices/{device_id}"),
         ("GET", "/health"),
         *EXPECTED_APPROVED_SCHEMA_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SESSION_OPERATIONS.keys(),
@@ -127,6 +168,7 @@ EXPECTED_APPROVED_MOUNTED_ROUTES = frozenset(
         *EXPECTED_APPROVED_REPORT_OPERATIONS.keys(),
         *EXPECTED_APPROVED_PLANNING_OPERATIONS.keys(),
         *EXPECTED_APPROVED_SYNC_OPERATIONS.keys(),
+        *EXPECTED_APPROVED_INVESTMENT_OPERATIONS.keys(),
     }
 )
 
@@ -279,6 +321,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
             **EXPECTED_APPROVED_PLANNING_OPERATIONS,
             **EXPECTED_APPROVED_SYNC_OPERATIONS,
+            **EXPECTED_APPROVED_INVESTMENT_OPERATIONS,
         }
     }
 
@@ -289,6 +332,7 @@ def test_runtime_openapi_operation_ids_match_approved_subset(client) -> None:
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
         **EXPECTED_APPROVED_PLANNING_OPERATIONS,
         **EXPECTED_APPROVED_SYNC_OPERATIONS,
+        **EXPECTED_APPROVED_INVESTMENT_OPERATIONS,
     }
 
 
@@ -303,6 +347,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
             **EXPECTED_APPROVED_REPORT_OPERATIONS,
             **EXPECTED_APPROVED_PLANNING_OPERATIONS,
             **EXPECTED_APPROVED_SYNC_OPERATIONS,
+            **EXPECTED_APPROVED_INVESTMENT_OPERATIONS,
         }
     }
 
@@ -313,6 +358,7 @@ def test_canonical_openapi_operation_ids_match_approved_subset() -> None:
         **EXPECTED_APPROVED_REPORT_OPERATIONS,
         **EXPECTED_APPROVED_PLANNING_OPERATIONS,
         **EXPECTED_APPROVED_SYNC_OPERATIONS,
+        **EXPECTED_APPROVED_INVESTMENT_OPERATIONS,
     }
 
 

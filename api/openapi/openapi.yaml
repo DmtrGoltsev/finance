@@ -46,6 +46,8 @@ tags:
     description: Monthly personal and household planning; confirmations never create transactions.
   - name: Sync
     description: Offline-first sync push/pull for the mounted MVP entity subset.
+  - name: Investments
+    description: Personal Russian-market portfolio snapshots and asynchronous manual recommendations using market data no older than 24 hours. The service never executes trades and accepts no broker credentials, account numbers, person names, or raw screenshots.
 security:
   - pwaCookieAuth: []
     csrfHeader: []
@@ -1446,6 +1448,273 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /investments/policy:
+    get:
+      tags: [Investments]
+      operationId: getInvestmentPolicy
+      summary: Get the owner's 40/30/30 investment policy.
+      responses:
+        '200':
+          description: Personal policy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestmentPolicyEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Investments]
+      operationId: putInvestmentPolicy
+      summary: Replace the owner's investment policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestmentPolicyPutRequest' }
+      responses:
+        '200':
+          description: Updated personal policy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestmentPolicyEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports:
+    post:
+      tags: [Investments]
+      operationId: createPortfolioImport
+      summary: Start a metadata-only portfolio screenshot import.
+      description: Raw screenshots and OCR text are transient and must not be stored by this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortfolioImportCreateRequest' }
+      responses:
+        '201':
+          description: Pending import.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioImportEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports/{importId}:
+    delete:
+      tags: [Investments]
+      operationId: discardPortfolioImport
+      summary: Idempotently discard an owner-only unconfirmed portfolio import.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Draft absent or discarded. Confirmed imports are rejected.
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-imports/{importId}/confirm:
+    post:
+      tags: [Investments]
+      operationId: confirmPortfolioImport
+      summary: Confirm edited structured positions and create an immutable snapshot.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortfolioImportConfirmRequest' }
+      responses:
+        '201':
+          description: Confirmed portfolio snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioSnapshotEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-snapshots:
+    get:
+      tags: [Investments]
+      operationId: listPortfolioSnapshots
+      summary: List owner-only portfolio snapshots newest first.
+      responses:
+        '200':
+          description: Portfolio snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PortfolioSnapshotDto' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/portfolio-snapshots/{snapshotId}:
+    get:
+      tags: [Investments]
+      operationId: getPortfolioSnapshot
+      summary: Get an owner-only portfolio snapshot.
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Portfolio snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioSnapshotEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs:
+    get:
+      tags: [Investments]
+      operationId: listRecommendationJobs
+      summary: Restore owner-only recommendation history, newest first.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - { type: string, minLength: 1 }
+              - { type: 'null' }
+      responses:
+        '200':
+          description: Paginated recommendation history with report summaries and links.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationHistoryPageEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Investments]
+      operationId: createRecommendationJob
+      summary: Queue an owner-requested recommendation over one or more fresh snapshots.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecommendationJobCreateRequest' }
+      responses:
+        '202':
+          description: Queued recommendation job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}:
+    get:
+      tags: [Investments]
+      operationId: getRecommendationJob
+      summary: Get owner-only recommendation status and cash-first calculation.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Recommendation job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}/retry-delivery:
+    post:
+      tags: [Investments]
+      operationId: retryRecommendationDelivery
+      summary: Возобновить доставку того же запроса владельца без новой генерации.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Доставка возобновлена или запрос уже принят.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/recommendation-jobs/{jobId}/report:
+    get:
+      tags: [Investments]
+      operationId: getRecommendationReport
+      summary: Get a ready owner-only recommendation report.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Recommendation report with citations and seven-day validity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationReportEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /investments/internal/recommendation-jobs/{jobId}/callback:
+    post:
+      tags: [Investments]
+      operationId: receiveRecommendationCallback
+      summary: Receive an HMAC-authenticated callback from the analysis service.
+      description: The signature binds the HTTP method, canonical callback path including jobId, timestamp, nonce, and exact request body bytes.
+      security: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: X-Finance-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-Finance-Nonce
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+        - name: X-Finance-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecommendationCallbackRequest' }
+      responses:
+        '200':
+          description: Callback accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecommendationJobEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /push/devices/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    put:
+      operationId: registerPushDevice
+      summary: Зарегистрировать или обновить устройство текущей сессии
+      tags: [Push]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PushDeviceRequest'}
+      responses:
+        '204': {description: Устройство зарегистрировано}
+        '401': {description: Требуется действующая сессия}
+        '404': {description: Устройство недоступно}
+        '409': {description: Конфликт регистрации}
+    delete:
+      operationId: revokePushDevice
+      summary: Отозвать устройство текущего владельца и сессии
+      tags: [Push]
+      responses:
+        '204': {description: Регистрация отозвана или уже отсутствует}
+        '401': {description: Требуется действующая сессия}
 components:
   securitySchemes:
     pwaCookieAuth:
@@ -1685,6 +1954,1016 @@ components:
       maxLength: 128
       pattern: '^[A-Za-z0-9_:-]+$'
       examples: [usr_123]
+    InvestmentPolicyEnvelope:
+      properties:
+        data:
+          $ref: '#/components/schemas/InvestmentPolicyDto'
+      additionalProperties: false
+      type: object
+      required:
+      - data
+    InvestmentPolicyDto:
+      properties:
+        conservativePercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '40'
+        moderatePercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '30'
+        aggressivePercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '30'
+        tolerancePercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          default: '5'
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        ownerUserId:
+          type: string
+          maxLength: 128
+          minLength: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - ownerUserId
+      - createdAt
+      - updatedAt
+      - version
+    InvestmentPolicyPutRequest:
+      properties:
+        conservativePercent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '40'
+        moderatePercent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '30'
+        aggressivePercent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          default: '30'
+        tolerancePercent:
+          anyOf:
+          - type: number
+            maximum: 25.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          default: '5'
+      additionalProperties: false
+      type: object
+      description: Percentages must total 100. The initial owner policy is 40/30/30 with a five percentage-point
+        tolerance.
+    PortfolioImportCreateRequest:
+      properties:
+        idempotencyKey:
+          type: string
+          maxLength: 128
+          minLength: 8
+        accountProfileId:
+          type: string
+          format: uuid
+        brokerage:
+          $ref: '#/components/schemas/Brokerage'
+        userLabel:
+          type: string
+          maxLength: 60
+          minLength: 1
+          pattern: ^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$
+        accountType:
+          $ref: '#/components/schemas/TaxAccountType'
+        screenshotCount:
+          type: integer
+          maximum: 20.0
+          minimum: 1.0
+        observedAt:
+          type: string
+          format: date-time
+      additionalProperties: false
+      type: object
+      required:
+      - idempotencyKey
+      - accountProfileId
+      - brokerage
+      - userLabel
+      - accountType
+      - screenshotCount
+      - observedAt
+      description: Metadata only. Raw screenshots, OCR text, person names, broker account identifiers, and
+        credentials are forbidden.
+    Brokerage:
+      type: string
+      enum:
+      - sinara
+      - sber_investments
+      - finam
+    TaxAccountType:
+      type: string
+      enum:
+      - brokerage
+      - iis_a
+      - iis_b
+      - iis_iii
+    PortfolioImportEnvelope:
+      properties:
+        data:
+          $ref: '#/components/schemas/PortfolioImportDto'
+      additionalProperties: false
+      type: object
+      required:
+      - data
+    PortfolioImportDto:
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        accountProfile:
+          anyOf:
+          - $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          - type: 'null'
+        screenshotCount:
+          type: integer
+        observedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+        confirmedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - accountProfile
+      - screenshotCount
+      - observedAt
+      - status
+      - confirmedAt
+      - createdAt
+    PushDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 20
+          maxLength: 4096
+          pattern: '^[A-Za-z0-9_:.-]+$'
+    BrokerageAccountProfileDto:
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        brokerage:
+          $ref: '#/components/schemas/Brokerage'
+        userLabel:
+          type: string
+          maxLength: 60
+          minLength: 1
+          pattern: ^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё _-]{0,59}$
+        accountType:
+          $ref: '#/components/schemas/TaxAccountType'
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - brokerage
+      - userLabel
+      - accountType
+    PortfolioImportConfirmRequest:
+      properties:
+        accountProfileId:
+          type: string
+          format: uuid
+        freeCash:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          default: '0'
+        monthlyContribution:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          default: '0'
+        positions:
+          items:
+            $ref: '#/components/schemas/PortfolioPositionInput'
+          type: array
+          maxItems: 500
+          minItems: 1
+      additionalProperties: false
+      type: object
+      required:
+      - accountProfileId
+      - positions
+    PortfolioPositionInput:
+      anyOf:
+      - required:
+        - ticker
+      - required:
+        - isin
+      properties:
+        instrumentName:
+          type: string
+          maxLength: 300
+          minLength: 1
+        ticker:
+          anyOf:
+          - type: string
+            maxLength: 32
+            minLength: 1
+            pattern: ^[A-Z0-9][A-Z0-9._-]{0,31}$
+          - type: 'null'
+        isin:
+          anyOf:
+          - type: string
+            pattern: ^[A-Z]{2}[A-Z0-9]{9}[0-9]$
+          - type: 'null'
+        instrumentType:
+          $ref: '#/components/schemas/InvestmentInstrumentType'
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        quantity:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        marketPrice:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        marketValue:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        averagePrice:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        nominal:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        accruedInterest:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        couponRate:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          - type: 'null'
+        maturityDate:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+        taxAccountType:
+          $ref: '#/components/schemas/TaxAccountType'
+          default: brokerage
+        holdingStartedAt:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+        estimatedFeeRate:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+      - instrumentName
+      - instrumentType
+      - riskBucket
+      - quantity
+      - marketValue
+    InvestmentInstrumentType:
+      type: string
+      enum:
+      - stock
+      - bond
+      - fund
+    InvestmentRiskBucket:
+      enum:
+      - conservative
+      - moderate
+      - aggressive
+      type: string
+    PortfolioSnapshotEnvelope:
+      properties:
+        data:
+          $ref: '#/components/schemas/PortfolioSnapshotDto'
+      additionalProperties: false
+      type: object
+      required:
+      - data
+    PortfolioSnapshotDto:
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        importId:
+          type: string
+          maxLength: 128
+          minLength: 1
+        accountProfile:
+          anyOf:
+          - $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          - type: 'null'
+        observedAt:
+          type: string
+          format: date-time
+        currency:
+          type: string
+        freeCash:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        monthlyContribution:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        totalValue:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        positions:
+          items:
+            $ref: '#/components/schemas/PortfolioPositionDto'
+          type: array
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - importId
+      - accountProfile
+      - observedAt
+      - currency
+      - freeCash
+      - monthlyContribution
+      - totalValue
+      - positions
+      - createdAt
+    PortfolioPositionDto:
+      anyOf:
+      - required:
+        - ticker
+      - required:
+        - isin
+      properties:
+        instrumentName:
+          type: string
+          maxLength: 300
+          minLength: 1
+        ticker:
+          anyOf:
+          - type: string
+            maxLength: 32
+            minLength: 1
+            pattern: ^[A-Z0-9][A-Z0-9._-]{0,31}$
+          - type: 'null'
+        isin:
+          anyOf:
+          - type: string
+            pattern: ^[A-Z]{2}[A-Z0-9]{9}[0-9]$
+          - type: 'null'
+        instrumentType:
+          $ref: '#/components/schemas/InvestmentInstrumentType'
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        quantity:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        marketPrice:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        marketValue:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        averagePrice:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        nominal:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        accruedInterest:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+          - type: 'null'
+        couponRate:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          - type: 'null'
+        maturityDate:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+        taxAccountType:
+          $ref: '#/components/schemas/TaxAccountType'
+          default: brokerage
+        holdingStartedAt:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+        estimatedFeeRate:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+          - type: 'null'
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+      additionalProperties: false
+      type: object
+      required:
+      - instrumentName
+      - instrumentType
+      - riskBucket
+      - quantity
+      - marketValue
+      - id
+    RecommendationJobCreateRequest:
+      properties:
+        idempotencyKey:
+          type: string
+          maxLength: 128
+          minLength: 8
+        snapshotIds:
+          items:
+            type: string
+            format: uuid
+          type: array
+          maxItems: 20
+          minItems: 1
+      additionalProperties: false
+      type: object
+      required:
+      - idempotencyKey
+      - snapshotIds
+    RecommendationJobEnvelope:
+      properties:
+        data:
+          $ref: '#/components/schemas/RecommendationJobDto'
+      additionalProperties: false
+      type: object
+      required:
+      - data
+    RecommendationJobDto:
+      properties:
+        lastErrorCode:
+          anyOf:
+          - type: string
+          - type: 'null'
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        snapshotIds:
+          items:
+            type: string
+            maxLength: 128
+            minLength: 1
+          type: array
+        status:
+          $ref: '#/components/schemas/RecommendationStatus'
+        attemptCount:
+          type: integer
+        marketDataAsOf:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        cashFirstAdjustments:
+          items:
+            $ref: '#/components/schemas/BucketAdjustmentDto'
+          type: array
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - snapshotIds
+      - status
+      - attemptCount
+      - marketDataAsOf
+      - cashFirstAdjustments
+      - createdAt
+      - updatedAt
+      - completedAt
+    RecommendationStatus:
+      enum:
+      - queued
+      - collecting
+      - analyzing
+      - ready
+      - failed
+      type: string
+    BucketAdjustmentDto:
+      properties:
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        addAmount:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        reduceAmount:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        currentPercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+        projectedPercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+        targetPercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+        withinTolerance:
+          type: boolean
+      additionalProperties: false
+      type: object
+      required:
+      - riskBucket
+      - addAmount
+      - reduceAmount
+      - currentPercent
+      - projectedPercent
+      - targetPercent
+      - withinTolerance
+    RecommendationHistoryPageEnvelope:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RecommendationHistoryItemDto'
+          type: array
+        page:
+          $ref: '#/components/schemas/InvestmentPageInfo'
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - page
+    RecommendationHistoryItemDto:
+      properties:
+        job:
+          $ref: '#/components/schemas/RecommendationJobDto'
+        accountProfiles:
+          items:
+            $ref: '#/components/schemas/BrokerageAccountProfileDto'
+          type: array
+        reportSummary:
+          anyOf:
+          - type: string
+            maxLength: 5000
+            minLength: 1
+          - type: 'null'
+        reportPath:
+          anyOf:
+          - type: string
+          - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+      - job
+      - accountProfiles
+      - reportSummary
+      - reportPath
+    InvestmentPageInfo:
+      properties:
+        limit:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+        hasMore:
+          type: boolean
+      additionalProperties: false
+      type: object
+      required:
+      - limit
+      - hasMore
+    RecommendationReportEnvelope:
+      properties:
+        data:
+          $ref: '#/components/schemas/RecommendationReportDto'
+      additionalProperties: false
+      type: object
+      required:
+      - data
+    RecommendationReportDto:
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          minLength: 1
+        jobId:
+          type: string
+          maxLength: 128
+          minLength: 1
+        summary:
+          type: string
+          maxLength: 5000
+          minLength: 1
+        assumptions:
+          additionalProperties: true
+          type: object
+        generatedAt:
+          type: string
+          format: date-time
+        validUntil:
+          type: string
+          format: date-time
+        isStale:
+          type: boolean
+        disclaimer:
+          type: string
+        actions:
+          items:
+            $ref: '#/components/schemas/RecommendationActionDto'
+          type: array
+        sources:
+          items:
+            $ref: '#/components/schemas/RecommendationSourceDto'
+          type: array
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - jobId
+      - summary
+      - assumptions
+      - generatedAt
+      - validUntil
+      - isStale
+      - disclaimer
+      - actions
+      - sources
+    RecommendationActionDto:
+      anyOf:
+      - required:
+        - ticker
+      - required:
+        - isin
+      properties:
+        instrumentName:
+          type: string
+          maxLength: 300
+          minLength: 1
+        ticker:
+          anyOf:
+          - type: string
+            maxLength: 32
+            minLength: 1
+            pattern: ^[A-Z0-9][A-Z0-9._-]{0,31}$
+          - type: 'null'
+        isin:
+          anyOf:
+          - type: string
+            pattern: ^[A-Z]{2}[A-Z0-9]{9}[0-9]$
+          - type: 'null'
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        action:
+          $ref: '#/components/schemas/RecommendationActionType'
+        currentPercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+        targetPercent:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+        amount:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+        priority:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+        rationale:
+          type: string
+          maxLength: 5000
+          minLength: 1
+        risks:
+          type: string
+          maxLength: 5000
+          minLength: 1
+      additionalProperties: false
+      type: object
+      required:
+      - instrumentName
+      - riskBucket
+      - action
+      - currentPercent
+      - targetPercent
+      - amount
+      - priority
+      - rationale
+      - risks
+    RecommendationActionType:
+      enum:
+      - keep
+      - reduce
+      - increase
+      - add
+      type: string
+    RecommendationSourceDto:
+      properties:
+        title:
+          type: string
+          maxLength: 300
+          minLength: 1
+        url:
+          type: string
+          maxLength: 2083
+          minLength: 1
+          format: uri
+        publisher:
+          type: string
+          maxLength: 300
+          minLength: 1
+        publishedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        fetchedAt:
+          type: string
+          format: date-time
+        trustTier:
+          type: string
+          pattern: ^(official|issuer|disclosure|news)$
+      additionalProperties: false
+      type: object
+      required:
+      - title
+      - url
+      - publisher
+      - fetchedAt
+      - trustTier
+    RecommendationCallbackRequest:
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/RecommendationStatus'
+        retryable:
+          default: false
+          type: boolean
+        errorCode:
+          anyOf:
+          - maxLength: 100
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+        marketDataAsOf:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+        summary:
+          anyOf:
+          - maxLength: 5000
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+        assumptions:
+          additionalProperties: true
+          type: object
+        aggregates:
+          items:
+            $ref: '#/components/schemas/RecommendationAggregateInput'
+          maxItems: 3
+          type: array
+        actions:
+          items:
+            $ref: '#/components/schemas/RecommendationActionInput'
+          maxItems: 200
+          type: array
+        sources:
+          items:
+            $ref: '#/components/schemas/RecommendationSourceInput'
+          maxItems: 100
+          type: array
+      required:
+      - status
+      type: object
+    RecommendationAggregateInput:
+      additionalProperties: false
+      properties:
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        currentPercent:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+            type: string
+        proposedPercent:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+            type: string
+      required:
+      - riskBucket
+      - currentPercent
+      - proposedPercent
+      type: object
+    RecommendationActionInput:
+      additionalProperties: false
+      anyOf:
+      - required:
+        - ticker
+      - required:
+        - isin
+      properties:
+        instrumentName:
+          maxLength: 300
+          minLength: 1
+          type: string
+        ticker:
+          anyOf:
+          - maxLength: 32
+            minLength: 1
+            pattern: ^[A-Z0-9][A-Z0-9._-]{0,31}$
+            type: string
+          - type: 'null'
+          default: null
+        isin:
+          anyOf:
+          - pattern: ^[A-Z]{2}[A-Z0-9]{9}[0-9]$
+            type: string
+          - type: 'null'
+          default: null
+        riskBucket:
+          $ref: '#/components/schemas/InvestmentRiskBucket'
+        action:
+          $ref: '#/components/schemas/RecommendationActionType'
+        currentPercent:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+            type: string
+        targetPercent:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,3}|(?=[\d.]{1,8}0*$)\d{0,3}\.\d{0,4}0*$)
+            type: string
+        amount:
+          anyOf:
+          - minimum: 0.0
+            type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,16}|(?=[\d.]{1,21}0*$)\d{0,16}\.\d{0,4}0*$)
+            type: string
+        priority:
+          maximum: 100
+          minimum: 1
+          type: integer
+        rationale:
+          maxLength: 5000
+          minLength: 1
+          type: string
+        risks:
+          maxLength: 5000
+          minLength: 1
+          type: string
+      required:
+      - instrumentName
+      - riskBucket
+      - action
+      - currentPercent
+      - targetPercent
+      - amount
+      - priority
+      - rationale
+      - risks
+      type: object
+    RecommendationSourceInput:
+      additionalProperties: false
+      properties:
+        title:
+          maxLength: 300
+          minLength: 1
+          type: string
+        url:
+          format: uri
+          maxLength: 2083
+          minLength: 1
+          type: string
+        publisher:
+          maxLength: 300
+          minLength: 1
+          type: string
+        publishedAt:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+        fetchedAt:
+          format: date-time
+          type: string
+      required:
+      - title
+      - url
+      - publisher
+      - fetchedAt
+      type: object
     DateTime:
       type: string
       format: date-time

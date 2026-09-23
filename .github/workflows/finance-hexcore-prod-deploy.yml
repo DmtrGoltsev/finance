@@ -87,12 +87,16 @@ jobs:
   reject-inventory-ref:
     runs-on: ubuntu-latest
     steps:
-      - name: Reject diagnostic refs before release work
+      - name: Reject non-release and diagnostic refs before release work
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF}" == refs/heads/prod/release-inventory-* ]]; then
             echo '::error::Diagnostic inventory refs cannot run production CI/CD.'
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != refs/heads/prod/release-* && "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo '::error::Production CI/CD rejects non-release and non-main refs.'
             exit 1
           fi
 
@@ -280,6 +284,19 @@ jobs:
             production_requested="false"
           fi
 
+          if [ "${production_requested}" = "true" ]; then
+            if [[ "${GITHUB_REF}" != refs/heads/prod/release-* ]]; then
+              echo "::error::Production deploy requires a prod/release-* ref"
+              exit 1
+            fi
+            for value_name in deploy_frontend deploy_backend run_migrations restart_backend; do
+              if [ "${!value_name}" != "true" ]; then
+                echo "::error::Investment release requires the complete frontend/backend/migration/restart plan"
+                exit 1
+              fi
+            done
+          fi
+
           {
             echo "deploy_frontend=${deploy_frontend}"
             echo "deploy_backend=${deploy_backend}"
@@ -429,6 +446,102 @@ jobs:
             finance-backend-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
           retention-days: 14
 
+  delivery-ci-verify:
+    runs-on: ubuntu-latest
+    needs: reject-inventory-ref
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: delivery_test
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: delivery_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd=pg_isready
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend test dependencies
+        run: python -m pip install -e "apps/backend[dev]" pyyaml
+      - name: Verify worker and migrations against disposable PostgreSQL
+        working-directory: apps/backend
+        env:
+          FINANCE_DELIVERY_TEST_POSTGRES_URL: postgresql+psycopg://delivery_test:ci-only-password@localhost:5432/delivery_test
+        run: python -m pytest tests/delivery tests/ops/test_production_workflow_contract.py -q
+      - name: Verify Alembic ownership and upgrade paths on disposable databases
+        working-directory: apps/backend
+        env:
+          FINANCE_TEST_POSTGRES_ADMIN_DSN: host=127.0.0.1 port=5432 user=delivery_test password=ci-only-password dbname=delivery_test
+        run: python -m pytest tests/investments/test_migration_0021_postgres.py tests/investments/test_investment_recommendations.py -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ops/finance-n8n/package-lock.json
+      - name: Install gateway test dependencies
+        working-directory: ops/finance-n8n
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify three inactive workflows and gateway contracts
+        working-directory: ops/finance-n8n
+        env:
+          BACKEND_HMAC_MODULE: ${{ github.workspace }}/apps/backend/src/app/investments/hmac_auth.py
+        run: |
+          npm run validate
+          npm test
+          npm run test:import
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ops/finance-release/native-n8n/package-lock.json
+      - name: Verify locked host-native n8n runtime
+        working-directory: ops/finance-release/native-n8n
+        run: |
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          node -e "if (require('./node_modules/n8n/package.json').version !== '2.39.8') process.exit(1)"
+      - name: Build and smoke isolated delivery images
+        run: |
+          docker build -f ops/finance-delivery/Dockerfile -t finance-delivery:ci .
+          cd ops/finance-n8n
+          npm run smoke
+      - name: Verify host delivery contract
+        run: |
+          python -m ruff check ops/finance-release
+          python -m unittest discover -s ops/finance-release/tests -v
+
+  delivery-ci-package:
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - delivery-ci-verify
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package host delivery contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="${{ needs.prepare-release.outputs.release_id }}"
+          package_dir="finance-delivery-${release_id}"
+          mkdir -p "${package_dir}/ops"
+          cp -a ops/finance-n8n ops/finance-release "${package_dir}/ops/"
+          test "$(find "${package_dir}/ops/finance-n8n/workflows" -maxdepth 1 -name '*.json' | wc -l)" -eq 3
+          find "${package_dir}/ops" -type f -print0 | sort -z | xargs -0 sha256sum > "${package_dir}/delivery.sha256"
+          tar -czf "${package_dir}.tar.gz" "${package_dir}"
+          sha256sum "${package_dir}.tar.gz" > "${package_dir}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finance-delivery-${{ needs.prepare-release.outputs.release_id }}
+          path: |
+            finance-delivery-${{ needs.prepare-release.outputs.release_id }}.tar.gz
+            finance-delivery-${{ needs.prepare-release.outputs.release_id }}.tar.gz.sha256
+          retention-days: 14
+
   production-package-gate:
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -436,24 +549,35 @@ jobs:
       - validate-prod-inputs
       - frontend-ci-package
       - backend-ci-package
+      - delivery-ci-verify
+      - delivery-ci-package
 
     steps:
-      - name: Require both production packages
+      - uses: actions/checkout@v4
+      - name: Require complete release and approved inventory before host
         env:
           FINANCE_VALIDATE_RESULT: ${{ needs.validate-prod-inputs.result }}
           FINANCE_FRONTEND_PACKAGE_RESULT: ${{ needs.frontend-ci-package.result }}
           FINANCE_BACKEND_PACKAGE_RESULT: ${{ needs.backend-ci-package.result }}
+          FINANCE_DELIVERY_RESULT: ${{ needs.delivery-ci-verify.result }}
+          FINANCE_DELIVERY_PACKAGE_RESULT: ${{ needs.delivery-ci-package.result }}
+          FINANCE_PRODUCTION_REQUESTED: ${{ needs.validate-prod-inputs.outputs.production_requested }}
         shell: bash
         run: |
           set -euo pipefail
-          for result_name in FINANCE_VALIDATE_RESULT FINANCE_FRONTEND_PACKAGE_RESULT FINANCE_BACKEND_PACKAGE_RESULT; do
+          for result_name in FINANCE_VALIDATE_RESULT FINANCE_FRONTEND_PACKAGE_RESULT FINANCE_BACKEND_PACKAGE_RESULT FINANCE_DELIVERY_RESULT FINANCE_DELIVERY_PACKAGE_RESULT; do
             result="${!result_name}"
             if [ "${result}" != "success" ]; then
               echo "::error::${result_name}=${result}; production package gate requires success"
               exit 1
             fi
           done
-          echo "Both production package lanes and input validation succeeded."
+          if [ "${FINANCE_PRODUCTION_REQUESTED}" = "true" ]; then
+            echo "::error::DELIVERY_INSTALL_CONTRACT_UNVERIFIED / DELIVERY_HOST_NATIVE_CAPACITY_UNVERIFIED: Docker production path is retired; host-native capacity, PostgreSQL isolation, runtime provenance and rollback are not approved. No host contact is permitted."
+            exit 1
+          else
+            echo "All Finance CI lanes and input validation succeeded; production actions were not requested."
+          fi
 
   host-preflight:
     if: ${{ needs.validate-prod-inputs.outputs.production_requested == 'true' }}
@@ -499,6 +623,26 @@ jobs:
           printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
           printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
           ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Verify approved delivery inventory against live host
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_NATIVE_APPROVAL_B64: ${{ vars.FINANCE_NATIVE_APPROVAL_B64 }}
+          FINANCE_NATIVE_APPROVAL_SHA256: ${{ vars.FINANCE_NATIVE_APPROVAL_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEXCORE_PROD_SSH_HOST}"
+          test -n "${HEXCORE_PROD_SSH_USER}"
+          ssh -p "${HEXCORE_PROD_SSH_PORT}" -i ~/.ssh/hexcore_prod_key \
+            -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "sudo -n env FINANCE_NATIVE_APPROVAL_B64='${FINANCE_NATIVE_APPROVAL_B64}' FINANCE_NATIVE_APPROVAL_SHA256='${FINANCE_NATIVE_APPROVAL_SHA256}' python3 - preflight" \
+            < ops/finance-release/native_contract.py > delivery-host-preflight.json
+          python -m json.tool delivery-host-preflight.json >/dev/null
 
       - name: Run read-only production host preflight
         id: remote
@@ -706,6 +850,7 @@ jobs:
             echo "source_ref=${GITHUB_REF_NAME}"
             echo "release_id=${{ needs.prepare-release.outputs.release_id }}"
             cat host-preflight.env
+            cat delivery-host-preflight.json
             echo "alembic_target=${{ steps.lineage.outputs.alembic_target }}"
           } > host-preflight-sanitized.txt
           cat host-preflight-sanitized.txt >> "${GITHUB_STEP_SUMMARY}"
@@ -717,12 +862,184 @@ jobs:
           path: host-preflight-sanitized.txt
           retention-days: 14
 
+  deploy-delivery-stage:
+    if: ${{ needs.production-package-gate.result == 'success' && needs.host-preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - delivery-ci-package
+      - production-package-gate
+      - host-preflight
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: finance-delivery-${{ needs.prepare-release.outputs.release_id }}
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+      - name: Stage Finance delivery on approved host
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+          FINANCE_NATIVE_APPROVAL_B64: ${{ vars.FINANCE_NATIVE_APPROVAL_B64 }}
+          FINANCE_NATIVE_APPROVAL_SHA256: ${{ vars.FINANCE_NATIVE_APPROVAL_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="finance-delivery-${FINANCE_RELEASE_ID}.tar.gz"
+          sha256sum -c "${artifact}.sha256"
+          umask 077
+          printf '%s' "${FINANCE_NATIVE_APPROVAL_B64}" | base64 -d > approval.json
+          test "$(sha256sum approval.json | awk '{print $1}')" = "${FINANCE_NATIVE_APPROVAL_SHA256}"
+          ssh_opts=(-p "${HEXCORE_PROD_SSH_PORT}" -i ~/.ssh/hexcore_prod_key
+            -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes)
+          remote="${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}"
+          remote_dir="$(ssh "${ssh_opts[@]}" "${remote}" 'umask 077; mktemp -d /tmp/finance-delivery.XXXXXXXX')"
+          [[ "${remote_dir}" =~ ^/tmp/finance-delivery\.[A-Za-z0-9]{8}$ ]]
+          scp -P "${HEXCORE_PROD_SSH_PORT}" -i ~/.ssh/hexcore_prod_key \
+            -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            "${artifact}" approval.json "${remote}:${remote_dir}/"
+          ssh "${ssh_opts[@]}" "${remote}" \
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_REMOTE_DIR='${remote_dir}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          [[ "${FINANCE_REMOTE_DIR}" =~ ^/tmp/finance-delivery\.[A-Za-z0-9]{8}$ ]]
+          trap 'rm -rf -- "${FINANCE_REMOTE_DIR}"' EXIT
+          tar -xzf "${FINANCE_REMOTE_DIR}/finance-delivery-${FINANCE_RELEASE_ID}.tar.gz" -C "${FINANCE_REMOTE_DIR}"
+          package_root="${FINANCE_REMOTE_DIR}/finance-delivery-${FINANCE_RELEASE_ID}"
+          cd "${FINANCE_REMOTE_DIR}"
+          sha256sum -c "${package_root}/delivery.sha256" >/dev/null
+          command=(python3 "${package_root}/ops/finance-release/native_release.py" stage
+            --approval "${FINANCE_REMOTE_DIR}/approval.json" --release-id "${FINANCE_RELEASE_ID}"
+            --source "${package_root}")
+          if [ "$(id -u)" -eq 0 ]; then "${command[@]}"; else sudo -n "${command[@]}"; fi
+          REMOTE
+
+  activate-delivery:
+    if: ${{ needs.deploy-backend.result == 'success' && needs.deploy-delivery-stage.result == 'success' }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - deploy-backend
+      - deploy-delivery-stage
+    environment: production
+    steps:
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+      - name: Activate and verify exactly three Finance workflows and host worker
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+          FINANCE_NATIVE_APPROVAL_B64: ${{ vars.FINANCE_NATIVE_APPROVAL_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -p "${HEXCORE_PROD_SSH_PORT}" -i ~/.ssh/hexcore_prod_key \
+            -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_NATIVE_APPROVAL_B64='${FINANCE_NATIVE_APPROVAL_B64}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          approval="$(mktemp /tmp/finance-delivery-approval.XXXXXXXX)"
+          trap 'rm -f -- "${approval}"' EXIT
+          printf '%s' "${FINANCE_NATIVE_APPROVAL_B64}" | base64 -d > "${approval}"
+          command=(python3 /opt/finance/delivery/native/current/ops/finance-release/native_release.py activate
+            --approval "${approval}" --release-id "${FINANCE_RELEASE_ID}")
+          if [ "$(id -u)" -eq 0 ]; then "${command[@]}"; else sudo -n "${command[@]}"; fi
+          REMOTE
+
+  rollback-delivery-on-failure:
+    if: >-
+      ${{ always() &&
+          needs.production-package-gate.result == 'success' &&
+          needs.host-preflight.result == 'success' &&
+          (needs.deploy-delivery-stage.result == 'failure' ||
+           needs.deploy-backend.result == 'failure' ||
+           needs.activate-delivery.result == 'failure') }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - production-package-gate
+      - host-preflight
+      - deploy-delivery-stage
+      - deploy-backend
+      - activate-delivery
+    environment: production
+    steps:
+      - name: Prepare pinned SSH trust
+        env:
+          HEXCORE_PROD_SSH_PRIVATE_KEY: ${{ secrets.HEXCORE_PROD_SSH_PRIVATE_KEY }}
+          HEXCORE_PROD_SSH_KNOWN_HOSTS: ${{ secrets.HEXCORE_PROD_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/hexcore_prod_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "${HEXCORE_PROD_SSH_PRIVATE_KEY}" > ~/.ssh/hexcore_prod_key
+          printf '%s\n' "${HEXCORE_PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+      - name: Stop native services and restore previous backend without database downgrade
+        env:
+          HEXCORE_PROD_SSH_HOST: ${{ secrets.HEXCORE_PROD_SSH_HOST }}
+          HEXCORE_PROD_SSH_USER: ${{ secrets.HEXCORE_PROD_SSH_USER }}
+          HEXCORE_PROD_SSH_PORT: ${{ secrets.HEXCORE_PROD_SSH_PORT || '22' }}
+          FINANCE_RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+          FINANCE_PREVIOUS_BACKEND_ID: ${{ needs.host-preflight.outputs.backend_current_release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${FINANCE_RELEASE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+          [[ "${FINANCE_PREVIOUS_BACKEND_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+          ssh -p "${HEXCORE_PROD_SSH_PORT}" -i ~/.ssh/hexcore_prod_key \
+            -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "${HEXCORE_PROD_SSH_USER}@${HEXCORE_PROD_SSH_HOST}" \
+            "FINANCE_RELEASE_ID='${FINANCE_RELEASE_ID}' FINANCE_PREVIOUS_BACKEND_ID='${FINANCE_PREVIOUS_BACKEND_ID}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          script="/opt/finance/delivery/native/releases/${FINANCE_RELEASE_ID}/ops/finance-release/native_release.py"
+          if [ ! -f "${script}" ]; then
+            echo 'Native source was not staged; backend cutover job cannot have started.'
+            exit 0
+          fi
+          command=(python3 "${script}" rollback --release-id "${FINANCE_RELEASE_ID}"
+            --previous-backend-id "${FINANCE_PREVIOUS_BACKEND_ID}")
+          if [ "$(id -u)" -eq 0 ]; then "${command[@]}"; else sudo -n "${command[@]}"; fi
+          REMOTE
+
   deploy-frontend:
     if: >-
       ${{ always() &&
           needs.validate-prod-inputs.outputs.deploy_frontend == 'true' &&
           needs.production-package-gate.result == 'success' &&
           needs.host-preflight.result == 'success' &&
+          needs.activate-delivery.result == 'success' &&
           (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') }}
     runs-on: ubuntu-latest
     needs:
@@ -733,6 +1050,7 @@ jobs:
       - production-package-gate
       - host-preflight
       - deploy-backend
+      - activate-delivery
     environment: production
 
     steps:
@@ -858,7 +1176,8 @@ jobs:
     if: >-
       ${{ needs.validate-prod-inputs.outputs.deploy_backend == 'true' &&
           needs.production-package-gate.result == 'success' &&
-          needs.host-preflight.result == 'success' }}
+          needs.host-preflight.result == 'success' &&
+          needs.deploy-delivery-stage.result == 'success' }}
     runs-on: ubuntu-latest
     needs:
       - prepare-release
@@ -867,6 +1186,7 @@ jobs:
       - backend-ci-package
       - production-package-gate
       - host-preflight
+      - deploy-delivery-stage
     environment: production
 
     steps:
