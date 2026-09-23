@@ -1,0 +1,8 @@
+{
+  "name": "finance-native-footprint-n8n",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "n8n": "2.39.8"
+  }
+}

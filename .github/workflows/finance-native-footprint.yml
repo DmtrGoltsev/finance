@@ -1,0 +1,90 @@
+name: Finance Native Footprint
+run-name: finance-native-footprint
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/finance-native-footprint.yml
+      - ops/finance-native-footprint/**
+  workflow_dispatch:
+    inputs:
+      feature_sha:
+        description: Exact head SHA of codex/investment-recommendations-ci-20260923
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.1'
+      - run: python -m pip install PyYAML==6.0.3
+      - run: bash -n ops/finance-native-footprint/measure.sh
+      - run: python -m unittest discover -s ops/finance-native-footprint -p 'test_*.py' -v
+      - run: |
+          npm install --global npm@9.2.0 --ignore-scripts --no-audit --no-fund
+          npm ci --dry-run --ignore-scripts --omit=dev --no-audit --no-fund --prefix ops/finance-native-footprint/n8n
+
+  measure:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' &&
+          github.actor == 'DmtrGoltsev' &&
+          github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FEATURE_SHA: ${{ inputs.feature_sha }}
+    steps:
+      - name: Require exact current head of trusted feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_ACTOR" == DmtrGoltsev ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          [[ "$FEATURE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/codex/investment-recommendations-ci-20260923" --jq '.object.sha')"
+          [[ "$branch_sha" == "$FEATURE_SHA" ]]
+          echo 'Exact trusted feature branch head verified.'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          path: footprint-src
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.feature_sha }}
+          persist-credentials: false
+          path: feature
+      - name: Measure isolated native install and rollback copy
+        env:
+          SOURCE_ROOT: ${{ github.workspace }}/feature
+          N8N_LOCK_ROOT: ${{ github.workspace }}/footprint-src/ops/finance-native-footprint/n8n
+          METRICS_OUT: ${{ github.workspace }}/finance-native-footprint.txt
+        run: |
+          set -euo pipefail
+          bash footprint-src/ops/finance-native-footprint/measure.sh
+          python3 footprint-src/ops/finance-native-footprint/validate_output.py "$METRICS_OUT" "$FEATURE_SHA"
+          cat "$METRICS_OUT"
+      - name: Upload allowlisted evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-native-footprint-${{ github.run_id }}
+          path: finance-native-footprint.txt
+          retention-days: 14
