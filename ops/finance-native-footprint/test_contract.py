@@ -28,8 +28,8 @@ class FootprintContractTests(unittest.TestCase):
             "schema": "finance_native_footprint_v1",
             "feature_sha": "a" * 40,
             **{name: "b" * 64 for name in HASH_FIELDS},
-            "node_version": "22.22.1",
-            "npm_version": "9.2.0",
+            "node_version": "24.21.0",
+            "npm_version": "11.19.0",
             "sampler_interval_ms": "200",
             **{name: "1" for name in NUMBER_FIELDS},
             "baseline_available_bytes": "100",
@@ -48,10 +48,10 @@ class FootprintContractTests(unittest.TestCase):
             valid + b"secret=value\n",
             valid + b"feature_sha=" + b"a" * 40 + b"\n",
             valid.replace(b"schema=finance_native_footprint_v1\n", b""),
-            valid.replace(b"node_version=22.22.1", b"node_version=latest"),
+            valid.replace(b"node_version=24.21.0", b"node_version=latest"),
             valid.replace(b"observed_peak_disk_bytes=30", b"observed_peak_disk_bytes=31"),
             valid.replace(b"n8n_stage_bytes=1", b"n8n_stage_bytes=/private/path"),
-            valid.replace(b"npm_version=9.2.0", b"npm_version=9.2.0;id"),
+            valid.replace(b"npm_version=11.19.0", b"npm_version=11.19.0;id"),
             valid.replace(b"\n", b"\r\n"),
         ):
             with self.subTest(bad=bad[-60:]), self.assertRaises(ValueError):
@@ -68,7 +68,9 @@ class FootprintContractTests(unittest.TestCase):
         check = steps[-1]["run"]
         self.assertIn("feature/ops/finance-release/native-n8n", check)
         self.assertIn("'2.39.8'", check)
-        self.assertIn("npm ci --dry-run --ignore-scripts", check)
+        self.assertIn("npm ci --omit=dev", check)
+        self.assertNotIn("--dry-run", check)
+        self.assertNotIn("--ignore-scripts", check)
 
     def test_manual_run_has_no_production_boundary_or_secret_passthrough(self) -> None:
         workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)

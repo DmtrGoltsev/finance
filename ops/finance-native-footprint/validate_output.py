@@ -64,7 +64,7 @@ def parse(data: bytes, expected_sha: str) -> dict[str, str]:
         raise ValueError("invalid evidence")
     if result["feature_sha"] != expected_sha:
         raise ValueError("invalid evidence")
-    if result["node_version"] != "22.22.1" or result["npm_version"] != "9.2.0":
+    if result["node_version"] != "24.21.0" or result["npm_version"] != "11.19.0":
         raise ValueError("invalid evidence")
     if result["sampler_interval_ms"] != "200":
         raise ValueError("invalid evidence")

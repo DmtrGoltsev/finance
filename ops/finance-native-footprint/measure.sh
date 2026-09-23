@@ -42,24 +42,20 @@ trap 'kill "$sampler_pid" 2>/dev/null || true; wait "$sampler_pid" 2>/dev/null |
 mkdir -p "$root/download" "$root/node" "$root/cache" "$root/home" "$root/n8n" "$root/gateway" "$root/worker/backend" "$root/rollback"
 export HOME="$root/home"
 export XDG_CACHE_HOME="$root/home/.cache"
-node_archive=node-v22.22.1-linux-x64.tar.xz
+node_archive=node-v24.21.0-linux-x64.tar.xz
 curl --fail --silent --show-error --location --max-time 300 \
-  "https://nodejs.org/dist/v22.22.1/${node_archive}" -o "$root/download/$node_archive" >/dev/null 2>&1
+  "https://nodejs.org/dist/v24.21.0/${node_archive}" -o "$root/download/$node_archive" >/dev/null 2>&1
 curl --fail --silent --show-error --location --max-time 60 \
-  https://nodejs.org/dist/v22.22.1/SHASUMS256.txt -o "$root/download/SHASUMS256.txt" >/dev/null 2>&1
+  https://nodejs.org/dist/v24.21.0/SHASUMS256.txt -o "$root/download/SHASUMS256.txt" >/dev/null 2>&1
 expected="$(awk -v name="$node_archive" '$2 == name {print $1}' "$root/download/SHASUMS256.txt")"
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
 printf '%s  %s\n' "$expected" "$root/download/$node_archive" | sha256sum --check --status
 tar -xJf "$root/download/$node_archive" -C "$root/node" --strip-components=1
 export PATH="$root/node/bin:$PATH"
-[[ "$(node --version)" == v22.22.1 ]]
+[[ "$(node --version)" == v24.21.0 ]]
 export npm_config_userconfig=/dev/null
 export npm_config_update_notifier=false
-timeout 10m npm install --global --prefix "$root/npm-prefix" npm@9.2.0 \
-  --ignore-scripts --no-audit --no-fund --cache "$root/cache" \
-  --registry=https://registry.npmjs.org >/dev/null 2>&1
-export PATH="$root/npm-prefix/bin:$PATH"
-[[ "$(npm --version)" == 9.2.0 ]]
+[[ "$(npm --version)" == 11.19.0 ]]
 export npm_config_cache="$root/cache"
 export npm_config_registry=https://registry.npmjs.org
 
@@ -75,14 +71,14 @@ PIP_NO_CACHE_DIR=1 PIP_CONFIG_FILE=/dev/null PIP_INDEX_URL=https://pypi.org/simp
   timeout 15m "$root/worker/venv/bin/python" -m pip install --no-input "$root/worker/backend" >/dev/null 2>&1
 worker_dependencies_sha256="$("$root/worker/venv/bin/python" -m pip list --format=freeze | sha256sum | cut -d ' ' -f 1)"
 
-node_stage_bytes="$(( $(du_bytes "$root/node") + $(du_bytes "$root/npm-prefix") ))"
+node_stage_bytes="$(du_bytes "$root/node")"
 n8n_stage_bytes="$(du_bytes "$root/n8n")"
 gateway_stage_bytes="$(du_bytes "$root/gateway")"
 worker_stage_bytes="$(du_bytes "$root/worker")"
 npm_cache_bytes="$(du_bytes "$root/cache")"
 runtime_home_bytes="$(du_bytes "$root/home")"
 download_bytes="$(du_bytes "$root/download")"
-cp -a "$root/node" "$root/npm-prefix" "$root/n8n" "$root/gateway" "$root/worker" "$root/rollback/"
+cp -a "$root/node" "$root/n8n" "$root/gateway" "$root/worker" "$root/rollback/"
 rollback_bytes="$(du_bytes "$root/rollback")"
 final_stage_bytes="$(du_bytes "$root")"
 
@@ -101,8 +97,8 @@ read -r min_bytes min_inodes < <(awk 'NR == 1 {b=$1; i=$2} $1 < b {b=$1} $2 < i 
   printf 'worker_pyproject_sha256=%s\n' "$(sha256sum "$source_root/apps/backend/pyproject.toml" | cut -d ' ' -f 1)"
   printf 'worker_dependencies_sha256=%s\n' "$worker_dependencies_sha256"
   printf 'node_archive_sha256=%s\n' "$expected"
-  echo 'node_version=22.22.1'
-  echo 'npm_version=9.2.0'
+  echo 'node_version=24.21.0'
+  echo 'npm_version=11.19.0'
   echo 'sampler_interval_ms=200'
   printf 'baseline_available_bytes=%s\n' "$baseline_bytes"
   printf 'baseline_available_inodes=%s\n' "$baseline_inodes"
