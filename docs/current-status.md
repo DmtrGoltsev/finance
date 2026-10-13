@@ -224,7 +224,7 @@ QA evidence для этого scope должно опираться на targete
 
 ## Native iOS parity branch final status (2026-06-19)
 
-- Branch/worktree: `codex/IOS`, path `C:\Users\style\Documents\Codex\Финансы-ios`, base `origin/main` commit `66feadd94dbf936faec500f565638973ca270f64`.
+- Историческая базовая ветка: `codex/IOS`, основана на commit `66feadd94dbf936faec500f565638973ca270f64` из `origin/main`. Отдельной рабочей копии больше нет; актуальный исходный код native iOS находится в `apps/ios` этого репозитория.
 - Target remains native-only: `apps/ios` SwiftUI/UIKit/Foundation/Security/PhotosUI. PWA/Capacitor exists separately under `apps/web-pwa` and is not the parity target.
 - Implemented in the current native branch: API config hardening and Release guard; auth/register/session/logout wipe improvements; manual transaction date-only behavior and payment account filter fallback; capture editable amount/date with online-only OCR/copy boundary; payment account/assets/investment/icon preservation; analytics month/category/investment wiring; planning fallback for exposed syncable mutations; icon-only tabs; offline-first local JSON store, sync queue, manual sync, issue UI and Russian sync messages.
 - QA status: Windows static QA is PASS with no FAIL recorded. The only BLOCKED items are Mac/Xcode-only gates because `swift`, `xcodebuild` and `xcodegen` are unavailable in the current Windows environment.
