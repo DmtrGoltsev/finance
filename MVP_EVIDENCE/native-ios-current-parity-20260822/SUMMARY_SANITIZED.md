@@ -132,8 +132,9 @@ Result: **PASS**.
 - Trusted HTTPS/FQDN: absent.
 
 Deployment used GitHub Actions only. No direct manual SSH/SCP deploy was
-performed. Sanitized downloaded workflow evidence is stored outside Git at
-`C:\Users\style\Documents\Codex\Finance-release-evidence\32604838031`.
+performed. Sanitized downloaded workflow evidence is stored in the ignored local
+artifact tree at
+`C:\Users\style\Documents\Codex\Финансы\artifacts\evidence\imported\2026-08-22\Finance-release-evidence\32604838031`.
 
 ## Explicit non-results and blockers
 

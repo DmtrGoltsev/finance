@@ -230,6 +230,6 @@ Developer Team также сообщай срок только по фактич
 
 Проектный release evidence, скачанный после production workflow, хранится вне
 Git по пути
-`C:\Users\style\Documents\Codex\Finance-release-evidence\32604838031`.
-Этот Windows-путь приведён для traceability; на Mac создаётся отдельный локальный
+`C:\Users\style\Documents\Codex\Финансы\artifacts\evidence\imported\2026-08-22\Finance-release-evidence\32604838031`.
+Этот локальный Windows-путь приведён для traceability; на Mac создаётся отдельный
 sanitized evidence-каталог по инструкции выше.

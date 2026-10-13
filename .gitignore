@@ -111,6 +111,10 @@ packages/generated/**
 artifacts/evidence/**
 security/scans/**
 
+# Local recovery payloads. Keep the policy index tracked, ignore snapshots and binaries.
+/artifacts/recovery/*
+!/artifacts/recovery/README.md
+
 # Local QA/browser evidence. Keep raw browser profiles, sessions, screenshots,
 # XML dumps, emulator logs, and credential probe outputs out of commits.
 qa-artifacts/**

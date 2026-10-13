@@ -142,7 +142,7 @@ These can be checked from this repository without Xcode:
 
 As of 2026-06-19, the current native iOS worktree status is:
 
-- Branch/worktree: `codex/IOS` at `C:\Users\style\Documents\Codex\Финансы-ios`, based on `origin/main` commit `66feadd94dbf936faec500f565638973ca270f64`.
+- Историческая базовая ветка: `codex/IOS`, основана на commit `66feadd94dbf936faec500f565638973ca270f64` из `origin/main`. Отдельной рабочей копии больше нет; актуальный исходный код native iOS находится в `apps/ios` этого репозитория.
 - Native-only invariant: still satisfied at the documentation contract level. The parity target is `apps/ios`; the PWA/Capacitor tree under `apps/web-pwa` remains separate and is not a release shortcut.
 - Implemented scope now includes API config hardening/Release guard, auth/register/session/logout wipe improvements, date-only manual transactions, payment-account filtering, online-only OCR/capture with editable amount/date, assets/investments/icon preservation, analytics month/category/investment wiring, planning fallback for exposed syncable mutations, icon-only tabs, local JSON store, pending sync queue, manual sync, sync issues and Russian sync UI.
 - Windows static QA result: PASS, with no FAIL recorded for the static source/docs pass.
